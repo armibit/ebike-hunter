@@ -26,6 +26,14 @@ class Database:
 
     def _init_schema(self):
         cursor = self.conn.cursor()
+
+        # Check if user_analysis column exists; if not, add it
+        cursor.execute("PRAGMA table_info(listings)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "user_analysis" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN user_analysis TEXT")
+            self.conn.commit()
+
         cursor.executescript("""
         CREATE TABLE IF NOT EXISTS listings (
             id TEXT PRIMARY KEY,
@@ -50,6 +58,7 @@ class Database:
             rejection_reason TEXT,
             dedupe_signature TEXT,
             image_phash TEXT,
+            user_analysis TEXT,
             first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -221,7 +230,16 @@ class Database:
         ))
         self.conn.commit()
 
-    def mark_sold_or_delisted(self, listing_id: str, status: str = "DELISTED"):
+    def save_user_analysis(self, listing_id: str, analysis: str):
+        """Save user's verdict/analysis for a listing."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+        UPDATE listings SET user_analysis = ? WHERE id = ?
+        """, (analysis, listing_id))
+        self.conn.commit()
+
+    def mark_sold_or_delisted(self, listing_id: str, status: str = "SOLD"):
+        """Mark listing as SOLD or DELISTED."""
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute("""

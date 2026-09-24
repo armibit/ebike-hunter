@@ -21,6 +21,11 @@ from pipeline.scoring import ScoringEngine
 from connectors.tutti import TuttiConnector
 from connectors.subito import SubitoConnector
 from connectors.buycycle import BuycycleConnector
+from connectors.upway import UpwayConnector
+from connectors.decathlon import DecathlonConnector
+from connectors.velomarkt import VelomarktConnector
+from connectors.tcs_velocorner import TcsVelocornerConnector
+import requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,6 +39,150 @@ def load_config() -> Dict[str, Any]:
     config_path = BASE_DIR / "config" / "config.yaml"
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
+
+
+def generate_user_analysis(score: float, specs: Dict, listing_data: Dict) -> str:
+    """Generate detailed user analysis based on score and specs."""
+    motor = specs.get("motor_brand")
+    torque = specs.get("motor_torque_nm")
+    battery = specs.get("battery_capacity_wh")
+    frame = specs.get("frame_size")
+    suspension = specs.get("suspension_type")
+    brakes = specs.get("brakes_tier")
+    travel = specs.get("travel_front_mm")
+    odometer = specs.get("odometer_km")
+    distance = listing_data.get("distance_km", 0)
+    price = listing_data.get("price_chf", 0)
+    red_flags = specs.get("red_flag_details", [])
+
+    lines = []
+
+    # Header: Verdict
+    if score >= 85:
+        verdict = "🟢 HIGHLY RECOMMENDED - Top candidate for viewing"
+    elif score >= 75:
+        verdict = "🟡 WORTH CONSIDERING - Good balance of specs"
+    elif score >= 65:
+        verdict = "🟠 ACCEPTABLE - Meets minimum requirements"
+    else:
+        verdict = "🔴 LOWER PRIORITY - Not ideal match"
+
+    lines.append(f"**{verdict}**\n")
+
+    # Motor analysis
+    if motor and torque:
+        if torque >= 85:
+            motor_note = f"{motor} {torque:.0f}Nm — Excellent power ✓✓"
+        elif torque >= 75:
+            motor_note = f"{motor} {torque:.0f}Nm — Good power ✓"
+        else:
+            motor_note = f"{motor} {torque:.0f}Nm — Weak, below target"
+        lines.append(f"• Motor: {motor_note}")
+    elif motor:
+        lines.append(f"• Motor: {motor} — Torque not specified (check with seller)")
+    else:
+        lines.append("• Motor: Not detected — Likely not an e-bike or specs unclear")
+
+    # Battery analysis
+    if battery:
+        if battery >= 625:
+            batt_note = f"{battery:.0f}Wh — Excellent range ✓✓"
+        elif battery >= 500:
+            batt_note = f"{battery:.0f}Wh — Good range ✓"
+        else:
+            batt_note = f"{battery:.0f}Wh — Limited range ⚠️"
+        lines.append(f"• Battery: {batt_note}")
+    else:
+        lines.append("• Battery: Not specified (ask seller)")
+
+    # Frame size analysis
+    if frame:
+        if frame == "M":
+            frame_note = "Perfect match ✓✓"
+        elif frame in ("S2", "S3"):
+            frame_note = "Close fit, might work"
+        else:
+            frame_note = f"Size {frame} — may not fit 170cm"
+        lines.append(f"• Frame Size: {frame} — {frame_note}")
+    else:
+        lines.append("• Frame Size: Not specified (critical — ask immediately)")
+
+    # Suspension analysis
+    if suspension:
+        if suspension == "full_suspension":
+            susp_note = "Full suspension ✓✓"
+        elif suspension == "hardtail":
+            susp_note = "Hardtail (acceptable if price/specs exceptional)"
+        else:
+            susp_note = f"Unknown suspension type"
+        if travel:
+            susp_note += f" — {travel}mm travel"
+        lines.append(f"• Suspension: {susp_note}")
+
+    # Brakes analysis
+    if brakes:
+        if brakes in ("four_piston", "high"):
+            brake_note = "High-end brakes ✓✓"
+        elif brakes in ("two_piston", "mid"):
+            brake_note = "Mid-range brakes ✓"
+        else:
+            brake_note = f"{brakes}"
+        lines.append(f"• Brakes: {brake_note}")
+
+    # Condition analysis
+    if odometer:
+        if odometer < 500:
+            cond_note = "Very low mileage ✓✓"
+        elif odometer < 2000:
+            cond_note = "Low mileage ✓"
+        elif odometer < 5000:
+            cond_note = "Normal usage"
+        else:
+            cond_note = f"High mileage — verify condition"
+        lines.append(f"• Condition: {odometer:.0f} km — {cond_note}")
+
+    # Distance analysis
+    if distance < 15:
+        dist_note = f"Very close ({distance:.1f}km) ✓✓ — Easy visit"
+    elif distance < 30:
+        dist_note = f"Nearby ({distance:.1f}km) ✓ — Reachable by train"
+    elif distance < 60:
+        dist_note = f"Moderate ({distance:.1f}km) — Plan trip"
+    else:
+        dist_note = f"Far ({distance:.1f}km) — Worth it only if very good specs"
+    lines.append(f"• Location: {dist_note}")
+
+    # Price analysis
+    target_price = 2200
+    if price < 1800:
+        price_note = f"Below target ({price:.0f} CHF) ✓✓ — Excellent value"
+    elif price < target_price:
+        price_note = f"In budget ({price:.0f} CHF, target {target_price}) ✓"
+    else:
+        price_note = f"Above target ({price:.0f} CHF, target {target_price}) — Negotiate"
+    lines.append(f"• Price: {price_note}")
+
+    # Red flags
+    if red_flags:
+        flag_str = ", ".join(red_flags[:3])
+        lines.append(f"\n⚠️  Red flags: {flag_str}")
+
+    # Final recommendation
+    lines.append(f"\n**Recommendation**: Score {score:.0f}/100. " +
+                ("Go see this bike — high likelihood of match." if score >= 80 else
+                 "Good option, worth exploring." if score >= 70 else
+                 "Acceptable but not ideal. Compare with other options first."))
+
+    return "\n".join(lines)
+
+
+def check_listing_validity(url: str, timeout: int = 5) -> bool:
+    """Check if listing URL is still valid (not 404). Returns True if valid."""
+    try:
+        response = requests.head(url, timeout=timeout, allow_redirects=True)
+        return response.status_code != 404
+    except Exception:
+        return True  # Assume valid if unreachable (network error, etc.)
 
 
 def process_listing(
@@ -126,6 +275,11 @@ def process_listing(
         score_result = scorer.calculate_score(listing_data, specs)
         db.save_score(listing_id, score_result)
 
+        # Generate user analysis (saved to DB)
+        if is_new:
+            analysis = generate_user_analysis(score_result["score_total"], specs, listing_data)
+            db.save_user_analysis(listing_id, analysis)
+
         if is_price_drop:
             print(f"  📉 PRICE DROP: {listing_raw['title'][:60]}")
 
@@ -166,6 +320,18 @@ def main():
 
     if config["portals"]["buycycle"]["enabled"]:
         connectors.append(("Buycycle", BuycycleConnector(config)))
+
+    if config["portals"]["upway"]["enabled"]:
+        connectors.append(("Upway", UpwayConnector(config)))
+
+    if config["portals"]["decathlon"]["enabled"]:
+        connectors.append(("Decathlon", DecathlonConnector(config)))
+
+    if config["portals"]["velomarkt"]["enabled"]:
+        connectors.append(("Velomarkt", VelomarktConnector(config)))
+
+    if config["portals"]["tcs_velocorner"]["enabled"]:
+        connectors.append(("TCS Velocorner", TcsVelocornerConnector(config)))
 
     # Scan each portal
     total_found = 0
@@ -243,7 +409,63 @@ def main():
             print(f"      {drop['url']}")
             print()
 
+    # Verify existing listings (mark SOLD if 404)
+    print()
+    print("=" * 80)
+    print("VERIFYING & ANALYZING EXISTING LISTINGS...")
+    print("=" * 80)
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT id, url FROM listings WHERE status IN ('ACTIVE', 'PRICE_DROP', 'NEW')")
+    existing = cursor.fetchall()
+
+    sold_count = 0
+    for listing_id, url in existing:
+        if not check_listing_validity(url):
+            db.mark_sold_or_delisted(listing_id, "SOLD")
+            sold_count += 1
+
+    if sold_count > 0:
+        print(f"✓ Marked {sold_count} listings as SOLD")
+    else:
+        print("✓ All existing listings still valid")
+
+    # Generate user_analysis for listings without one
+    cursor.execute("""
+    SELECT l.id, COALESCE(sc.score_total, 0) as score, l.price_chf, l.distance_km
+    FROM listings l
+    LEFT JOIN scores sc ON l.id = sc.listing_id
+    WHERE l.status IN ('ACTIVE', 'PRICE_DROP', 'NEW') AND l.user_analysis IS NULL
+    """)
+    listings_without_analysis = cursor.fetchall()
+
+    if listings_without_analysis:
+        print(f"Generating analysis for {len(listings_without_analysis)} listings...")
+        for listing_id, score, price, distance in listings_without_analysis:
+            # Fetch specs for this listing
+            cursor.execute("SELECT * FROM specifications WHERE listing_id = ?", (listing_id,))
+            spec_row = cursor.fetchone()
+            if spec_row:
+                specs = dict(spec_row)
+                listing_data = {"price_chf": price, "distance_km": distance}
+                analysis = generate_user_analysis(float(score), specs, listing_data)
+                db.save_user_analysis(listing_id, analysis)
+        print(f"✓ Generated analysis for {len(listings_without_analysis)} listings")
+    else:
+        print("✓ All listings already have analysis")
+
+    print()
+
     db.close()
+
+    # Generate HTML dashboard
+    print("=" * 80)
+    print("GENERATING DASHBOARD...")
+    print("=" * 80)
+    from scripts.generate_dashboard import generate_dashboard
+    dashboard_path = BASE_DIR / "index.html"
+    generate_dashboard(config["app"]["db_path"], str(dashboard_path))
+    print(f"✓ Dashboard: {dashboard_path}")
+    print()
     print("✓ Scan complete. Database saved.")
 
 

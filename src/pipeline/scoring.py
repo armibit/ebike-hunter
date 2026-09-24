@@ -88,7 +88,7 @@ class ScoringEngine:
         score = 0.0
 
         # Battery (max 40 points)
-        battery_wh = specs.get("battery_capacity_wh", 0)
+        battery_wh = specs.get("battery_capacity_wh") or 0
         if battery_wh >= 750:
             score += 40
         elif battery_wh >= 700:
@@ -101,7 +101,7 @@ class ScoringEngine:
             score += 0
 
         # Motor (max 30 points)
-        motor_nm = specs.get("motor_torque_nm", 0)
+        motor_nm = specs.get("motor_torque_nm") or 0
         if motor_nm >= 90:
             score += 30
         elif motor_nm >= 85:

@@ -1,0 +1,5 @@
+*.DS_Store
+*.local.md
+*.qodo
+*.claude
+ruvector.db

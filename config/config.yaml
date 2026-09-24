@@ -66,3 +66,18 @@ portals:
     country_filter: ["CH", "IT", "DE"]
     frame_sizes: ["M"]
     category: "e-mountainbike"
+  upway:
+    enabled: true
+    base_url: "https://upway.ch"
+    brands: ["cube", "lapierre", "ghost", "haibike", "trek", "specialized"]
+  decathlon:
+    enabled: true
+    base_url: "https://www.decathlon.ch/search"
+    max_pages: 5
+  velomarkt:
+    enabled: true
+    base_url: "https://www.velomarkt.ch"
+    category: "emtb-electric-mtb"
+  tcs_velocorner:
+    enabled: true
+    base_url: "https://www.tcs.ch/velocorner"
