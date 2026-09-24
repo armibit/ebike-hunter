@@ -1,0 +1,68 @@
+app:
+  name: "lugano-emtb-hunter"
+  log_level: "INFO"
+  db_path: "/Users/danielearmillotta/ebike-hunter/data/emtb_hunter.db"
+  poll_interval_seconds: 900
+
+buyer_profile:
+  location:
+    name: "Lugano, Ticino"
+    latitude: 46.0037
+    longitude: 8.9511
+  max_radius_km:
+    ticino: 45
+    lombardia: 105
+  budget:
+    target_price: 2200
+    hard_max_price: 3000
+    suspicious_min_price: 900
+  rider_specs:
+    height_cm: 170
+    target_sizes: ["M", "S2", "S3", "42cm", "43cm", "44cm", "45cm", "46cm", "17inch", "18inch"]
+
+hardware_requirements:
+  category: "full_suspension"
+  travel_front_range: [130, 160]
+  travel_rear_range: [130, 160]
+  min_motor_torque_nm: 60
+  min_battery_wh: 500
+
+scoring_weights:
+  price_value: 0.35
+  component_quality: 0.25
+  condition_mileage: 0.15
+  location_proximity: 0.15
+  fit_geometry: 0.10
+
+exchange_rates:
+  chf_to_eur: 1.05
+  eur_to_chf: 0.9524
+
+portals:
+  tutti_ch:
+    enabled: true
+    base_url: "https://www.tutti.ch"
+    cantons: ["ti", "gr"]
+    search_queries:
+      - "ebike fully"
+      - "e-mtb full"
+      - "turbo levo"
+      - "stereo hybrid"
+      - "trek rail"
+      - "canyon spectral on"
+  subito_it:
+    enabled: true
+    base_url: "https://www.subito.it"
+    provinces: ["como", "varese", "lecco", "monza", "milano"]
+    search_queries:
+      - "ebike full"
+      - "emtb biammortizzata"
+      - "turbo levo"
+      - "stereo hybrid"
+      - "trek rail"
+  buycycle:
+    enabled: true
+    base_url: "https://buycycle.com"
+    country_filter: ["CH", "IT", "DE"]
+    frame_sizes: ["M"]
+    category: "e-mountainbike"

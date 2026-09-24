@@ -1,0 +1,139 @@
+{
+  "motors": {
+    "bosch_cx_gen4": {
+      "brand": "Bosch",
+      "model": "Performance Line CX Gen4",
+      "torque_nm": 85,
+      "tier": "top",
+      "patterns": [
+        "bosch cx", "performance line cx", "cx gen4", "cx gen 4",
+        "cx smart system", "smart system", "smartsystem", "bosch 85nm",
+        "bosch 85 nm", "cx gen5"
+      ]
+    },
+    "specialized_brose": {
+      "brand": "Specialized / Brose",
+      "model": "Specialized 2.1 / 2.2 / Brose S Mag",
+      "torque_nm": 90,
+      "tier": "top",
+      "patterns": [
+        "brose drive s", "brose s mag", "brose mag", "specialized 2.1",
+        "specialized 2.2", "specialized 2.0", "turbo levo brose",
+        "motore brose", "90nm", "90 nm"
+      ]
+    },
+    "shimano_ep8": {
+      "brand": "Shimano",
+      "model": "EP8 / EP801",
+      "torque_nm": 85,
+      "tier": "top",
+      "patterns": [
+        "shimano ep8", "ep801", "ep800", "du-ep800", "du-ep801",
+        "shimano ep-8", "ep8 85nm"
+      ]
+    },
+    "yamaha_pwx": {
+      "brand": "Yamaha",
+      "model": "PW-X2 / PW-X3",
+      "torque_nm": 85,
+      "tier": "top",
+      "patterns": [
+        "pw-x3", "pwx3", "pw-x2", "pwx2", "yamaha pw-x", "yamaha 85nm"
+      ]
+    },
+    "rocky_dyname": {
+      "brand": "Rocky Mountain",
+      "model": "Dyname 4.0",
+      "torque_nm": 108,
+      "tier": "top",
+      "patterns": [
+        "dyname 4.0", "dyname 4", "dyname 3.0"
+      ]
+    },
+    "shimano_ep6": {
+      "brand": "Shimano",
+      "model": "EP6",
+      "torque_nm": 65,
+      "tier": "mid",
+      "patterns": [
+        "shimano ep6", "ep-6", "du-ep600"
+      ]
+    },
+    "bosch_performance": {
+      "brand": "Bosch",
+      "model": "Performance Line",
+      "torque_nm": 65,
+      "tier": "mid",
+      "patterns": [
+        "bosch performance (?!cx)", "performance line (?!cx)", "bosch 65nm"
+      ]
+    },
+    "weak_motors_disallowed": {
+      "brand": "Weak/Light Motor",
+      "model": "Disallowed",
+      "torque_nm": 50,
+      "tier": "disallowed",
+      "patterns": [
+        "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosch active line",
+        "bosch performance line (?!cx)", "shimano e7000", "shimano e8000"
+      ]
+    }
+  },
+  "brakes": {
+    "four_piston_top": [
+      "shimano xt", "br-m8120", "br-m7120", "br-m6120", "deore 4",
+      "magura mt7", "magura mt5", "sram code", "code r", "code rsc",
+      "code stealth", "shimano saint", "zee", "hope tech 4", "4 pistoncini",
+      "4 pistoni", "4-piston", "4-kolben", "4 kolben", "four piston"
+    ],
+    "two_piston_penalized": [
+      "mt200", "mt400", "sram level", "level t", "level tl",
+      "2 pistoncini", "2 pistoni", "2-kolben", "2 kolben", "br-m6100", "br-m7100", "br-m8100"
+    ]
+  },
+  "suspensions": {
+    "travel_patterns": [
+      "(\\d{3})\\s*mm",
+      "escursione\\s*(\\d{3})",
+      "federweg\\s*(\\d{3})",
+      "\\b(1[23456]\\d)\\b"
+    ],
+    "high_tier_forks": [
+      "factory", "kashima", "fox 38", "fox 36", "zeb ultimate", "lyrik ultimate", "grip2", "charger 3"
+    ],
+    "mid_tier_forks": [
+      "performance elite", "performance", "select\\+", "select plus", "yari", "revelation", "marzocchi z1"
+    ],
+    "entry_forks": [
+      "rhythm", "silver", "recon", "35 gold", "35 silver", "suntour"
+    ]
+  },
+  "frame_sizes": {
+    "target_m": [
+      "\\bm\\b", "\\bmedium\\b", "\\btaglia m\\b", "\\bgrösse m\\b", "\\bgroesse m\\b",
+      "\\btaille m\\b", "\\bs2\\b", "\\bs3\\b", "\\b17\\s*(?:\"|inch|pollici)?\\b",
+      "\\b18\\s*(?:\"|inch|pollici)?\\b", "\\b43\\s*cm\\b", "\\b44\\s*cm\\b",
+      "\\b45\\s*cm\\b", "\\b46\\s*cm\\b"
+    ],
+    "disallowed_sizes": [
+      "\\bxs\\b", "\\bxl\\b", "\\bxxl\\b", "\\bs1\\b", "\\bs5\\b", "\\bs6\\b",
+      "\\b20\\s*(?:\"|inch|pollici)\\b", "\\b21\\s*(?:\"|inch|pollici)\\b",
+      "\\b50\\s*cm\\b", "\\b52\\s*cm\\b", "\\b54\\s*cm\\b"
+    ]
+  },
+  "suspension_types": {
+    "full_keywords": [
+      "full", "fully", "biammortizzata", "bi-ammortizzata", "full suspension",
+      "full-suspension", "doppia sospensione", "all-mountain", "enduro", "trail"
+    ],
+    "hardtail_disallowed": [
+      "hardtail", "front", "monoammortizzata", "front suspended", "hard tail",
+      "front-suspension", "hard-tail"
+    ]
+  },
+  "red_flags": [
+    "senza caricatore", "senza chiave", "chiave persa", "caricatore non disponibile",
+    "no charger", "ohne ladegerät", "ohne schlüssel", "da riparare", "motore rotto",
+    "batteria non funzionante", "display rotto", "pezzi di ricambio", "solo telaio"
+  ]
+}

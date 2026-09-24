@@ -1,0 +1,212 @@
+import json
+import logging
+import re
+from typing import Dict, List, Any, Optional
+from .base import BaseConnector
+
+logger = logging.getLogger(__name__)
+
+# Category tokens from tutti.ch Next.js routing (/it/q/{slug}/{token}).
+# Tokens are opaque but stable — verified 2026-09-24.
+CATEGORY_TOKENS = {
+    "ti": ("biciclette-ticino", "Ak8CoYmljeWNsZXOUwMDAkZOobG9jYXRpb26xZ2VvLWNhbnRvbi10aWNpbm_A"),
+    "gr": ("biciclette-grigioni", "Ak8CoYmljeWNsZXOUwMDAkZOobG9jYXRpb261Z2VvLWNhbnRvbi1ncmF1YnVuZGVuwA"),
+}
+
+
+class TuttiConnector(BaseConnector):
+    """Connector for Tutti.ch (Ticino classifieds).
+
+    Tutti.ch runs a Next.js frontend; listing data is embedded in
+    `__NEXT_DATA__` under `props.pageProps.dehydratedState.queries`
+    (React Query dehydrated state). Keyword `?q=` params are ignored
+    server-side, so filtering by keyword is done locally on
+    title/description.
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("tutti", config)
+        self.base_url = config["portals"]["tutti_ch"]["base_url"]
+        self.search_queries = config["portals"]["tutti_ch"]["search_queries"]
+        self.cantons = config["portals"]["tutti_ch"].get("cantons", ["ti"])
+        self.max_pages = config["portals"]["tutti_ch"].get("max_pages", 3)
+
+    def search(self, query: str, canton: str = "ti", limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Fetch listings from the Tutti.ch bikes category for a canton,
+        filtered locally by keyword. Returns raw listing dicts.
+        """
+        if canton not in CATEGORY_TOKENS:
+            logger.warning("[Tutti.ch] Unknown canton '%s', skipping", canton)
+            return []
+
+        slug, token = CATEGORY_TOKENS[canton]
+        keywords = [w.lower() for w in query.split()] if query else []
+        results = []
+        seen_ids = set()
+
+        for page in range(1, self.max_pages + 1):
+            url = f"{self.base_url}/it/q/{slug}/{token}"
+            try:
+                response = self.get(url, params={"page": page})
+            except Exception as e:
+                logger.error("Error searching Tutti.ch: %s", e)
+                break
+
+            listings = self._parse_search_results(response.text, response.url)
+            if not listings:
+                break
+
+            new_count = 0
+            for listing in listings:
+                if listing["portal_id"] in seen_ids:
+                    continue
+                seen_ids.add(listing["portal_id"])
+                haystack = f"{listing['title']} {listing['description_raw']}".lower()
+                if not all(k in haystack for k in keywords):
+                    continue
+                results.append(listing)
+                new_count += 1
+                if len(results) >= limit:
+                    return results
+
+            if new_count == 0:
+                break
+
+        return results
+
+    def _parse_search_results(self, html: str, url: str) -> List[Dict[str, Any]]:
+        """Parse listings from __NEXT_DATA__ dehydratedState JSON."""
+        data = self._extract_next_data(html)
+        if data:
+            return self._parse_next_data(data)
+        logger.debug("No __NEXT_DATA__ found on %s", url)
+        return []
+
+    def _extract_next_data(self, html: str) -> Optional[Dict]:
+        """Extract __NEXT_DATA__ JSON from page."""
+        match = re.search(
+            r'<script id="__NEXT_DATA__" type="application/json">(.+?)</script>',
+            html,
+            re.DOTALL,
+        )
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                logger.debug("Failed to decode __NEXT_DATA__ JSON")
+        return None
+
+    @staticmethod
+    def _parse_price(formatted_price: str) -> float:
+        """Parse Tutti formatted price like \"2'200.-\" or \"1 500.-\" into float."""
+        if not formatted_price:
+            return 0.0
+        digits = re.sub(r"[^\d]", "", formatted_price)
+        return float(digits) if digits else 0.0
+
+    def _parse_next_data(self, data: Dict) -> List[Dict[str, Any]]:
+        """Parse listing nodes from dehydratedState.queries."""
+        listings = []
+
+        try:
+            queries = (
+                data.get("props", {})
+                .get("pageProps", {})
+                .get("dehydratedState", {})
+                .get("queries", [])
+            )
+            for query in queries:
+                query_data = query.get("state", {}).get("data", {})
+                if not isinstance(query_data, dict):
+                    continue
+                listings_payload = query_data.get("listings")
+                if not isinstance(listings_payload, dict):
+                    continue
+                for edge in listings_payload.get("edges", []):
+                    node = edge.get("node", {})
+                    listing = self._parse_node(node)
+                    if listing:
+                        listings.append(listing)
+        except Exception as e:
+            logger.error("Error parsing Next data: %s", e)
+
+        return listings
+
+    def _parse_node(self, node: Dict) -> Optional[Dict[str, Any]]:
+        """Convert a single dehydratedState listing node to our raw format."""
+        try:
+            listing_id = node.get("listingID")
+            if not listing_id:
+                return None
+
+            localization = node.get("localization", {}) or {}
+            postcode = node.get("postcodeInformation", {}) or {}
+            canton_info = postcode.get("canton", {}) or {}
+            seo = node.get("seoInformation", {}) or {}
+            seller = node.get("sellerInfo", {}) or {}
+
+            slug = seo.get("itSlug") or seo.get("deSlug") or ""
+            if slug:
+                url = f"{self.base_url}/it/vi/{slug}/{listing_id}"
+            else:
+                url = f"{self.base_url}/it/vi/{listing_id}"
+
+            location_parts = [
+                p for p in (postcode.get("locationName", ""), canton_info.get("name", "")) if p
+            ]
+
+            return {
+                "portal": "tutti",
+                "portal_id": str(listing_id),
+                "url": url,
+                "title": localization.get("title", "") or "",
+                "description_raw": localization.get("body", "") or "",
+                "price_raw": self._parse_price(node.get("formattedPrice", "")),
+                "currency": "CHF",
+                "location_raw": ", ".join(location_parts),
+                "category": (node.get("primaryCategory", {}) or {}).get("categoryID", ""),
+                "seller_name": seller.get("alias", ""),
+                "timestamp": node.get("timestamp", ""),
+            }
+        except Exception:
+            logger.debug("Failed to parse Tutti listing node", exc_info=True)
+            return None
+
+    def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
+        """Fetch detailed listing information."""
+        try:
+            response = self.get(url)
+            data = self._extract_next_data(response.text)
+            if data:
+                # Detail page embeds the full listing body in dehydratedState
+                queries = (
+                    data.get("props", {})
+                    .get("pageProps", {})
+                    .get("dehydratedState", {})
+                    .get("queries", [])
+                )
+                for query in queries:
+                    query_data = query.get("state", {}).get("data", {})
+                    if not isinstance(query_data, dict):
+                        continue
+                    listing = query_data.get("listing")
+                    if isinstance(listing, dict):
+                        localization = listing.get("localization", {}) or {}
+                        return {"description_raw": localization.get("body", "") or ""}
+            return {}
+        except Exception as e:
+            logger.error("Error fetching details for %s: %s", listing_id, e)
+            return {}
+
+    def search_all(self) -> List[Dict[str, Any]]:
+        """Run all configured search queries."""
+        all_results = []
+
+        for query in self.search_queries:
+            for canton in self.cantons:
+                results = self.search(query, canton=canton)
+                all_results.extend(results)
+                logger.info("[Tutti.ch] Query '%s' in %s: %d results", query, canton, len(results))
+
+        return all_results
