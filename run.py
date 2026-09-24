@@ -230,8 +230,8 @@ def process_listing(
     # Filter: Motor
     min_motor_nm = config["hardware_requirements"]["min_motor_torque_nm"]
     if specs["motor_torque_nm"] is None:
-        # No motor detected - might still be OK if description incomplete
-        pass
+        # No motor detected - reject (likely muscular bike or incomplete listing)
+        reject_reasons.append("No motor detected (likely not an e-bike)")
     elif specs["motor_torque_nm"] < min_motor_nm:
         reject_reasons.append(f"Weak motor ({specs['motor_torque_nm']}nm < {min_motor_nm}nm)")
 

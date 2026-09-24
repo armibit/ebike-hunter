@@ -81,6 +81,21 @@ class RegexParser:
                         "model": motor_data["model"],
                         "torque_nm": motor_data["torque_nm"]
                     }
+
+        # Fallback: if text contains e-bike keywords, assume it's an e-bike with unknown motor
+        ebike_keywords = [
+            r"\bturbo\b", r"\bhybrid\b", r"\be-bike\b", r"\bebike\b",
+            r"\be mtb\b", r"\be-mtb\b", r"\bemtb\b",
+            r"electric bike", r"elektrisch", r"elektrisches bike"
+        ]
+        for keyword in ebike_keywords:
+            if re.search(keyword, text, re.IGNORECASE):
+                return {
+                    "brand": "Unknown Motor",
+                    "model": "Not specified",
+                    "torque_nm": 60  # Minimum acceptable torque
+                }
+
         return None
 
     def _extract_battery_wh(self, text: str) -> Optional[int]:

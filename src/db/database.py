@@ -27,13 +27,6 @@ class Database:
     def _init_schema(self):
         cursor = self.conn.cursor()
 
-        # Check if user_analysis column exists; if not, add it
-        cursor.execute("PRAGMA table_info(listings)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "user_analysis" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN user_analysis TEXT")
-            self.conn.commit()
-
         cursor.executescript("""
         CREATE TABLE IF NOT EXISTS listings (
             id TEXT PRIMARY KEY,
@@ -119,6 +112,13 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_snapshots_listing ON listing_snapshots(listing_id, captured_at DESC);
         """)
         self.conn.commit()
+
+        # Migration: add user_analysis column if missing (for older databases)
+        cursor.execute("PRAGMA table_info(listings)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "user_analysis" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN user_analysis TEXT")
+            self.conn.commit()
 
     def upsert_listing(self, item: Dict[str, Any]) -> Tuple[str, bool, bool]:
         """
