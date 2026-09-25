@@ -16,13 +16,53 @@ from pipeline.scoring import ScoringEngine
 EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size"]
 
 
+def _normalize_size(value: str) -> str:
+    return "".join(str(value).lower().split())
+
+
+def _corrected_reject_reason(current: Dict[str, Any], applied_fields: list, config: Dict[str, Any]) -> Optional[str]:
+    """A manual/AI correction can move a listing outside the buyer's actual
+    criteria (e.g. you read the real frame size off a photo and it's XL,
+    not the "unknown" the parser had) — it should be rejected the same as
+    if a scan had read that value from the text in the first place, not
+    stay ACTIVE just because the correction path never re-checks it."""
+    rider_specs = config.get("buyer_profile", {}).get("rider_specs", {})
+    target_sizes = {_normalize_size(s) for s in rider_specs.get("target_sizes", [])}
+    if "frame_size" in applied_fields and current.get("frame_size") and target_sizes:
+        value = str(current["frame_size"])
+        if _normalize_size(value) not in target_sizes:
+            return f"Taglia esclusa dopo correzione manuale ({value} non tra le taglie target)"
+
+    hw = config.get("hardware_requirements", {})
+    min_motor_nm = hw.get("min_motor_torque_nm")
+    if "motor_torque_nm" in applied_fields and current.get("motor_torque_nm") is not None and min_motor_nm is not None:
+        if current["motor_torque_nm"] < min_motor_nm:
+            return f"Motore troppo debole dopo correzione manuale ({current['motor_torque_nm']:.0f}Nm < {min_motor_nm}Nm)"
+
+    min_battery_wh = hw.get("min_battery_wh")
+    if "battery_capacity_wh" in applied_fields and current.get("battery_capacity_wh") is not None and min_battery_wh is not None:
+        if current["battery_capacity_wh"] < min_battery_wh:
+            return f"Batteria troppo piccola dopo correzione manuale ({current['battery_capacity_wh']:.0f}Wh < {min_battery_wh}Wh)"
+
+    return None
+
+
 def apply_spec_correction(
-    db: Database, scorer: ScoringEngine, listing_id: str, corrected_fields: Dict[str, Any]
+    db: Database,
+    scorer: ScoringEngine,
+    listing_id: str,
+    corrected_fields: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Merge corrected_fields into listing_id's stored specs, persist, and
     recalculate its score. Returns the new score_result dict, or None if the
     listing doesn't exist. Only keys in EDITABLE_SPEC_FIELDS are applied —
-    anything else in corrected_fields is silently ignored."""
+    anything else in corrected_fields is silently ignored.
+
+    When config is given, a correction that pushes the listing outside the
+    buyer's own criteria (wrong frame size, motor/battery below the hard
+    minimums) marks it REJECTED — see _corrected_reject_reason(). Passing
+    config=None skips that check (score/text still update normally)."""
     current = db.get_listing_with_specs(listing_id)
     if current is None:
         return None
@@ -58,5 +98,10 @@ def apply_spec_correction(
     # confirmed it) even though the score and spec grid have moved on.
     analysis = generate_user_analysis(score_result["score_total"], current, listing_data)
     db.save_user_analysis(listing_id, analysis)
+
+    if config is not None:
+        reject_reason = _corrected_reject_reason(current, applied_fields, config)
+        if reject_reason:
+            db.set_manual_status(listing_id, "REJECTED", reason=reject_reason)
 
     return score_result

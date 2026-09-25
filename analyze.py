@@ -77,7 +77,7 @@ def main():
             # ai_analysis, never actually move the listing's ranking.
             corrected_specs = result.get("corrected_specs") or {}
             if corrected_specs:
-                score_result = apply_spec_correction(db, scorer, result["listing_id"], corrected_specs)
+                score_result = apply_spec_correction(db, scorer, result["listing_id"], corrected_specs, config=config)
                 if score_result is not None:
                     corrected += 1
                     logger.info(

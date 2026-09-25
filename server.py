@@ -97,7 +97,7 @@ def favorite(listing_id):
 def update_specs(listing_id):
     data = request.get_json(force=True, silent=True) or {}
     db = Database(DB_PATH)
-    score_result = apply_spec_correction(db, scorer, listing_id, data)
+    score_result = apply_spec_correction(db, scorer, listing_id, data, config=config)
     db.close()
 
     if score_result is None:

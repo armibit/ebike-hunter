@@ -176,7 +176,16 @@ def _build_score_breakdown_html(bike: dict) -> str:
         for label, value in parts
     )
     total = bike.get("score_total") or 0
-    return f'<div class="detail-section"><h3>📊 Punteggio euristico — {total:.0f}/100</h3>{rows_html}</div>'
+    # Collapsed by default (native <details>, no JS needed) — the total is
+    # already in the top bar; this per-component breakdown is reference
+    # detail you open on purpose, not something that should cost scroll
+    # space on every listing you open.
+    return (
+        '<details class="detail-section score-accordion">'
+        f'<summary>📊 Dettaglio punteggio euristico ({total:.0f}/100)</summary>'
+        f'<div class="score-breakdown-body">{rows_html}</div>'
+        '</details>'
+    )
 
 
 def _build_red_flags_html(bike: dict) -> str:
@@ -398,9 +407,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(15,23,42,0.5); }}
         .modal.show {{ display: block; }}
         .modal-content {{ background-color: var(--surface); margin: 4% auto; padding: 24px; border-radius: var(--radius); width: 88%; max-width: 900px; max-height: 84vh; overflow-y: auto; box-shadow: 0 20px 40px rgba(0,0,0,0.2); }}
-        .modal-close {{ float: right; font-size: 24px; font-weight: bold; cursor: pointer; color: var(--text-muted); line-height: 1; }}
+        .modal-header-actions {{ display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 4px; }}
+        .modal-nav-btn {{ width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; font-size: 15px; }}
+        .modal-nav-btn:hover {{ background: var(--bg); }}
+        .modal-nav-btn:disabled {{ opacity: .3; cursor: default; }}
+        .modal-nav-btn:disabled:hover {{ background: var(--surface); }}
+        .modal-close {{ font-size: 24px; font-weight: bold; cursor: pointer; color: var(--text-muted); line-height: 1; margin-left: 4px; }}
         .modal-close:hover {{ color: var(--text); }}
-        .modal h2 {{ margin: 0 0 18px; font-size: 18px; padding-right: 30px; }}
+        .modal h2 {{ margin: 0 0 18px; font-size: 18px; }}
         .modal-body {{ font-size: 14px; line-height: 1.6; }}
 
         .detail-section {{ margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }}
@@ -430,6 +444,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .badge-warn {{ background: var(--warning-bg); color: var(--warning); }}
         .badge-ai {{ background: #ede9fe; color: #6d28d9; }}
 
+        .score-accordion summary {{ font-size: 13px; color: var(--primary); text-transform: uppercase; letter-spacing: .03em; cursor: pointer; list-style: none; }}
+        .score-accordion summary::-webkit-details-marker {{ display: none; }}
+        .score-accordion summary::before {{ content: "▸ "; display: inline-block; }}
+        .score-accordion[open] summary::before {{ content: "▾ "; }}
+        .score-breakdown-body {{ margin-top: 12px; }}
         .score-row {{ display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 12px; }}
         .score-row-label {{ width: 140px; color: var(--text-muted); flex-shrink: 0; }}
         .score-track {{ flex: 1; background: var(--bg); border-radius: 4px; height: 8px; overflow: hidden; }}
@@ -533,7 +552,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         <!-- Analysis Modal -->
         <div id="analysisModal" class="modal">
             <div class="modal-content">
-                <span class="modal-close" onclick="closeAnalysis()">&times;</span>
+                <div class="modal-header-actions">
+                    <button class="modal-nav-btn" id="modalPrevBtn" onclick="navigateDetail(-1)" title="Annuncio precedente">←</button>
+                    <button class="modal-nav-btn" id="modalNextBtn" onclick="navigateDetail(1)" title="Annuncio successivo">→</button>
+                    <span class="modal-close" onclick="closeAnalysis()">&times;</span>
+                </div>
                 <h2 id="modalTitle"></h2>
                 <div class="modal-body" id="modalBody"></div>
 """
@@ -678,10 +701,37 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             }
 
             document.getElementById('analysisModal').classList.add('show');
+            updateModalNavButtons();
         }
 
         function closeAnalysis() {
             document.getElementById('analysisModal').classList.remove('show');
+        }
+
+        // Prev/Next cycle through the currently *visible* rows (respecting
+        // whatever filters are active) so navigation never jumps to a
+        // listing you've filtered out — findable by clicking its own
+        // "Dettagli" button, same as opening it normally.
+        function getVisibleRows() {
+            return Array.from(document.querySelectorAll('#tbody tr'))
+                .filter(row => row.dataset.id && row.style.display !== 'none');
+        }
+
+        function navigateDetail(direction) {
+            const rows = getVisibleRows();
+            const idx = rows.findIndex(row => row.getAttribute('data-id') === currentListingId);
+            const nextIdx = idx + direction;
+            if (idx === -1 || nextIdx < 0 || nextIdx >= rows.length) return;
+            const targetRow = rows[nextIdx];
+            const detailBtn = targetRow.querySelector('.icon-details, .btn-details');
+            if (detailBtn) showAnalysis(detailBtn);
+        }
+
+        function updateModalNavButtons() {
+            const rows = getVisibleRows();
+            const idx = rows.findIndex(row => row.getAttribute('data-id') === currentListingId);
+            document.getElementById('modalPrevBtn').disabled = idx <= 0;
+            document.getElementById('modalNextBtn').disabled = idx === -1 || idx >= rows.length - 1;
         }
 
         // Reject / mark sold / restore / spec-correction actions — POST to
@@ -752,9 +802,16 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             });
         }
 
-        // Close modal on ESC key
+        // ESC closes, arrow keys navigate — only while the modal is open
+        // and not while typing in one of the edit-specs fields.
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeAnalysis();
+            const modalOpen = document.getElementById('analysisModal').classList.contains('show');
+            if (!modalOpen) return;
+            if (e.key === 'Escape') { closeAnalysis(); return; }
+            const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+            if (typing) return;
+            if (e.key === 'ArrowLeft') navigateDetail(-1);
+            if (e.key === 'ArrowRight') navigateDetail(1);
         });
 
         // Close modal on background click
