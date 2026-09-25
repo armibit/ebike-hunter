@@ -258,6 +258,121 @@ def test_zero_price_not_treated_as_drop():
     print("✅ Zero-price-not-a-drop test passed")
 
 
+def test_ai_analysis_columns_and_save():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    listing = {
+        "portal": "tutti",
+        "portal_id": "33333",
+        "url": "https://tutti.ch/ai-test",
+        "title": "Cube Stereo Hybrid 140",
+        "description_raw": "Ottime condizioni, piccolo graffio anteriore.",
+        "price_raw": 2100,
+        "currency": "CHF",
+        "price_chf": 2100,
+        "price_eur": 2205,
+        "distance_km": 5.0,
+        "status": "ACTIVE",
+    }
+    listing_id, _, _ = db.upsert_listing(listing)
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT ai_analysis, ai_score, ai_analyzed_at FROM listings WHERE id = ?", (listing_id,))
+    row = cursor.fetchone()
+    assert row["ai_analysis"] is None
+    assert row["ai_score"] is None
+    assert row["ai_analyzed_at"] is None
+
+    db.save_ai_analysis(listing_id, "Solid buy, minor cosmetic wear only.", 81.5)
+
+    cursor.execute("SELECT ai_analysis, ai_score, ai_analyzed_at FROM listings WHERE id = ?", (listing_id,))
+    row = cursor.fetchone()
+    assert row["ai_analysis"] == "Solid buy, minor cosmetic wear only."
+    assert row["ai_score"] == 81.5
+    assert row["ai_analyzed_at"] is not None
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI analysis save test passed")
+
+
+def test_get_listings_needing_ai_analysis():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    # Not yet analyzed — must be returned.
+    pending = {
+        "portal": "tutti", "portal_id": "1", "url": "https://tutti.ch/1",
+        "title": "Pending bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    pending_id, _, _ = db.upsert_listing(pending)
+
+    # Already analyzed and unchanged since — must NOT be returned.
+    analyzed = {
+        "portal": "tutti", "portal_id": "2", "url": "https://tutti.ch/2",
+        "title": "Already analyzed bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    analyzed_id, _, _ = db.upsert_listing(analyzed)
+    db.save_ai_analysis(analyzed_id, "Already judged.", 70.0)
+
+    # Rejected — must NOT be returned regardless of ai_analysis state.
+    rejected = {
+        "portal": "tutti", "portal_id": "3", "url": "https://tutti.ch/3",
+        "title": "Rejected bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0,
+        "status": "REJECTED", "rejection_reason": "no_motor_detected",
+    }
+    db.upsert_listing(rejected)
+
+    eligible = db.get_listings_needing_ai_analysis()
+    eligible_ids = {row["id"] for row in eligible}
+
+    assert pending_id in eligible_ids
+    assert analyzed_id not in eligible_ids
+    assert all("rejected" not in row["title"].lower() for row in eligible)
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ get_listings_needing_ai_analysis filtering test passed")
+
+
+def test_price_drop_after_ai_analysis_is_eligible_again():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    base = {
+        "portal": "subito", "portal_id": "44444", "url": "https://subito.it/drop",
+        "title": "Trek Rail 9.7", "price_raw": 2500, "currency": "EUR",
+        "price_chf": 2381, "price_eur": 2500, "distance_km": 30.0, "status": "ACTIVE",
+    }
+    listing_id, _, _ = db.upsert_listing(base)
+    db.save_ai_analysis(listing_id, "Solid at this price.", 75.0)
+
+    # No longer eligible right after analysis.
+    eligible_ids = {row["id"] for row in db.get_listings_needing_ai_analysis()}
+    assert listing_id not in eligible_ids
+
+    # A genuine price drop should surface it again for a fresh AI read.
+    dropped = {**base, "price_raw": 2200, "price_chf": 2095, "price_eur": 2200}
+    db.upsert_listing(dropped)
+
+    eligible_ids = {row["id"] for row in db.get_listings_needing_ai_analysis()}
+    assert listing_id in eligible_ids
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Price-drop re-eligibility test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
@@ -266,4 +381,7 @@ if __name__ == "__main__":
     test_price_drop_status_persists()
     test_rejected_status_not_overridden_by_price_drop()
     test_zero_price_not_treated_as_drop()
+    test_ai_analysis_columns_and_save()
+    test_get_listings_needing_ai_analysis()
+    test_price_drop_after_ai_analysis_is_eligible_again()
     print("\n✅ All database tests passed!")

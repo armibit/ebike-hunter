@@ -120,6 +120,17 @@ class Database:
             cursor.execute("ALTER TABLE listings ADD COLUMN user_analysis TEXT")
             self.conn.commit()
 
+        # Migration: add AI-analysis columns if missing (for older databases).
+        # Kept separate from score_total/user_analysis — ai_score is an
+        # informational second opinion, never used to filter get_top_deals().
+        if "ai_analysis" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN ai_analysis TEXT")
+        if "ai_score" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN ai_score REAL")
+        if "ai_analyzed_at" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN ai_analyzed_at TIMESTAMP")
+        self.conn.commit()
+
     def upsert_listing(self, item: Dict[str, Any]) -> Tuple[str, bool, bool]:
         """
         Upserts listing.
@@ -239,6 +250,38 @@ class Database:
         cursor.execute("""
         UPDATE listings SET user_analysis = ? WHERE id = ?
         """, (analysis, listing_id))
+        self.conn.commit()
+
+    def get_listings_needing_ai_analysis(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Active/price-drop listings due for an AI read: never analyzed yet,
+        or analyzed before their most recent price drop. Scoped away from
+        REJECTED/SOLD/DELISTED to bound recurring API cost as the DB grows."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+        SELECT l.id, l.title, l.description_raw, l.price_chf, l.distance_km, l.status,
+               s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm,
+               s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
+               s.brakes_tier, s.odometer_km, s.red_flag_details,
+               sc.score_total
+        FROM listings l
+        LEFT JOIN specifications s ON l.id = s.listing_id
+        LEFT JOIN scores sc ON l.id = sc.listing_id
+        WHERE l.status IN ('ACTIVE', 'PRICE_DROP')
+          AND (l.ai_analysis IS NULL
+               OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))
+        ORDER BY sc.score_total DESC
+        LIMIT ?
+        """, (limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def save_ai_analysis(self, listing_id: str, ai_analysis: str, ai_score: float):
+        """Save Claude's verdict for a listing. Additive only — never touches
+        scores.score_total, so get_top_deals()'s filtering is unaffected."""
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute("""
+        UPDATE listings SET ai_analysis = ?, ai_score = ?, ai_analyzed_at = ? WHERE id = ?
+        """, (ai_analysis, ai_score, now, listing_id))
         self.conn.commit()
 
     def mark_sold_or_delisted(self, listing_id: str, status: str = "SOLD"):
