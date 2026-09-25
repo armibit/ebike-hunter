@@ -4,7 +4,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.generate_dashboard import _format_price, _format_date, _format_history, _build_modal_text
+from scripts.generate_dashboard import (
+    _format_price,
+    _format_date,
+    _build_price_history_html,
+    _build_spec_table_html,
+    _build_score_breakdown_html,
+    _build_red_flags_html,
+    _build_detail_html,
+    _render_text_block,
+    render_dashboard_html,
+)
 
 
 def test_format_price_shows_original_currency_not_converted():
@@ -35,40 +45,141 @@ def test_format_date_parses_iso_timestamp():
     print("✅ Date formatting test passed")
 
 
-def test_format_history_requires_at_least_two_snapshots():
+def test_price_history_html_requires_at_least_two_snapshots():
     single = [{"price_raw": 2400.0, "currency": "EUR", "captured_at": "2026-09-10T00:00:00+00:00"}]
-    assert _format_history(single) == "", "a single snapshot isn't a 'history' yet"
+    assert _build_price_history_html(single) == "", "a single snapshot isn't a 'history' yet"
 
     two = single + [{"price_raw": 2200.0, "currency": "EUR", "captured_at": "2026-09-20T00:00:00+00:00"}]
-    text = _format_history(two)
-    assert "2400 EUR" in text and "2200 EUR" in text
-    assert text.index("2400 EUR") < text.index("2200 EUR"), "history must read oldest to newest"
-    print("✅ Price history formatting test passed")
+    html = _build_price_history_html(two)
+    assert "2400 EUR" in html and "2200 EUR" in html
+    assert html.index("2400 EUR") < html.index("2200 EUR"), "history must read oldest to newest"
+    assert "price-chip" in html
+    print("✅ Price history HTML test passed")
 
 
-def test_build_modal_text_includes_metadata_and_history():
+def test_render_text_block_converts_bold_and_bullets_to_real_html():
+    # The exact bug reported: literal "\n" characters showing up as text in
+    # the modal instead of real line breaks/paragraphs/lists.
+    text = "**RECOMMENDATION**\n\n• Motor: Bosch 85Nm — great\n• Battery: unknown\n\nFinal note."
+    html = _render_text_block(text)
+
+    assert "\\n" not in html, "must never leak a literal backslash-n into the rendered HTML"
+    assert "<strong>RECOMMENDATION</strong>" in html
+    assert "<li>Motor: Bosch 85Nm — great</li>" in html
+    assert "<li>Battery: unknown</li>" in html
+    assert "<p>Final note.</p>" in html
+    print("✅ Text block markdown-lite rendering test passed")
+
+
+def test_render_text_block_escapes_html_in_seller_text():
+    # Seller-provided text is untrusted — must not inject markup.
+    html = _render_text_block("Prezzo <script>alert(1)</script>")
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    print("✅ Text block HTML-escaping test passed")
+
+
+def test_build_spec_table_marks_unverified_motor():
+    verified = _build_spec_table_html({"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True})
+    assert "badge-ok" in verified and "verificato" in verified
+
+    unverified = _build_spec_table_html({"motor_brand": "Unknown Motor", "motor_torque_nm": 60, "motor_verified": 0})
+    assert "badge-warn" in unverified and "da verificare" in unverified
+    print("✅ Spec table motor-verified badge test passed")
+
+
+def test_build_score_breakdown_renders_all_subscores():
+    html = _build_score_breakdown_html({
+        "score_total": 75.4,
+        "score_price_value": 80,
+        "score_component_quality": 70,
+        "score_condition_mileage": 60,
+        "score_location_proximity": 90,
+        "score_fit_geometry": 65,
+    })
+    assert "75/100" in html
+    for label in ("Prezzo", "Componenti", "Condizione / Km", "Posizione", "Taglia / Escursione"):
+        assert label in html
+    print("✅ Score breakdown test passed")
+
+
+def test_build_red_flags_html_only_when_flagged():
+    assert _build_red_flags_html({"has_red_flag": False}) == ""
+    assert _build_red_flags_html({"has_red_flag": True, "red_flag_details": None}) == ""
+
+    import json
+    html = _build_red_flags_html({"has_red_flag": True, "red_flag_details": json.dumps(["senza caricatore"])})
+    assert "senza caricatore" in html
+    print("✅ Red flags HTML test passed")
+
+
+def test_build_detail_html_includes_metadata_history_and_ai_verdict():
     bike = {
         "first_seen_at": "2026-09-10T00:00:00+00:00",
         "model_year": 2022,
         "odometer_km": 1200.0,
+        "price_raw": 2400.0,
+        "currency": "EUR",
+        "price_chf": 2280.0,
         "user_analysis": "Buon affare.",
+        "ai_analysis": "Ottimo prezzo per le specifiche.",
+        "ai_score": 82.0,
+        "score_total": 75.0,
     }
     history = [
         {"price_raw": 2400.0, "currency": "EUR", "captured_at": "2026-09-10T00:00:00+00:00"},
         {"price_raw": 2200.0, "currency": "EUR", "captured_at": "2026-09-20T00:00:00+00:00"},
     ]
-    text = _build_modal_text(bike, history)
-    assert "2022" in text
-    assert "1200 km" in text
-    assert "Storico prezzo" in text
-    assert "Buon affare." in text
-    print("✅ Modal text assembly test passed")
+    html = _build_detail_html(bike, history)
+
+    assert "\\n" not in html
+    assert "2022" in html
+    assert "1200 km" in html
+    assert "Storico prezzo" in html
+    assert "Buon affare." in html
+    assert "Ottimo prezzo per le specifiche." in html
+    assert "82/100" in html
+    print("✅ Detail HTML assembly test passed")
+
+
+def test_render_dashboard_html_no_literal_backslash_n_end_to_end():
+    """Regression test for the reported bug: opening a listing's modal
+    showed literal '\\n' text instead of line breaks. Renders a full page
+    against a real temp DB and checks the per-listing <template> content."""
+    import tempfile, os, re
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+
+    tmp = tempfile.mktemp(suffix=".db")
+    db = Database(tmp)
+    db.upsert_listing({
+        "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
+        "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+        "distance_km": 10, "status": "ACTIVE",
+    })
+    db.save_user_analysis("x_1", "**Verdict**\n\n• Point one\n• Point two\n\nClosing line.")
+    db.close()
+
+    html = render_dashboard_html(tmp, interactive=True)
+    os.remove(tmp)
+
+    match = re.search(r'<template data-listing-id="x_1">.*?</template>', html, re.S)
+    assert match, "expected a per-listing <template> block"
+    assert "\\n" not in match.group(0)
+    assert "<strong>Verdict</strong>" in match.group(0)
+    print("✅ End-to-end no-literal-backslash-n test passed")
 
 
 if __name__ == "__main__":
     test_format_price_shows_original_currency_not_converted()
     test_format_price_falls_back_without_raw_price()
     test_format_date_parses_iso_timestamp()
-    test_format_history_requires_at_least_two_snapshots()
-    test_build_modal_text_includes_metadata_and_history()
+    test_price_history_html_requires_at_least_two_snapshots()
+    test_render_text_block_converts_bold_and_bullets_to_real_html()
+    test_render_text_block_escapes_html_in_seller_text()
+    test_build_spec_table_marks_unverified_motor()
+    test_build_score_breakdown_renders_all_subscores()
+    test_build_red_flags_html_only_when_flagged()
+    test_build_detail_html_includes_metadata_history_and_ai_verdict()
+    test_render_dashboard_html_no_literal_backslash_n_end_to_end()
     print("\n✅ All generate_dashboard tests passed!")

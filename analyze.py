@@ -21,6 +21,8 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from db.database import Database
 from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE
+from pipeline.corrections import apply_spec_correction
+from pipeline.scoring import ScoringEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ def main():
     config = load_config()
     db = Database(config["app"]["db_path"])
     analyzer = AIAnalyzer(config["buyer_profile"])
+    scorer = ScoringEngine(config)
 
     listings = db.get_listings_needing_ai_analysis()
     if not listings:
@@ -60,15 +63,33 @@ def main():
     print(f"Analyzing {len(listings)} listing(s) with Claude Haiku, in {len(batches)} batch(es)...")
 
     analyzed = 0
+    corrected = 0
     for i, batch in enumerate(batches, 1):
         results = analyzer.analyze_batch(batch)
         for result in results:
             db.save_ai_analysis(result["listing_id"], result["ai_analysis"], result["ai_score"])
             analyzed += 1
+
+            # If Claude read a spec directly off the seller's text that the
+            # regex parser missed (e.g. an unverified/guessed motor, or an
+            # unrecognized frame size), apply it and recalculate score_total
+            # — otherwise the fix would only ever show up as prose in
+            # ai_analysis, never actually move the listing's ranking.
+            corrected_specs = result.get("corrected_specs") or {}
+            if corrected_specs:
+                score_result = apply_spec_correction(db, scorer, result["listing_id"], corrected_specs)
+                if score_result is not None:
+                    corrected += 1
+                    logger.info(
+                        "AI corrected specs for %s: %s (new score_total=%.1f)",
+                        result["listing_id"], corrected_specs, score_result["score_total"],
+                    )
+
         print(f"  batch {i}/{len(batches)}: {len(results)}/{len(batch)} analyzed")
 
     db.close()
-    print(f"Done — {analyzed}/{len(listings)} listing(s) analyzed.")
+    print(f"Done — {analyzed}/{len(listings)} listing(s) analyzed"
+          + (f", {corrected} rescored from AI-read spec corrections." if corrected else "."))
 
     from scripts.generate_dashboard import generate_dashboard
     dashboard_path = BASE_DIR / "index.html"

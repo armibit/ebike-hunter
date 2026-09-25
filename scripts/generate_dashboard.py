@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Generate static HTML dashboard from DB listings."""
 
+import json
+import re
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -50,45 +52,11 @@ def _format_date(iso_str) -> str:
         return str(iso_str)[:10]
 
 
-def _format_history(snapshots: list) -> str:
-    if len(snapshots) < 2:
-        return ""
-    return " → ".join(
-        f"{snap['price_raw']:.0f} {snap['currency']} ({_format_date(snap['captured_at'])})"
-        for snap in snapshots
-    )
-
-
-def _build_modal_text(bike: dict, history: list) -> str:
-    """Full detail text for the per-listing modal: publish/age/mileage
-    metadata (mostly parsed by RegexParser from the description — see
-    model_year/odometer_km), price history when the listing has been
-    rescanned at least twice, then the heuristic + AI analysis below.
-
-    Note: only price changes are tracked (listing_snapshots). The seller's
-    description text itself isn't snapshotted anywhere, so an edit to the
-    description (as opposed to the price) can't be surfaced here yet."""
-    anno = bike.get("model_year") or "N/A"
-    km = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
-    lines = [f"📅 Visto la prima volta: {_format_date(bike.get('first_seen_at'))} | Anno modello: {anno} | Percorrenza: {km}"]
-
-    hist_text = _format_history(history)
-    if hist_text:
-        lines.append(f"💰 Storico prezzo: {hist_text}")
-
-    analysis = _combine_analysis(bike)
-    if analysis:
-        lines.append(analysis)
-
-    return "\n\n".join(lines)
-
-
 def _combine_analysis(bike: dict) -> str:
-    """Merge the deterministic heuristic analysis with Claude's ai_analysis
-    verdict (run separately, on demand, by analyze.py) into the single text
-    block the dashboard displays. ai_analysis is additive — it's appended,
-    never replaces the heuristic text — matching how the two are kept
-    separate in the DB (see Database.save_ai_analysis)."""
+    """Short plain-text summary for the compact Top-10 cards — heuristic
+    verdict plus the AI one if present. The full per-listing modal uses the
+    structured HTML in _build_detail_html() instead; this stays plain text
+    since it's just squeezed into a small card, not a detail view."""
     parts = []
     if bike.get("user_analysis"):
         parts.append(bike["user_analysis"])
@@ -97,6 +65,142 @@ def _combine_analysis(bike: dict) -> str:
         score_note = f" (score: {ai_score:.0f}/100)" if ai_score is not None else ""
         parts.append(f"🤖 Verdetto AI{score_note}:\n{bike['ai_analysis']}")
     return "\n\n".join(parts)
+
+
+def _render_text_block(text) -> str:
+    """Turn the light markdown our own generate_user_analysis() (and the AI
+    verdict prompt) use — **bold**, "• " bullet lines, blank-line-separated
+    paragraphs — into real HTML. Escapes first, so this only recognizes
+    those two specific patterns; it is not a general markdown parser."""
+    if not text:
+        return ""
+    parts = []
+    for para in str(text).split("\n\n"):
+        lines = [line.strip() for line in para.split("\n") if line.strip()]
+        if not lines:
+            continue
+        if all(line.startswith("•") for line in lines):
+            items = "".join(f"<li>{_bold(_attr(line.lstrip('•').strip()))}</li>" for line in lines)
+            parts.append(f"<ul>{items}</ul>")
+        else:
+            parts.append("<p>" + "<br>".join(_bold(_attr(line)) for line in lines) + "</p>")
+    return "".join(parts)
+
+
+def _bold(escaped_text: str) -> str:
+    """Convert **markers** to <strong> in text _attr() already escaped —
+    asterisks aren't HTML-special so they survive escaping untouched, and
+    this must run after it so ** in the seller's own text isn't matched."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped_text)
+
+
+def _build_price_history_html(history: list) -> str:
+    if len(history) < 2:
+        return ""
+    chips = '<span class="price-arrow">→</span>'.join(
+        f'<span class="price-chip">{snap["price_raw"]:.0f} {_attr(snap["currency"])}<small>{_format_date(snap["captured_at"])}</small></span>'
+        for snap in history
+    )
+    return f'<div class="detail-section"><h3>💰 Storico prezzo</h3><div class="price-history">{chips}</div></div>'
+
+
+_SUSPENSION_LABELS = {"full_suspension": "Full suspension", "hardtail": "Hardtail", "unknown": "Non specificata"}
+_BRAKES_LABELS = {"four_piston": "4 pistoncini (top)", "two_piston": "2 pistoncini", "unknown": "Non specificati"}
+
+
+def _build_spec_table_html(bike: dict) -> str:
+    motor_bits = [b for b in (bike.get("motor_brand"), bike.get("motor_model")) if b]
+    motor_text = _attr(" ".join(motor_bits)) if motor_bits else "N/A"
+    if bike.get("motor_torque_nm"):
+        motor_text += f" · {bike['motor_torque_nm']:.0f} Nm"
+    if bike.get("motor_brand"):
+        motor_text += (
+            ' <span class="badge badge-warn">⚠️ da verificare</span>'
+            if bike.get("motor_verified") == 0
+            else ' <span class="badge badge-ok">✓ verificato</span>'
+        )
+
+    suspension_text = _SUSPENSION_LABELS.get(bike.get("suspension_type"), _attr(bike.get("suspension_type")) or "N/A")
+    if bike.get("travel_front_mm"):
+        suspension_text += f" · {bike['travel_front_mm']:.0f}mm"
+
+    rows = [
+        ("Motore", motor_text),
+        ("Batteria", f"{bike['battery_capacity_wh']:.0f} Wh" if bike.get("battery_capacity_wh") else "N/A"),
+        ("Taglia", _attr(bike.get("frame_size")) or "N/A"),
+        ("Anno modello", bike.get("model_year") or "N/A"),
+        ("Percorrenza", f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"),
+        ("Sospensione", suspension_text),
+        ("Freni", _BRAKES_LABELS.get(bike.get("brakes_tier"), _attr(bike.get("brakes_tier")) or "N/A")),
+    ]
+    rows_html = "".join(f"<tr><td>{label}</td><td>{value}</td></tr>" for label, value in rows)
+    return f'<div class="detail-section"><h3>⚙️ Specifiche</h3><table class="spec-table">{rows_html}</table></div>'
+
+
+def _build_score_breakdown_html(bike: dict) -> str:
+    parts = [
+        ("Prezzo", bike.get("score_price_value")),
+        ("Componenti", bike.get("score_component_quality")),
+        ("Condizione / Km", bike.get("score_condition_mileage")),
+        ("Posizione", bike.get("score_location_proximity")),
+        ("Taglia / Escursione", bike.get("score_fit_geometry")),
+    ]
+    rows_html = "".join(
+        f'<div class="score-row"><span class="score-row-label">{label}</span>'
+        f'<div class="score-track"><div class="score-fill" style="width:{(value or 0):.0f}%"></div></div>'
+        f'<span class="score-row-value">{(value or 0):.0f}</span></div>'
+        for label, value in parts
+    )
+    total = bike.get("score_total") or 0
+    return f'<div class="detail-section"><h3>📊 Punteggio euristico — {total:.0f}/100</h3>{rows_html}</div>'
+
+
+def _build_red_flags_html(bike: dict) -> str:
+    if not bike.get("has_red_flag"):
+        return ""
+    raw = bike.get("red_flag_details")
+    try:
+        flags = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        flags = []
+    if not flags:
+        return ""
+    items = "".join(f"<li>{_attr(flag)}</li>" for flag in flags)
+    return f'<div class="detail-section detail-warning"><h3>⚠️ Segnalazioni</h3><ul>{items}</ul></div>'
+
+
+def _build_detail_html(bike: dict, history: list) -> str:
+    """Structured detail card for the per-listing modal — replaces the old
+    single wall-of-escaped-text approach (which also had a real bug: it
+    escaped newlines to the literal two characters "\\n" for a JS-string
+    context that was never actually used, so they rendered as literal
+    backslash-n in the page instead of line breaks)."""
+    sections = [
+        f'<div class="detail-section"><h3>💰 Prezzo</h3>'
+        f'<p class="detail-price">{_attr(_format_price(bike))}</p>'
+        f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}</p></div>',
+        _build_price_history_html(history),
+        _build_spec_table_html(bike),
+        _build_red_flags_html(bike),
+        _build_score_breakdown_html(bike),
+    ]
+
+    if bike.get("user_analysis"):
+        sections.append(
+            '<div class="detail-section"><h3>📝 Valutazione automatica</h3>'
+            f'{_render_text_block(bike["user_analysis"])}</div>'
+        )
+
+    if bike.get("ai_analysis"):
+        ai_score = bike.get("ai_score")
+        score_note = f"{ai_score:.0f}/100" if ai_score is not None else "N/A"
+        sections.append(
+            '<div class="detail-section detail-ai"><h3>🤖 Verdetto AI '
+            f'<span class="badge badge-ai">{score_note}</span></h3>'
+            f'{_render_text_block(bike["ai_analysis"])}</div>'
+        )
+
+    return "".join(s for s in sections if s)
 
 
 def render_dashboard_html(db_path: str, interactive: bool = False, show_all: bool = False) -> str:
@@ -125,9 +229,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         l.user_analysis, l.ai_analysis, l.ai_score,
         s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
         s.battery_capacity_wh, s.frame_size, s.model_year, s.odometer_km,
-        s.travel_front_mm, s.brakes_tier, s.has_red_flag,
+        s.travel_front_mm, s.brakes_tier, s.suspension_type,
+        s.has_red_flag, s.red_flag_details,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
-        sc.score_fit_geometry
+        sc.score_condition_mileage, sc.score_location_proximity, sc.score_fit_geometry
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
@@ -209,10 +314,46 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         .modal-close {{ float: right; font-size: 24px; font-weight: bold; cursor: pointer; color: #999; }}
         .modal-close:hover {{ color: #333; }}
         .modal h2 {{ margin-top: 0; }}
-        .modal-body {{ white-space: pre-wrap; font-size: 14px; line-height: 1.6; }}
+        .modal-body {{ font-size: 14px; line-height: 1.6; }}
+
+        .detail-section {{ margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid #eee; }}
+        .detail-section:last-child {{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }}
+        .detail-section h3 {{ font-size: 14px; margin-bottom: 10px; color: #1976d2; }}
+        .detail-section p {{ margin: 6px 0; }}
+        .detail-section ul {{ margin: 6px 0 6px 20px; }}
+        .detail-price {{ font-size: 20px; font-weight: 700; }}
+        .detail-sub {{ font-size: 12px; color: #888; }}
+        .detail-text {{ font-size: 14px; }}
+        .detail-warning {{ background: #fff3e0; border-radius: 6px; padding: 12px 15px; border-bottom: none; }}
+        .detail-warning h3 {{ color: #e65100; }}
+        .detail-ai {{ background: #f3f7fd; border-radius: 6px; padding: 12px 15px; border-bottom: none; }}
+
+        .spec-table {{ width: 100%; border-collapse: collapse; box-shadow: none; }}
+        .spec-table td {{ padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }}
+        .spec-table td:first-child {{ color: #888; width: 40%; }}
+
+        .price-history {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
+        .price-chip {{ background: #f0f0f0; border-radius: 6px; padding: 6px 10px; font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; }}
+        .price-chip small {{ font-weight: normal; color: #888; font-size: 11px; }}
+        .price-arrow {{ color: #999; }}
+
+        .badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
+        .badge-ok {{ background: #c8e6c9; color: #1b5e20; }}
+        .badge-warn {{ background: #ffe0b2; color: #e65100; }}
+        .badge-ai {{ background: #d1c4e9; color: #4527a0; }}
+
+        .score-row {{ display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 12px; }}
+        .score-row-label {{ width: 140px; color: #666; flex-shrink: 0; }}
+        .score-track {{ flex: 1; background: #eee; border-radius: 4px; height: 8px; overflow: hidden; }}
+        .score-fill {{ background: #1976d2; height: 100%; }}
+        .score-row-value {{ width: 28px; text-align: right; font-weight: 600; flex-shrink: 0; }}
 
         .btn-analysis {{ padding: 4px 8px; background: #1976d2; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
         .btn-analysis:hover {{ background: #1565c0; }}
+
+        .row-actions {{ display: flex; gap: 4px; }}
+        .btn-reject-sm {{ padding: 4px 8px; background: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
+        .btn-sold-sm {{ padding: 4px 8px; background: #757575; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
 
         .btn-reject {{ padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
         .btn-sold {{ padding: 6px 12px; background: #757575; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
@@ -349,12 +490,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                     <th>Anno</th>
                     <th>Km</th>
                     <th>Analisi</th>
+                    <th>Azioni</th>
                     <th>Status</th>
                     <th>Titolo / Link</th>
                 </tr>
             </thead>
             <tbody id="tbody">
 """
+
+    row_templates = []
 
     for idx, bike in enumerate(listings):
         score_val = bike["score_total"] or 0
@@ -380,19 +524,27 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         anno_text = bike.get("model_year") or "N/A"
         km_text = f"{bike['odometer_km']:.0f}" if bike.get("odometer_km") else "N/A"
 
-        analysis = _build_modal_text(bike, history_by_id.get(bike["id"], []))
+        detail_html = _build_detail_html(bike, history_by_id.get(bike["id"], []))
+        row_templates.append(f'<template data-listing-id="{_attr(bike["id"])}">{detail_html}</template>')
         is_favorite = bool(bike.get("is_favorite"))
 
         row_class = "sold" if status == "SOLD" else ""
-        # Escape analysis for JS
-        analysis_escaped = analysis.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
         if interactive:
             star_cell = f'<button class="star-btn" onclick="toggleFavorite(this)" title="Preferito">{"⭐" if is_favorite else "☆"}</button>'
+            actions_cell = (
+                '<div class="row-actions">'
+                '<button class="btn-reject-sm" onclick="rejectRow(this)" title="Scarta — non mi interessa">❌</button>'
+                '<button class="btn-sold-sm" onclick="soldRow(this)" title="Segna come venduta">✅</button>'
+                '</div>'
+            )
+            analysis_btn = '<button class="btn-analysis" onclick="showAnalysis(this)">📋 Dettagli / Correggi</button>'
         else:
             star_cell = "⭐" if is_favorite else ""
+            actions_cell = ""
+            analysis_btn = '<button class="btn-analysis" onclick="showAnalysis(this)">📋 Analisi</button>'
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-favorite="{1 if is_favorite else 0}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-favorite="{1 if is_favorite else 0}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td>{star_cell}</td>
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{price_text}</td>
@@ -402,7 +554,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                     <td>{frame_text}</td>
                     <td>{anno_text}</td>
                     <td>{km_text}</td>
-                    <td><button class="btn-analysis" onclick="showAnalysis(this)">📋 Analisi</button></td>
+                    <td>{analysis_btn}</td>
+                    <td>{actions_cell}</td>
                     <td><span class="status {status_class}">{status}</span></td>
                     <td><a href="{bike['url']}" target="_blank">{bike['title'][:60]}...</a> <br><small>({bike['portal']})</small></td>
                 </tr>
@@ -412,6 +565,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         </table>
     </div>
 
+    <div id="detailTemplates" style="display: none;">""" + "".join(row_templates) + """</div>
+
     <script>
         // Modal functions
         let currentListingId = null;
@@ -419,10 +574,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         function showAnalysis(button) {
             const row = button.closest('tr');
             currentListingId = row.getAttribute('data-id');
-            const analysis = row.getAttribute('data-analysis');
             const title = row.querySelector('a').textContent;
             document.getElementById('modalTitle').textContent = '📋 ' + title;
-            document.getElementById('modalBody').textContent = analysis;
+
+            const modalBody = document.getElementById('modalBody');
+            modalBody.innerHTML = '';
+            const tpl = document.querySelector(`template[data-listing-id="${currentListingId}"]`);
+            if (tpl) {
+                modalBody.appendChild(tpl.content.cloneNode(true));
+            }
 
             const motorBrandInput = document.getElementById('editMotorBrand');
             if (motorBrandInput) {
@@ -470,18 +630,30 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             postAction('restore');
         }
 
-        // Favorite toggle — clicked directly from the table row's star
-        // button, not through the modal, so it reads the listing id off
-        // its own row rather than the shared currentListingId.
-        async function toggleFavorite(button) {
+        // Row-level actions (favorite/reject/sold) — clicked directly from a
+        // table row's own buttons, not through the modal, so each reads the
+        // listing id off its own row rather than the shared currentListingId.
+        async function postRowAction(button, path) {
             const listingId = button.closest('tr').getAttribute('data-id');
             try {
-                const resp = await fetch(`/api/listings/${listingId}/favorite`, {method: 'POST'});
+                const resp = await fetch(`/api/listings/${listingId}/${path}`, {method: 'POST'});
                 if (!resp.ok) throw new Error(await resp.text());
                 location.reload();
             } catch (e) {
                 alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
             }
+        }
+
+        function toggleFavorite(button) {
+            postRowAction(button, 'favorite');
+        }
+
+        function rejectRow(button) {
+            if (confirm('Scartare questo annuncio?')) postRowAction(button, 'reject');
+        }
+
+        function soldRow(button) {
+            if (confirm('Segnare questo annuncio come venduto?')) postRowAction(button, 'sold');
         }
 
         function saveSpecs() {
@@ -569,7 +741,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="12" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="13" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }

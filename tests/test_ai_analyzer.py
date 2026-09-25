@@ -82,6 +82,7 @@ def test_analyze_batch_happy_path_parses_results():
             "listing_id": "tutti_1",
             "ai_analysis": "Good condition, minor cosmetic scratch noted.",
             "ai_score": 78.0,
+            "corrected_specs": {},
         }]
 
         call_kwargs = client.messages.create.call_args.kwargs
@@ -185,6 +186,68 @@ def test_parse_response_skips_non_numeric_score():
     print("✅ AI parse_response non-numeric-score filtering test passed")
 
 
+def test_parse_response_keeps_well_typed_corrected_specs():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([
+        {
+            "listing_id": "tutti_1",
+            "ai_analysis": "Text names the motor explicitly.",
+            "ai_score": 80,
+            "corrected_specs": {
+                "motor_brand": "Bosch",
+                "motor_torque_nm": 85,
+                "frame_size": "L",
+            },
+        },
+    ])
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+
+    results = analyzer.analyze_batch([_listing("tutti_1")])
+
+    assert results[0]["corrected_specs"] == {
+        "motor_brand": "Bosch",
+        "motor_torque_nm": 85.0,
+        "frame_size": "L",
+    }
+    print("✅ AI corrected_specs happy-path test passed")
+
+
+def test_parse_response_drops_malformed_corrected_specs_fields():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([
+        {
+            "listing_id": "tutti_1",
+            "ai_analysis": "Fine.",
+            "ai_score": 70,
+            "corrected_specs": {
+                "motor_torque_nm": "eighty-five",  # wrong type — must be dropped, not crash
+                "motor_brand": "",  # blank — must be dropped
+                "frame_size": "M",  # valid — must survive
+                "unknown_field": "should be ignored",
+            },
+        },
+    ])
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+
+    results = analyzer.analyze_batch([_listing("tutti_1")])
+
+    assert results[0]["corrected_specs"] == {"frame_size": "M"}
+    print("✅ AI corrected_specs malformed-field filtering test passed")
+
+
+def test_parse_response_missing_corrected_specs_defaults_to_empty():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([
+        {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": 70},
+    ])
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+
+    results = analyzer.analyze_batch([_listing("tutti_1")])
+
+    assert results[0]["corrected_specs"] == {}
+    print("✅ AI corrected_specs default-empty test passed")
+
+
 def test_build_prompt_includes_all_listings():
     analyzer = AIAnalyzer(BUYER_PROFILE, client=MagicMock())
     listings = [_listing("tutti_1"), _listing("subito_2", title="Trek Rail 9.7")]
@@ -207,5 +270,8 @@ if __name__ == "__main__":
     test_parse_response_skips_incomplete_result()
     test_parse_response_clamps_out_of_range_score()
     test_parse_response_skips_non_numeric_score()
+    test_parse_response_keeps_well_typed_corrected_specs()
+    test_parse_response_drops_malformed_corrected_specs_fields()
+    test_parse_response_missing_corrected_specs_defaults_to_empty()
     test_build_prompt_includes_all_listings()
     print("\n✅ All AI analyzer tests passed!")

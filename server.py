@@ -15,7 +15,6 @@ Run: python3 server.py
 Stop: Ctrl+C in this terminal (closing the app window alone does not stop
 the server, since a plain browser window can't signal that back).
 """
-import json
 import shutil
 import subprocess
 import sys
@@ -32,6 +31,7 @@ import yaml
 from flask import Flask, jsonify, request
 
 from db.database import Database
+from pipeline.corrections import apply_spec_correction
 from pipeline.scoring import ScoringEngine
 from scripts.generate_dashboard import render_dashboard_html
 
@@ -98,29 +98,11 @@ def favorite(listing_id):
 def update_specs(listing_id):
     data = request.get_json(force=True, silent=True) or {}
     db = Database(DB_PATH)
-    current = db.get_listing_with_specs(listing_id)
-    if not current:
-        db.close()
-        return jsonify({"error": "listing not found"}), 404
-
-    editable_fields = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size"]
-    for field in editable_fields:
-        if field in data:
-            current[field] = data[field]
-
-    # A human naming/correcting the motor by hand is, by definition, a
-    # verified spec — it gets full tier credit in scoring, not RegexParser's
-    # flat "unverified guess" penalty (see ScoringEngine._score_components).
-    if "motor_brand" in data or "motor_torque_nm" in data:
-        current["motor_verified"] = True
-
-    current["red_flag_details"] = json.loads(current["red_flag_details"]) if current.get("red_flag_details") else []
-    db.save_specifications(listing_id, current)
-
-    listing_data = {"price_chf": current.get("price_chf"), "distance_km": current.get("distance_km")}
-    score_result = scorer.calculate_score(listing_data, current)
-    db.save_score(listing_id, score_result)
+    score_result = apply_spec_correction(db, scorer, listing_id, data)
     db.close()
+
+    if score_result is None:
+        return jsonify({"error": "listing not found or no editable fields given"}), 404
 
     return jsonify({"ok": True, "score_total": score_result["score_total"]})
 
