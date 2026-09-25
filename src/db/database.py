@@ -82,6 +82,7 @@ class Database:
             motor_brand TEXT,
             motor_model TEXT,
             motor_torque_nm REAL,
+            motor_verified INTEGER,
             battery_capacity_wh REAL,
             odometer_km REAL,
             brakes_model TEXT,
@@ -130,6 +131,15 @@ class Database:
         if "ai_analyzed_at" not in columns:
             cursor.execute("ALTER TABLE listings ADD COLUMN ai_analyzed_at TIMESTAMP")
         self.conn.commit()
+
+        # Migration: add motor_verified to specifications if missing (older DBs).
+        # NULL/1 = motor identified from an explicit model pattern; 0 = torque
+        # is a placeholder guessed from a generic "e-bike" keyword only.
+        cursor.execute("PRAGMA table_info(specifications)")
+        spec_columns = [row[1] for row in cursor.fetchall()]
+        if "motor_verified" not in spec_columns:
+            cursor.execute("ALTER TABLE specifications ADD COLUMN motor_verified INTEGER")
+            self.conn.commit()
 
     def upsert_listing(self, item: Dict[str, Any]) -> Tuple[str, bool, bool]:
         """
@@ -209,18 +219,21 @@ class Database:
 
     def save_specifications(self, listing_id: str, specs: Dict[str, Any]):
         cursor = self.conn.cursor()
+        motor_verified = specs.get("motor_verified")
         cursor.execute("""
         INSERT OR REPLACE INTO specifications (
             listing_id, brand, model, model_year, category, suspension_type,
             travel_front_mm, travel_rear_mm, frame_size, motor_brand, motor_model,
-            motor_torque_nm, battery_capacity_wh, odometer_km, brakes_model,
+            motor_torque_nm, motor_verified, battery_capacity_wh, odometer_km, brakes_model,
             brakes_tier, fork_tier, has_red_flag, red_flag_details
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             listing_id, specs.get("brand"), specs.get("model"), specs.get("model_year"),
             specs.get("category"), specs.get("suspension_type"), specs.get("travel_front_mm"),
             specs.get("travel_rear_mm"), specs.get("frame_size"), specs.get("motor_brand"),
-            specs.get("motor_model"), specs.get("motor_torque_nm"), specs.get("battery_capacity_wh"),
+            specs.get("motor_model"), specs.get("motor_torque_nm"),
+            None if motor_verified is None else (1 if motor_verified else 0),
+            specs.get("battery_capacity_wh"),
             specs.get("odometer_km"), specs.get("brakes_model"), specs.get("brakes_tier"),
             specs.get("fork_tier"), 1 if specs.get("has_red_flag") else 0,
             json.dumps(specs.get("red_flag_details", []))
@@ -259,7 +272,7 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("""
         SELECT l.id, l.title, l.description_raw, l.price_chf, l.distance_km, l.status,
-               s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm,
+               s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
                s.brakes_tier, s.odometer_km, s.red_flag_details,
                sc.score_total

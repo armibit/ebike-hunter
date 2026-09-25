@@ -35,6 +35,30 @@ def test_motor_detection():
     print("✅ Motor detection tests passed")
 
 
+def test_motor_verified_flag():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # Explicit motor model named in the text — verified.
+    specs_named = parser.parse("Specialized Turbo Levo", "Motore Bosch Performance Line CX 85Nm")
+    assert specs_named["motor_verified"] is True
+
+    # No motor model named, but generic e-bike keywords present — the
+    # fallback assumes a motor exists (rather than rejecting the listing
+    # outright) but must flag it as unverified so it doesn't score/read as
+    # a confirmed spec.
+    specs_fallback = parser.parse("Trek Rail e-bike full suspension", "In ottime condizioni")
+    assert specs_fallback["motor_brand"] == "Unknown Motor"
+    assert specs_fallback["motor_torque_nm"] == 60
+    assert specs_fallback["motor_verified"] is False
+
+    # No motor at all, no e-bike keywords — motor_verified stays unset.
+    specs_none = parser.parse("Bici muscolare", "Nessun motore")
+    assert specs_none["motor_brand"] is None
+    assert specs_none["motor_verified"] is None
+
+    print("✅ Motor verified flag tests passed")
+
+
 def test_battery_extraction():
     parser = RegexParser(TAXONOMY_PATH)
 
@@ -129,6 +153,7 @@ def test_odometer_no_false_positives():
 
 if __name__ == "__main__":
     test_motor_detection()
+    test_motor_verified_flag()
     test_battery_extraction()
     test_frame_size_detection()
     test_suspension_type()

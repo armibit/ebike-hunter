@@ -26,6 +26,7 @@ class RegexParser:
             "motor_brand": None,
             "motor_model": None,
             "motor_torque_nm": None,
+            "motor_verified": None,
             "battery_capacity_wh": self._extract_battery_wh(text),
             "travel_front_mm": None,
             "travel_rear_mm": None,
@@ -44,6 +45,7 @@ class RegexParser:
             specs["motor_brand"] = motor_data["brand"]
             specs["motor_model"] = motor_data["model"]
             specs["motor_torque_nm"] = motor_data["torque_nm"]
+            specs["motor_verified"] = motor_data["verified"]
 
         # Travel detection
         travel_front, travel_rear = self._extract_travel(text)
@@ -79,10 +81,16 @@ class RegexParser:
                     return {
                         "brand": motor_data["brand"],
                         "model": motor_data["model"],
-                        "torque_nm": motor_data["torque_nm"]
+                        "torque_nm": motor_data["torque_nm"],
+                        "verified": True
                     }
 
-        # Fallback: if text contains e-bike keywords, assume it's an e-bike with unknown motor
+        # Fallback: if text contains e-bike keywords, assume it's an e-bike with unknown
+        # motor rather than rejecting it outright — a listing whose description simply
+        # doesn't name the motor (common when it's only visible in a photo) shouldn't be
+        # filtered out purely because the text is incomplete. torque_nm=60 is a neutral
+        # placeholder only to satisfy the min-torque filter; `verified: False` tells the
+        # scorer and the human-facing analysis not to treat it as a confirmed spec.
         ebike_keywords = [
             r"\bturbo\b", r"\bhybrid\b", r"\be-bike\b", r"\bebike\b",
             r"\be mtb\b", r"\be-mtb\b", r"\bemtb\b",
@@ -93,7 +101,8 @@ class RegexParser:
                 return {
                     "brand": "Unknown Motor",
                     "model": "Not specified",
-                    "torque_nm": 60  # Minimum acceptable torque
+                    "torque_nm": 60,  # Minimum acceptable torque
+                    "verified": False
                 }
 
         return None
