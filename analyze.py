@@ -37,7 +37,10 @@ def chunked(items: List[Any], size: int) -> List[List[Any]]:
 
 
 def main():
-    load_dotenv(BASE_DIR / ".env")
+    # override=True: .env is this project's explicit local config (e.g. pointing
+    # ANTHROPIC_BASE_URL at a local gateway) — it should win over stray vars
+    # already exported in the shell, not the other way around.
+    load_dotenv(BASE_DIR / ".env", override=True)
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         logger.error("ANTHROPIC_API_KEY not set — add it to .env in the project root. Aborting.")
