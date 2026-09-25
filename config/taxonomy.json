@@ -78,6 +78,33 @@
         "bosch performance (?!cx)", "performance line (?!cx)", "bosch 65nm"
       ]
     },
+    "yamaha_pwst": {
+      "brand": "Yamaha",
+      "model": "PW-ST",
+      "torque_nm": 70,
+      "tier": "mid",
+      "patterns": [
+        "pw-st", "pwst", "yamaha pw-st", "yamaha pwst"
+      ]
+    },
+    "shimano_e8000": {
+      "brand": "Shimano",
+      "model": "STEPS E8000",
+      "torque_nm": 70,
+      "tier": "mid",
+      "patterns": [
+        "shimano e8000", "steps e8000", "e-8000", "du-e8000"
+      ]
+    },
+    "shimano_e7000": {
+      "brand": "Shimano",
+      "model": "STEPS E7000",
+      "torque_nm": 60,
+      "tier": "mid",
+      "patterns": [
+        "shimano e7000", "steps e7000", "e-7000", "du-e7000"
+      ]
+    },
     "weak_motors_disallowed": {
       "brand": "Weak/Light Motor",
       "model": "Disallowed",
@@ -85,7 +112,6 @@
       "tier": "disallowed",
       "patterns": [
         "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosch active line",
-        "bosch performance line (?!cx)", "shimano e7000", "shimano e8000",
         "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40"
       ]
     }
