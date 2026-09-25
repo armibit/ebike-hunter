@@ -377,7 +377,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .top-meta {{ font-size: 12px; color: var(--text); font-weight: 600; padding-top: 8px; border-top: 1px solid var(--border); }}
 
         table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
-        thead th {{ background: #fafbfc; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 700; padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); }}
+        thead th {{ background: #fafbfc; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 700; padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+        thead th:not(.no-sort) {{ cursor: pointer; user-select: none; }}
+        thead th:not(.no-sort):hover {{ color: var(--primary); }}
+        thead th.sorted-asc::after {{ content: " ▲"; color: var(--primary); }}
+        thead th.sorted-desc::after {{ content: " ▼"; color: var(--primary); }}
         tbody td {{ padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }}
         tbody tr:last-child td {{ border-bottom: none; }}
         tbody tr:hover {{ background: #fafbfc; }}
@@ -617,8 +621,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <th>Distanza</th>
                     <th>Motore</th>
                     <th>Batteria</th>
+                    <th>Anno</th>
+                    <th>Aggiunto</th>
                     <th>Annuncio</th>
-                    <th>Azioni</th>
+                    <th class="no-sort">Azioni</th>
                     <th>Status</th>
                 </tr>
             </thead>
@@ -656,6 +662,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         price_text = _format_price(bike)
         anno_text = bike.get("model_year") or "N/A"
         km_text = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
+        added_text = _format_date(bike.get("first_seen_at"))
         meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
         ai_icon = '<span class="ai-icon" title="Analisi AI disponibile">🤖</span> ' if bike.get("ai_analysis") else ''
 
@@ -679,13 +686,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         else:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td class="numeric-id">#{bike['numeric_id']}</td>
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{price_text}</td>
                     <td>{bike['distance_km']:.1f} km</td>
                     <td><span class="motor">{motor_text}</span></td>
                     <td>{battery_text}</td>
+                    <td>{anno_text}</td>
+                    <td>{added_text}</td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
                         <div class="title-meta">{ai_icon}{bike['portal']} · {meta_text}</div>
@@ -927,7 +936,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="9" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="11" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }
@@ -953,6 +962,64 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('statusFilter').value = '';
             filterTable();
         }
+
+        // Click-to-sort columns. One accessor per <th>, in the same order
+        // as the header row — null marks a non-sortable column (Azioni).
+        // Missing values (no year, never scored, etc.) always sort to the
+        // bottom regardless of direction, instead of landing at whichever
+        // end NaN/undefined happens to compare to.
+        const SORT_COLUMNS = [
+            row => parseInt(row.dataset.numericId, 10),
+            row => parseFloat(row.dataset.score),
+            row => parseFloat(row.dataset.price),
+            row => parseFloat(row.dataset.distance),
+            row => parseFloat(row.dataset.motorTorque),
+            row => parseFloat(row.dataset.battery),
+            row => parseInt(row.dataset.year, 10),
+            row => row.dataset.firstSeen ? new Date(row.dataset.firstSeen).getTime() : NaN,
+            { text: row => (row.querySelector('a.title-link')?.textContent || '').toLowerCase() },
+            null,
+            { text: row => row.dataset.statusGroup || '' },
+        ];
+
+        let sortState = { index: null, dir: 1 };
+
+        function sortTable(colIndex) {
+            const column = SORT_COLUMNS[colIndex];
+            if (!column) return;
+            const isText = typeof column === 'object';
+            const getValue = isText ? column.text : column;
+
+            const dir = (sortState.index === colIndex) ? -sortState.dir : 1;
+            sortState = { index: colIndex, dir };
+
+            const tbody = document.getElementById('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr[data-id]'));
+
+            rows.sort((a, b) => {
+                const va = getValue(a);
+                const vb = getValue(b);
+                const aMissing = isText ? !va : (va === null || Number.isNaN(va));
+                const bMissing = isText ? !vb : (vb === null || Number.isNaN(vb));
+                if (aMissing && bMissing) return 0;
+                if (aMissing) return 1;
+                if (bMissing) return -1;
+                if (isText) return va < vb ? -dir : va > vb ? dir : 0;
+                return (va - vb) * dir;
+            });
+
+            rows.forEach(row => tbody.appendChild(row));
+
+            document.querySelectorAll('#table thead th').forEach((th, i) => {
+                th.classList.remove('sorted-asc', 'sorted-desc');
+                if (i === colIndex) th.classList.add(dir === 1 ? 'sorted-asc' : 'sorted-desc');
+            });
+        }
+
+        document.querySelectorAll('#table thead th').forEach((th, i) => {
+            if (!SORT_COLUMNS[i]) return;
+            th.addEventListener('click', () => sortTable(i));
+        });
     </script>
 </body>
 </html>
