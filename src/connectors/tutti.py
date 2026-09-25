@@ -73,8 +73,9 @@ class TuttiConnector(BaseConnector):
 
         for page in range(1, self.max_pages + 1):
             url = f"{self.base_url}/it/q/{slug}/{token}"
+            label = f"{self.base_url}/it/q/{slug} (q='{query or 'all'}', page {page})"
             try:
-                response = self.get(url, params={"page": page})
+                response = self.get(url, params={"page": page}, label=label)
             except Exception as e:
                 logger.error("Error searching Tutti.ch: %s", e)
                 break

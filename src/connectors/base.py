@@ -43,9 +43,14 @@ class BaseConnector(ABC):
             time.sleep(sleep_time)
         self.last_request_time = time.time()
 
-    def get(self, url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None) -> requests.Response:
-        """Rate-limited GET request with retry on 429/5xx."""
-        status.update(f"[{self.portal_name}] GET {url}")
+    def get(self, url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, label: Optional[str] = None) -> requests.Response:
+        """Rate-limited GET request with retry on 429/5xx.
+
+        `label` overrides the URL shown on the live status line — some
+        portals (e.g. tutti.ch) encode search filters into an opaque path
+        token that's meaningless to read at a glance.
+        """
+        status.update(f"[{self.portal_name}] GET {label or url}")
         self._rate_limit()
 
         request_headers = self.session.headers.copy()
