@@ -1,171 +1,140 @@
 # E-Bike Hunter
 
-Autonomous, local, token-efficient e-bike classifieds finder, tracker, and ranker for Lugano (Ticino) and Lombardia region.
+Personal, local tool that scrapes used full-suspension e-MTB classifieds across 13 portals (Switzerland + Northern Italy), scores them against a buyer profile, flags AI-read spec corrections and red flags, and shows everything in an interactive dashboard.
 
 ## Features
 
-- **Zero-Token Parsing**: 99%+ operations run with 0 LLM tokens using regex and deterministic rules
-- **Multi-Portal Support**: Tutti.ch, Subito.it, Buycycle (planned: Facebook Marketplace)
-- **Smart Filtering**: Automatic rejection of hardtails, weak motors (<85Nm), small batteries (<625Wh)
-- **Intelligent Scoring**: 0-100 ranking based on price, components, condition, distance, fit
-- **Price Tracking**: Detects price drops and re-listings with SQLite history
-- **Red Flag Detection**: Warns about missing chargers, keys, or broken parts
+- **13 portal connectors**: Tutti.ch, Subito.it, Buycycle, Upway, Decathlon.ch, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia
+- **Zero-token parsing**: regex/taxonomy-based spec extraction (motor, battery, frame size, brakes, travel, odometer, model year) — no LLM calls in the main scan
+- **Deterministic scoring**: 0–100 score from price, components, condition/mileage, distance, fit
+- **Optional AI second opinion**: `analyze.py` sends listings to Claude Haiku for an independent Italian-language verdict, red-flag/condition reading from the raw description, and — only when the seller's own text names it — spec corrections the regex parser missed
+- **Interactive dashboard** (`server.py`): a local Flask app opened as a standalone app-mode browser window (no tabs/address bar). Reject, mark sold, favorite, and manually correct specs by hand — corrections that push a listing outside your own criteria (wrong frame size, motor/battery below the minimums) auto-reject it, same as if the scan had read that value in the first place
+- **Price tracking**: detects price drops and re-listings, keeps a price history per listing (shown in its original currency, not silently converted)
+- **Red flag detection**: missing charger/keys, broken parts, accident history mentioned in the description
 
 ## Target Profile
 
-- **Location**: Lugano, Ticino (CH)
-- **Category**: Full suspension e-MTB (Trail / All-Mountain)
-- **Travel**: 130-160mm front/rear
-- **Motor**: >=85Nm (Bosch CX Gen4, Brose 2.1/2.2, Shimano EP8, Yamaha PW-X2/X3)
-- **Battery**: >=625Wh (extractable)
-- **Frame Size**: M, S2, S3 (for 170cm rider height)
-- **Budget**: Target <=2200 CHF, hard max <=3000 CHF
+Configured in `config/config.yaml` — current defaults:
+
+- **Location**: Lugano, Ticino (CH); Ticino radius 45 km, Lombardia radius 105 km
+- **Category**: Full suspension e-MTB, 130–160mm travel front/rear
+- **Motor / battery hard minimums** (below these, a listing is rejected outright): ≥60Nm torque, ≥500Wh battery
+- **Frame size**: M, S2, S3, 42–46cm, 17"/18"
+- **Budget**: target 2200 CHF, hard max 3000 CHF (over this is rejected)
 
 ## Architecture
 
 ```
-[Scrapers]
-  ├── Tutti.ch (Ticino) - JSON API
-  ├── Subito.it (Lombardia) - JSON-LD + curl_cffi
-  └── Buycycle (Europe) - Algolia API
+[13 portal connectors]  src/connectors/*.py
        ↓
-[Parser (Zero-Token Regex)]
-  ├── Motor: Bosch/Brose/EP8/Yamaha pattern matching
-  ├── Battery: Wh extraction (500-1000 range)
-  ├── Frame Size: M/S2/S3/17"/44cm normalization
-  ├── Brakes: 4-piston vs 2-piston tier detection
-  └── Travel: 130-160mm extraction
+[Regex parser]  src/pipeline/regex_parser.py + config/taxonomy.json
+  motor · battery · frame size · brakes · suspension · travel · odometer · model year
        ↓
-[Filters]
-  ├── Price: >3000 CHF → reject
-  ├── Suspension: hardtail → reject
-  ├── Motor: <85Nm → reject
-  ├── Battery: <625Wh → reject
-  └── Size: XL/XS → reject
+[Hard filters]  run.py: process_listing()
+  over budget · hardtail · no/weak motor · small battery · wrong size · red flags
        ↓
-[Scoring (0-100)]
-  ├── Price vs Market (35%)
-  ├── Components & Battery (25%)
-  ├── Condition / Km (15%)
-  ├── Distance from Lugano (15%)
-  └── Fit (Taglia/Escursione) (10%)
+[Deterministic scoring 0-100]  src/pipeline/scoring.py
+  price (35%) · components (25%) · condition/km (15%) · distance (15%) · fit (10%)
        ↓
-[SQLite Storage]
-  ├── Listings + Snapshots
-  ├── Specifications
-  └── Scores
+[SQLite]  src/db/database.py — listings, snapshots (price history), specifications, scores
+       ↓
+[Optional AI pass]  analyze.py → src/pipeline/ai_analyzer.py (Claude Haiku)
+  Italian verdict, condition/seller-trust reading, spec corrections read (not guessed) from text
+       ↓
+[Dashboard]  server.py (live, interactive) or generate_dashboard.py → index.html (static snapshot)
 ```
 
 ## Setup
 
 ```bash
-cd /Users/danielearmillotta/ebike-hunter
-pip3 install pyyaml  # Only dependency for demo
+pip3 install -r requirements.txt
+```
+
+To use the optional AI pass (`analyze.py`), create a `.env` file in the project root:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ## Usage
 
-### Run Demo (Simulated Data)
+### 1. Scan portals
 
 ```bash
-python3 demo.py
+python3 run.py
 ```
 
-### Run Tests
+Fetches listings from every enabled portal in `config/config.yaml`, parses specs, applies the hard filters, scores, and saves to SQLite (`config.app.db_path`). Prints accepted/rejected counts per portal and the top deals.
+
+### 2. Interactive dashboard (recommended)
 
 ```bash
-python3 tests/test_parser.py
-python3 tests/test_scoring.py
-python3 tests/test_normalizer.py
-python3 tests/test_database.py
+python3 server.py
 ```
+
+Opens a local Flask dashboard as a standalone app window, reading the database live on every page load. From here you can reject, mark sold/favorite, and correct specs by hand — no regeneration step needed.
+
+### 3. Optional AI second opinion
+
+```bash
+python3 analyze.py            # analyzes listings never read by AI yet (or re-checked after a price drop)
+python3 analyze.py --force    # re-analyzes EVERY active/price-drop listing, even already-analyzed ones (costs an API call each)
+python3 analyze.py --id 42    # analyzes just one listing, for testing — accepts either its numeric # id (shown in the dashboard) or its full id
+```
+
+Writes an Italian-language verdict (`ai_analysis`) and, when the seller's text explicitly names a spec the regex parser missed, a correction that's applied and rescored automatically. Also regenerates the static `index.html` snapshot.
+
+### 4. Static snapshot (optional)
+
+`run.py`/`analyze.py` both regenerate `index.html` (gitignored — local only) via `scripts/generate_dashboard.py`. It's a read-only copy for sharing; use `server.py` for anything interactive. Note that a running `server.py` process needs restarting to pick up code changes — editing `scripts/generate_dashboard.py` and reloading the browser isn't enough while the old process is still alive.
 
 ## Configuration
 
-Edit `config/config.yaml`:
+Edit `config/config.yaml` — buyer profile (location, budget, target sizes), `hardware_requirements` (hard-reject minimums), `scoring_weights`, and each portal's `enabled`/search settings.
 
-```yaml
-buyer_profile:
-  location:
-    name: "Lugano, Ticino"
-    latitude: 46.0037
-    longitude: 8.9511
-  max_radius_km:
-    ticino: 45
-    lombardia: 105
-  budget:
-    target_price: 2200
-    hard_max_price: 3000
-```
-
-Edit `config/taxonomy.json` to add/remove motors, brakes, or brands.
+Edit `config/taxonomy.json` to add/adjust motor, brake, and frame-size detection patterns.
 
 ## Scoring Formula
 
-Score (0-100) = weighted sum:
+Score (0–100) = weighted sum, weights configurable in `scoring_weights`:
 
-- **Price Score (35%)**: Exponential decay from 1800 CHF (100 pts) to 3000 CHF (0 pts)
-- **Component Score (25%)**: Battery Wh + Motor Nm + Brakes tier + Fork tier
-- **Condition Score (15%)**: Odometer km (500 km = 100 pts, 4000 km = 30 pts)
-- **Location Score (15%)**: Distance from Lugano (<20 km = 100 pts, >100 km = 20 pts)
-- **Fit Score (10%)**: Frame size M/S2/S3 + Travel 130-160mm
-
-**Deal Target**: Score >= 75 AND Price <= 3000 CHF
-
-## Next Steps (Production)
-
-1. **Anti-Bot Scrapers**: Implement `curl_cffi` connectors for Tutti.ch and Subito.it
-2. **Chrome CDP for Facebook**: Local Chrome remote debugging for FB Marketplace
-3. **Scheduler**: Cron job for automatic scanning every 15-30 minutes
-4. **Deduplication**: Implement fuzzy image hashing (pHash) for re-listing detection
-5. **Notifications**: Telegram bot for instant alerts on top deals and price drops
-6. **CLI Dashboard**: Rich terminal UI with sortable tables and filters
+- **Price value (35%)**: exponential decay between target and hard-max price
+- **Component quality (25%)**: motor tier/torque, battery Wh, brakes, fork tier — an unverified motor guess is penalized vs. a confirmed one
+- **Condition/mileage (15%)**: odometer km
+- **Location proximity (15%)**: Haversine distance from Lugano
+- **Fit/geometry (10%)**: frame size + suspension travel range
 
 ## File Structure
 
 ```
 ebike-hunter/
 ├── config/
-│   ├── config.yaml           # User config (budget, location, filters)
-│   └── taxonomy.json         # Hardware patterns (motors, brakes, sizes)
+│   ├── config.yaml              # Buyer profile, hardware minimums, scoring weights, portals
+│   └── taxonomy.json            # Motor/brake/frame-size detection patterns
 ├── src/
+│   ├── connectors/               # One file per portal (+ base.py)
 │   ├── db/
-│   │   └── database.py       # SQLite wrapper (WAL mode, snapshots)
-│   ├── pipeline/
-│   │   ├── regex_parser.py   # Zero-token spec extraction
-│   │   ├── normalizer.py     # Currency & geo normalization
-│   │   └── scoring.py        # 0-100 ranking algorithm
-│   └── connectors/           # (To be implemented)
-│       ├── tutti.py
-│       ├── subito.py
-│       └── buycycle.py
-├── tests/
-│   ├── test_parser.py
-│   ├── test_scoring.py
-│   ├── test_normalizer.py
-│   └── test_database.py
+│   │   └── database.py           # SQLite wrapper (WAL mode, snapshots, favorites, AI columns)
+│   └── pipeline/
+│       ├── regex_parser.py       # Zero-token spec extraction
+│       ├── normalizer.py         # Currency & geo normalization
+│       ├── scoring.py            # 0-100 ranking algorithm
+│       ├── ai_analyzer.py        # Claude Haiku batch analysis + spec-correction reading
+│       ├── corrections.py        # Shared apply-a-spec-correction-and-rescore logic
+│       └── analysis_text.py      # Deterministic Italian verdict text
+├── scripts/
+│   └── generate_dashboard.py     # Renders the dashboard HTML (used by both server.py and index.html)
+├── tests/                        # One test file per connector, plus pipeline/DB/dashboard tests
 ├── data/
-│   └── emtb_hunter.db        # SQLite database
-├── demo.py                   # End-to-end demo with simulated data
-└── README.md
+│   └── emtb_hunter.db            # SQLite database (gitignored)
+├── run.py                        # Full scan: fetch → parse → filter → score → save
+├── analyze.py                    # Optional AI second-opinion pass (--force / --id)
+├── server.py                     # Interactive dashboard (Flask, app-mode window)
+├── demo.py                       # End-to-end demo with simulated data
+├── requirements.txt
+├── README.md
+└── USAGE.md                      # Extended usage notes, cron automation, troubleshooting
 ```
-
-## Test Coverage
-
-All tests pass:
-
-- ✅ Motor detection (Bosch/Brose/EP8/Yamaha patterns + weak motor rejection)
-- ✅ Battery extraction (500-1000 Wh range)
-- ✅ Frame size detection (M/S2/S3/17"/44cm)
-- ✅ Suspension type (full vs hardtail)
-- ✅ Travel extraction (130-160mm)
-- ✅ Red flag detection (missing charger/keys)
-- ✅ Price scoring (exponential decay curve)
-- ✅ Component scoring (battery/motor/brakes/fork tiers)
-- ✅ Location scoring (Haversine distance from Lugano)
-- ✅ Fit scoring (size + travel range)
-- ✅ Currency normalization (CHF ↔ EUR)
-- ✅ Database operations (insert, update, price drop detection)
 
 ## License
 
