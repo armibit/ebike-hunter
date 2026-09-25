@@ -203,7 +203,7 @@ def _build_detail_html(bike: dict, history: list) -> str:
     return "".join(s for s in sections if s)
 
 
-def render_dashboard_html(db_path: str, interactive: bool = False, show_all: bool = False) -> str:
+def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     """Build the dashboard HTML from the DB.
 
     interactive=True renders the reject/mark-sold/restore buttons and the
@@ -213,16 +213,16 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     calls this with interactive=False so the auto-regenerated index.html
     (written by run.py/analyze.py) stays a plain read-only snapshot.
 
-    show_all=True drops the ACTIVE/NEW/PRICE_DROP + rejection_reason filter
-    so manually rejected/sold listings are visible again — otherwise, once
-    set_manual_status() removes a listing from that filter, there would be
-    no way to find it again to hit "restore".
+    Every status is always fetched — REJECTED/SOLD/DELISTED listings stay
+    visible (greyed out, see the "sold"/"rejected" row classes) rather than
+    disappearing from the page, and the client-side "Stato" filter picks
+    among them, same as every other filter here. Nothing to toggle
+    server-side, so there's no separate "show all" URL/mode to keep in sync.
     """
     db = Database(db_path)
 
     cursor = db.conn.cursor()
-    where_clause = "1=1" if show_all else "l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL"
-    cursor.execute(f"""
+    cursor.execute("""
     SELECT
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
@@ -236,8 +236,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
-    WHERE {where_clause}
-    ORDER BY l.is_favorite DESC, COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
+    ORDER BY l.is_favorite DESC,
+             CASE WHEN l.status IN ('SOLD', 'REJECTED', 'DELISTED') THEN 1 ELSE 0 END,
+             COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
@@ -266,118 +267,144 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>E-Bike Hunter Dashboard</title>
     <style>
+        :root {{
+            --bg: #f6f7f9;
+            --surface: #ffffff;
+            --border: #e5e7eb;
+            --text: #1f2937;
+            --text-muted: #6b7280;
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --primary-light: #eff6ff;
+            --success: #16a34a;
+            --success-bg: #dcfce7;
+            --warning: #d97706;
+            --warning-bg: #fef3c7;
+            --danger: #dc2626;
+            --danger-bg: #fee2e2;
+            --radius: 10px;
+            --radius-sm: 7px;
+        }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; }}
-        .container {{ max-width: 1400px; margin: 0 auto; padding: 20px; }}
-        h1 {{ margin: 20px 0 10px; font-size: 24px; }}
-        .meta {{ color: #666; font-size: 13px; margin-bottom: 20px; }}
-
-        .filters {{ background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-        .filter-group {{ display: flex; flex-direction: column; gap: 5px; }}
-        .filter-group label {{ font-size: 12px; font-weight: 600; color: #666; }}
-        .filter-group input, .filter-group select {{ padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }}
-        .filter-group input:focus, .filter-group select:focus {{ outline: none; border-color: #1976d2; background: #f0f8ff; }}
-
-        table {{ width: 100%; border-collapse: collapse; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-        th {{ background: #1976d2; color: white; padding: 12px; text-align: left; font-weight: 600; font-size: 13px; }}
-        td {{ padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 13px; }}
-        tr:hover {{ background: #f9f9f9; }}
-
-        .score {{ font-weight: 600; background: #e3f2fd; padding: 4px 8px; border-radius: 4px; }}
-        .score.high {{ background: #c8e6c9; color: #1b5e20; }}
-        .score.mid {{ background: #fff9c4; color: #f57f17; }}
-        .score.low {{ background: #ffccbc; color: #bf360c; }}
-
-        .status {{ padding: 3px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }}
-        .status.new {{ background: #bbdefb; color: #01579b; }}
-        .status.price-drop {{ background: #f8bbd0; color: #880e4f; }}
-        .status.sold {{ background: #ccc; color: #555; text-decoration: line-through; }}
-        .status.rejected {{ background: #ffcdd2; color: #b71c1c; }}
-
-        .motor {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
-
-        a {{ color: #1976d2; text-decoration: none; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }}
+        .container {{ max-width: 1440px; margin: 0 auto; padding: 32px 24px 60px; }}
+        a {{ color: var(--primary); text-decoration: none; }}
         a:hover {{ text-decoration: underline; }}
 
-        .top-10 {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-        .top-item {{ padding: 12px; border-bottom: 1px solid #eee; }}
-        .top-item:last-child {{ border-bottom: none; }}
-        .top-title {{ font-weight: 600; margin-bottom: 4px; }}
-        .top-analysis {{ font-size: 12px; color: #555; font-style: italic; }}
-        .top-meta {{ font-size: 11px; color: #999; margin-top: 4px; }}
+        h1 {{ font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; }}
+        .meta {{ color: var(--text-muted); font-size: 13px; margin-bottom: 4px; }}
+        .meta a {{ font-weight: 600; }}
+        .readonly-banner {{ background: var(--warning-bg); color: #92400e; padding: 12px 16px; border-radius: var(--radius-sm); margin: 14px 0; font-size: 13px; line-height: 1.5; }}
+        .readonly-banner code {{ background: rgba(0,0,0,0.08); padding: 1px 6px; border-radius: 4px; font-size: 12px; }}
 
-        .sold {{ opacity: 0.5; }}
+        .section-title {{ font-size: 15px; font-weight: 700; margin: 36px 0 14px; color: var(--text); }}
 
-        .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }}
+        .filters {{ background: var(--surface); border: 1px solid var(--border); padding: 18px 20px; border-radius: var(--radius); margin: 18px 0 10px; display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-end; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
+        .filter-group {{ display: flex; flex-direction: column; gap: 6px; }}
+        .filter-group label {{ font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }}
+        .filter-group input, .filter-group select {{ padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface); color: var(--text); }}
+        .filter-group input:focus, .filter-group select:focus {{ outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }}
+        .filter-checkbox {{ flex-direction: row; align-items: center; gap: 6px; font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--text); font-size: 13px; }}
+        .btn-reset {{ padding: 8px 16px; background: var(--surface); color: var(--danger); border: 1px solid var(--danger-bg); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; }}
+        .btn-reset:hover {{ background: var(--danger-bg); }}
+
+        .top-10 {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }}
+        .top-item {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }}
+        .top-rank {{ display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--primary-light); color: var(--primary); font-size: 11px; font-weight: 700; margin-right: 6px; }}
+        .top-item a {{ font-weight: 600; color: var(--text); }}
+        .top-portal {{ color: var(--text-muted); font-size: 12px; }}
+        .top-analysis {{ font-size: 12px; color: var(--text-muted); margin: 8px 0; line-height: 1.5; max-height: 4.5em; overflow: hidden; }}
+        .top-meta {{ font-size: 12px; color: var(--text); font-weight: 600; padding-top: 8px; border-top: 1px solid var(--border); }}
+
+        table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
+        thead th {{ background: #fafbfc; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 700; padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); }}
+        tbody td {{ padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }}
+        tbody tr:last-child td {{ border-bottom: none; }}
+        tbody tr:hover {{ background: #fafbfc; }}
+        tbody tr.sold {{ opacity: .45; }}
+
+        .title-link {{ font-weight: 600; color: var(--text); }}
+        .title-meta {{ color: var(--text-muted); font-size: 12px; margin-top: 3px; }}
+
+        .score {{ display: inline-flex; align-items: center; justify-content: center; min-width: 42px; padding: 5px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; }}
+        .score.high {{ background: var(--success-bg); color: var(--success); }}
+        .score.mid {{ background: var(--warning-bg); color: var(--warning); }}
+        .score.low {{ background: var(--danger-bg); color: var(--danger); }}
+
+        .status {{ display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; background: var(--success-bg); color: var(--success); }}
+        .status.new {{ background: #dbeafe; color: #1e40af; }}
+        .status.price-drop {{ background: #fce7f3; color: #9d174d; }}
+        .status.sold {{ background: #f3f4f6; color: #6b7280; text-decoration: line-through; }}
+        .status.rejected {{ background: var(--danger-bg); color: var(--danger); }}
+
+        .motor {{ background: #f3f4f6; color: var(--text); padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 500; display: inline-block; }}
+
+        .row-actions {{ display: flex; align-items: center; gap: 6px; }}
+        .icon-btn {{ width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: 14px; line-height: 1; transition: background .15s, border-color .15s; }}
+        .icon-btn:hover {{ background: var(--bg); }}
+        .icon-star {{ border: none; background: none; font-size: 18px; color: #f59e0b; }}
+        .icon-star:hover {{ background: none; }}
+        .icon-danger:hover {{ background: var(--danger-bg); border-color: var(--danger); }}
+        .icon-success:hover {{ background: var(--success-bg); border-color: var(--success); }}
+        .btn-details {{ padding: 6px 12px; background: var(--primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }}
+        .btn-details:hover {{ background: var(--primary-dark); }}
+
+        .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(15,23,42,0.5); }}
         .modal.show {{ display: block; }}
-        .modal-content {{ background-color: white; margin: 5% auto; padding: 20px; border-radius: 8px; width: 80%; max-width: 900px; max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
-        .modal-close {{ float: right; font-size: 24px; font-weight: bold; cursor: pointer; color: #999; }}
-        .modal-close:hover {{ color: #333; }}
-        .modal h2 {{ margin-top: 0; }}
+        .modal-content {{ background-color: var(--surface); margin: 4% auto; padding: 24px; border-radius: var(--radius); width: 88%; max-width: 900px; max-height: 84vh; overflow-y: auto; box-shadow: 0 20px 40px rgba(0,0,0,0.2); }}
+        .modal-close {{ float: right; font-size: 24px; font-weight: bold; cursor: pointer; color: var(--text-muted); line-height: 1; }}
+        .modal-close:hover {{ color: var(--text); }}
+        .modal h2 {{ margin: 0 0 18px; font-size: 18px; padding-right: 30px; }}
         .modal-body {{ font-size: 14px; line-height: 1.6; }}
 
-        .detail-section {{ margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid #eee; }}
+        .detail-section {{ margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }}
         .detail-section:last-child {{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }}
-        .detail-section h3 {{ font-size: 14px; margin-bottom: 10px; color: #1976d2; }}
+        .detail-section h3 {{ font-size: 13px; margin-bottom: 10px; color: var(--primary); text-transform: uppercase; letter-spacing: .03em; }}
         .detail-section p {{ margin: 6px 0; }}
         .detail-section ul {{ margin: 6px 0 6px 20px; }}
-        .detail-price {{ font-size: 20px; font-weight: 700; }}
-        .detail-sub {{ font-size: 12px; color: #888; }}
-        .detail-text {{ font-size: 14px; }}
-        .detail-warning {{ background: #fff3e0; border-radius: 6px; padding: 12px 15px; border-bottom: none; }}
-        .detail-warning h3 {{ color: #e65100; }}
-        .detail-ai {{ background: #f3f7fd; border-radius: 6px; padding: 12px 15px; border-bottom: none; }}
+        .detail-price {{ font-size: 22px; font-weight: 700; }}
+        .detail-sub {{ font-size: 12px; color: var(--text-muted); }}
+        .detail-warning {{ background: var(--warning-bg); border-radius: var(--radius-sm); padding: 14px 16px; border-bottom: none; }}
+        .detail-warning h3 {{ color: #92400e; }}
+        .detail-ai {{ background: var(--primary-light); border-radius: var(--radius-sm); padding: 14px 16px; border-bottom: none; }}
 
         .spec-table {{ width: 100%; border-collapse: collapse; box-shadow: none; }}
-        .spec-table td {{ padding: 6px 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }}
-        .spec-table td:first-child {{ color: #888; width: 40%; }}
+        .spec-table td {{ padding: 7px 8px; border-bottom: 1px solid var(--bg); font-size: 13px; }}
+        .spec-table td:first-child {{ color: var(--text-muted); width: 40%; }}
 
         .price-history {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
-        .price-chip {{ background: #f0f0f0; border-radius: 6px; padding: 6px 10px; font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; }}
-        .price-chip small {{ font-weight: normal; color: #888; font-size: 11px; }}
-        .price-arrow {{ color: #999; }}
+        .price-chip {{ background: var(--bg); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; }}
+        .price-chip small {{ font-weight: normal; color: var(--text-muted); font-size: 11px; }}
+        .price-arrow {{ color: var(--text-muted); }}
 
-        .badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
-        .badge-ok {{ background: #c8e6c9; color: #1b5e20; }}
-        .badge-warn {{ background: #ffe0b2; color: #e65100; }}
-        .badge-ai {{ background: #d1c4e9; color: #4527a0; }}
+        .badge {{ display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-left: 4px; }}
+        .badge-ok {{ background: var(--success-bg); color: var(--success); }}
+        .badge-warn {{ background: var(--warning-bg); color: var(--warning); }}
+        .badge-ai {{ background: #ede9fe; color: #6d28d9; }}
 
-        .score-row {{ display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 12px; }}
-        .score-row-label {{ width: 140px; color: #666; flex-shrink: 0; }}
-        .score-track {{ flex: 1; background: #eee; border-radius: 4px; height: 8px; overflow: hidden; }}
-        .score-fill {{ background: #1976d2; height: 100%; }}
+        .score-row {{ display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 12px; }}
+        .score-row-label {{ width: 140px; color: var(--text-muted); flex-shrink: 0; }}
+        .score-track {{ flex: 1; background: var(--bg); border-radius: 4px; height: 8px; overflow: hidden; }}
+        .score-fill {{ background: var(--primary); height: 100%; }}
         .score-row-value {{ width: 28px; text-align: right; font-weight: 600; flex-shrink: 0; }}
 
-        .btn-analysis {{ padding: 4px 8px; background: #1976d2; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
-        .btn-analysis:hover {{ background: #1565c0; }}
-
-        .row-actions {{ display: flex; gap: 4px; }}
-        .btn-reject-sm {{ padding: 4px 8px; background: #f44336; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
-        .btn-sold-sm {{ padding: 4px 8px; background: #757575; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
-
-        .btn-reject {{ padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-sold {{ padding: 6px 12px; background: #757575; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-restore {{ padding: 6px 12px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-favorite {{ padding: 6px 12px; background: #f9a825; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-save {{ padding: 6px 12px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .modal-actions {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; display: flex; gap: 8px; }}
-        .edit-specs {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }}
-        .edit-specs h3 {{ font-size: 14px; margin-bottom: 10px; }}
-        .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }}
-        .edit-specs label {{ display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: #666; }}
-        .edit-specs input {{ padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }}
-        .star-btn {{ background: none; border: none; cursor: pointer; font-size: 16px; padding: 0; }}
-        .readonly-banner {{ background: #fff3cd; color: #7a5b00; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; }}
-        .readonly-banner code {{ background: rgba(0,0,0,0.08); padding: 1px 5px; border-radius: 3px; }}
+        .btn-reject {{ padding: 8px 14px; background: var(--danger); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-sold {{ padding: 8px 14px; background: #6b7280; color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-restore {{ padding: 8px 14px; background: var(--primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-save {{ padding: 8px 14px; background: var(--success); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .modal-actions {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border); display: flex; gap: 8px; }}
+        .edit-specs {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border); }}
+        .edit-specs h3 {{ font-size: 13px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--primary); }}
+        .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }}
+        .edit-specs label {{ display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }}
+        .edit-specs input {{ padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚲 E-Bike Hunter Dashboard</h1>
-        <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati{' (tutti gli stati)' if show_all else ''}</div>
+        <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati</div>
         <div class="meta">⚠️ Portali bloccati (controllo manuale): <a href="https://www.decathlon.ch/search?from=0&size=40" target="_blank">Decathlon.ch</a> (Cloudflare)</div>
-        {'<div class="meta"><a href="/">← Nascondi scartate/vendute</a></div>' if interactive and show_all else ''}
-        {'<div class="meta"><a href="/?all=1">Mostra anche scartate/vendute →</a></div>' if interactive and not show_all else ''}
         {'<div class="readonly-banner">📄 Questa è una copia statica, sola lettura (generata da <code>run.py</code>/<code>analyze.py</code>/<code>generate_dashboard.py</code>). Per scartare, segnare venduta/preferita o correggere le specifiche a mano, avvia <code>python3 server.py</code> invece di aprire questo file.</div>' if not interactive else ''}
 
         <div class="filters">
@@ -423,13 +450,22 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                 <input type="number" id="scoreMin" value="60" min="0" max="100" style="width: 80px">
             </div>
             <div class="filter-group">
-                <label>&nbsp;</label>
-                <label style="flex-direction: row; align-items: center; gap: 5px; font-weight: normal;"><input type="checkbox" id="favOnly" style="width: auto"> ⭐ Solo preferiti</label>
+                <label>Stato</label>
+                <select id="statusFilter">
+                    <option value="">Tutti</option>
+                    <option value="active">Solo attivi</option>
+                    <option value="rejected">Scartati</option>
+                    <option value="sold">Venduti</option>
+                </select>
             </div>
-            <button onclick="resetFilters()" style="padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600;">Reset</button>
+            <div class="filter-group">
+                <label>&nbsp;</label>
+                <label class="filter-checkbox"><input type="checkbox" id="favOnly" style="width: auto"> ⭐ Solo preferiti</label>
+            </div>
+            <button class="btn-reset" onclick="resetFilters()">Reset</button>
         </div>
 
-        <h2 style="font-size: 18px; margin: 30px 0 15px; padding-bottom: 10px; border-bottom: 2px solid #1976d2;">🏆 Top 10 Deals</h2>
+        <h2 class="section-title">🏆 Top 10 Deals</h2>
         <div class="top-10">
 """
 
@@ -438,9 +474,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         analysis = _combine_analysis(bike) or "In attesa di valutazione"
         fav_prefix = "⭐ " if bike.get("is_favorite") else ""
         html += f"""            <div class="top-item">
-                <div><strong>#{idx}</strong> {fav_prefix}<a href="{bike['url']}" target="_blank">{bike['title']}</a> ({bike['portal']})</div>
+                <div><span class="top-rank">{idx}</span>{fav_prefix}<a href="{bike['url']}" target="_blank">{bike['title']}</a> <span class="top-portal">({bike['portal']})</span></div>
                 <div class="top-analysis">{analysis}</div>
-                <div class="top-meta">Score: {score_val:.1f} | {_format_price(bike)} | {bike['distance_km']:.1f} km</div>
+                <div class="top-meta">{score_val:.1f} · {_format_price(bike)} · {bike['distance_km']:.1f} km</div>
             </div>
 """
 
@@ -476,23 +512,18 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     html += """            </div>
         </div>
 
-        <h2 style="font-size: 18px; margin: 30px 0 15px; padding-bottom: 10px; border-bottom: 2px solid #1976d2;">📋 Tutti gli annunci</h2>
+        <h2 class="section-title">📋 Tutti gli annunci</h2>
         <table id="table">
             <thead>
                 <tr>
-                    <th>⭐</th>
                     <th>Score</th>
                     <th>Prezzo</th>
-                    <th>Distanza km</th>
+                    <th>Distanza</th>
                     <th>Motore</th>
-                    <th>Batteria Wh</th>
-                    <th>Taglia</th>
-                    <th>Anno</th>
-                    <th>Km</th>
-                    <th>Analisi</th>
+                    <th>Batteria</th>
+                    <th>Annuncio</th>
                     <th>Azioni</th>
                     <th>Status</th>
-                    <th>Titolo / Link</th>
                 </tr>
             </thead>
             <tbody id="tbody">
@@ -508,8 +539,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         status_class = (
             "new" if status == "NEW" else
             "price-drop" if status == "PRICE_DROP" else
-            "sold" if status == "SOLD" else
+            "sold" if status in ("SOLD", "DELISTED") else
             "rejected" if status == "REJECTED" else ""
+        )
+        # Bucket for the "Stato" filter — mirrors status_class's grouping.
+        status_group = (
+            "rejected" if status == "REJECTED" else
+            "sold" if status in ("SOLD", "DELISTED") else
+            "active"
         )
 
         motor_text = f"{bike['motor_brand']}" if bike["motor_brand"] else "N/A"
@@ -522,42 +559,41 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         frame_text = bike["frame_size"] or "N/A"
         price_text = _format_price(bike)
         anno_text = bike.get("model_year") or "N/A"
-        km_text = f"{bike['odometer_km']:.0f}" if bike.get("odometer_km") else "N/A"
+        km_text = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
+        meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
 
         detail_html = _build_detail_html(bike, history_by_id.get(bike["id"], []))
         row_templates.append(f'<template data-listing-id="{_attr(bike["id"])}">{detail_html}</template>')
         is_favorite = bool(bike.get("is_favorite"))
+        fav_prefix = "⭐ " if is_favorite else ""
 
-        row_class = "sold" if status == "SOLD" else ""
+        row_class = "sold" if status_group in ("sold", "rejected") else ""
 
         if interactive:
-            star_cell = f'<button class="star-btn" onclick="toggleFavorite(this)" title="Preferito">{"⭐" if is_favorite else "☆"}</button>'
+            star_btn = f'<button class="icon-btn icon-star" onclick="toggleFavorite(this)" title="Preferito">{"⭐" if is_favorite else "☆"}</button>'
             actions_cell = (
                 '<div class="row-actions">'
-                '<button class="btn-reject-sm" onclick="rejectRow(this)" title="Scarta — non mi interessa">❌</button>'
-                '<button class="btn-sold-sm" onclick="soldRow(this)" title="Segna come venduta">✅</button>'
+                f'{star_btn}'
+                '<button class="icon-btn" onclick="showAnalysis(this)" title="Dettagli e correzioni">📋</button>'
+                '<button class="icon-btn icon-danger" onclick="rejectRow(this)" title="Scarta — non mi interessa">❌</button>'
+                '<button class="icon-btn icon-success" onclick="soldRow(this)" title="Segna come venduta">✅</button>'
                 '</div>'
             )
-            analysis_btn = '<button class="btn-analysis" onclick="showAnalysis(this)">📋 Dettagli / Correggi</button>'
         else:
-            star_cell = "⭐" if is_favorite else ""
-            actions_cell = ""
-            analysis_btn = '<button class="btn-analysis" onclick="showAnalysis(this)">📋 Analisi</button>'
+            actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-favorite="{1 if is_favorite else 0}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
-                    <td>{star_cell}</td>
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{price_text}</td>
-                    <td>{bike['distance_km']:.1f}</td>
+                    <td>{bike['distance_km']:.1f} km</td>
                     <td><span class="motor">{motor_text}</span></td>
                     <td>{battery_text}</td>
-                    <td>{frame_text}</td>
-                    <td>{anno_text}</td>
-                    <td>{km_text}</td>
-                    <td>{analysis_btn}</td>
+                    <td>
+                        <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
+                        <div class="title-meta">{bike['portal']} · {meta_text}</div>
+                    </td>
                     <td>{actions_cell}</td>
                     <td><span class="status {status_class}">{status}</span></td>
-                    <td><a href="{bike['url']}" target="_blank">{bike['title'][:60]}...</a> <br><small>({bike['portal']})</small></td>
                 </tr>
 """
 
@@ -698,6 +734,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         document.getElementById('frameFilter').addEventListener('change', filterTable);
         document.getElementById('scoreMin').addEventListener('input', filterTable);
         document.getElementById('favOnly').addEventListener('change', filterTable);
+        document.getElementById('statusFilter').addEventListener('change', filterTable);
 
         function filterTable() {
             const priceMin = parseFloat(priceMinInput.value);
@@ -708,6 +745,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             const frameFilter = document.getElementById('frameFilter').value;
             const scoreMin = parseFloat(document.getElementById('scoreMin').value);
             const favOnly = document.getElementById('favOnly').checked;
+            const statusFilter = document.getElementById('statusFilter').value;
 
             const rows = document.querySelectorAll('#tbody tr');
             let visibleCount = 0;
@@ -720,6 +758,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                 const frame = row.dataset.frame;
                 const score = parseFloat(row.dataset.score);
                 const favorite = row.dataset.favorite === '1';
+                const statusGroup = row.dataset.statusGroup;
 
                 let show = true;
                 if (price < priceMin || price > priceMax) show = false;
@@ -729,6 +768,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                 if (frameFilter && frame !== frameFilter) show = false;
                 if (score < scoreMin) show = false;
                 if (favOnly && !favorite) show = false;
+                if (statusFilter && statusGroup !== statusFilter) show = false;
 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
@@ -741,7 +781,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="13" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="8" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }
@@ -763,6 +803,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             document.getElementById('frameFilter').value = '';
             document.getElementById('scoreMin').value = 0;
             document.getElementById('favOnly').checked = false;
+            document.getElementById('statusFilter').value = '';
             filterTable();
         }
     </script>

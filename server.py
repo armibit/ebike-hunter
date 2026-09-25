@@ -54,8 +54,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    show_all = request.args.get("all") == "1"
-    return render_dashboard_html(DB_PATH, interactive=True, show_all=show_all)
+    return render_dashboard_html(DB_PATH, interactive=True)
 
 
 @app.route("/api/listings/<listing_id>/reject", methods=["POST"])

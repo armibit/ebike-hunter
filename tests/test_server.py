@@ -48,18 +48,23 @@ def test_index_lists_active_listing():
     print("✅ Server index test passed")
 
 
-def test_reject_hides_then_restore_shows_listing():
+def test_reject_keeps_listing_visible_greyed_then_restore_active():
+    # Rejected/sold listings stay on the page (greyed out, filterable by the
+    # dedicated Status control) rather than disappearing — otherwise there'd
+    # be no way to find one again to hit "restore".
     db_path = _fresh_db_with_listing()
     client = server_module.app.test_client()
 
     resp = client.post("/api/listings/x_1/reject")
     assert resp.status_code == 200
 
-    assert b'data-id="x_1"' not in client.get("/").data
-    assert b'data-id="x_1"' in client.get("/?all=1").data
+    page = client.get("/").data
+    assert b'data-id="x_1"' in page
+    assert b'data-status-group="rejected"' in page
 
     resp = client.post("/api/listings/x_1/restore")
     assert resp.status_code == 200
+    assert b'data-status-group="active"' in client.get("/").data
     assert b'data-id="x_1"' in client.get("/").data
 
     Path(db_path).unlink()
@@ -152,7 +157,7 @@ def test_specs_correction_unknown_listing_returns_404():
 
 if __name__ == "__main__":
     test_index_lists_active_listing()
-    test_reject_hides_then_restore_shows_listing()
+    test_reject_keeps_listing_visible_greyed_then_restore_active()
     test_sold_marks_listing()
     test_specs_correction_marks_verified_and_rescores_higher()
     test_specs_correction_unknown_listing_returns_404()
