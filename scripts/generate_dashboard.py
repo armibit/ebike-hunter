@@ -350,13 +350,20 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         .section-title {{ font-size: 15px; font-weight: 700; margin: 36px 0 14px; color: var(--text); }}
 
-        .filters {{ background: var(--surface); border: 1px solid var(--border); padding: 18px 20px; border-radius: var(--radius); margin: 18px 0 10px; display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-end; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
-        .filter-group {{ display: flex; flex-direction: column; gap: 6px; }}
+        .filters {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin: 18px 0 10px; box-shadow: 0 1px 2px rgba(0,0,0,.04); overflow: hidden; }}
+        .filters-header {{ display: flex; align-items: center; justify-content: space-between; padding: 13px 20px; border-bottom: 1px solid var(--border); background: #fafbfc; }}
+        .filters-title {{ font-size: 12px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: .04em; }}
+        .filters-body {{ padding: 18px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 16px 20px; align-items: end; }}
+        .filter-group {{ display: flex; flex-direction: column; gap: 6px; min-width: 0; }}
         .filter-group label {{ font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }}
-        .filter-group input, .filter-group select {{ padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface); color: var(--text); }}
+        .filter-group input, .filter-group select {{ width: 100%; height: 33px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface); color: var(--text); }}
         .filter-group input:focus, .filter-group select:focus {{ outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }}
-        .filter-checkbox {{ flex-direction: row; align-items: center; gap: 6px; font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--text); font-size: 13px; }}
-        .btn-reset {{ padding: 8px 16px; background: var(--surface); color: var(--danger); border: 1px solid var(--danger-bg); border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 600; }}
+        .range-row {{ display: flex; align-items: center; gap: 8px; height: 33px; }}
+        .range-row input[type="range"] {{ flex: 1; min-width: 0; width: auto; height: auto; padding: 0; border: none; }}
+        .range-value {{ font-size: 12px; font-weight: 700; color: var(--primary); min-width: 32px; text-align: right; flex-shrink: 0; }}
+        .filter-checkbox {{ flex-direction: row; align-items: center; gap: 6px; font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--text); font-size: 13px; height: 33px; }}
+        .filter-checkbox input {{ width: auto; height: auto; flex-shrink: 0; }}
+        .btn-reset {{ padding: 6px 14px; background: var(--surface); color: var(--danger); border: 1px solid var(--danger-bg); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; flex-shrink: 0; }}
         .btn-reset:hover {{ background: var(--danger-bg); }}
 
         .top-10 {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }}
@@ -475,61 +482,70 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         {'<div class="readonly-banner">📄 Questa è una copia statica, sola lettura (generata da <code>run.py</code>/<code>analyze.py</code>/<code>generate_dashboard.py</code>). Per scartare, segnare venduta/preferita o correggere le specifiche a mano, avvia <code>python3 server.py</code> invece di aprire questo file.</div>' if not interactive else ''}
 
         <div class="filters">
-            <div class="filter-group">
-                <label>Budget min (CHF)</label>
-                <input type="range" id="priceMin" min="1000" max="3000" step="100" value="1500" style="width: 120px">
-                <span id="priceMinVal">1500</span>
+            <div class="filters-header">
+                <div class="filters-title">🔍 Filtri di ricerca</div>
+                <button class="btn-reset" onclick="resetFilters()">↺ Reset</button>
             </div>
-            <div class="filter-group">
-                <label>Budget max (CHF)</label>
-                <input type="range" id="priceMax" min="1500" max="3500" step="100" value="3000" style="width: 120px">
-                <span id="priceMaxVal">3000</span>
+            <div class="filters-body">
+                <div class="filter-group">
+                    <label>Budget min (CHF)</label>
+                    <div class="range-row">
+                        <input type="range" id="priceMin" min="1000" max="3000" step="100" value="1500">
+                        <span class="range-value" id="priceMinVal">1500</span>
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <label>Budget max (CHF)</label>
+                    <div class="range-row">
+                        <input type="range" id="priceMax" min="1500" max="3500" step="100" value="3000">
+                        <span class="range-value" id="priceMaxVal">3000</span>
+                    </div>
+                </div>
+                <div class="filter-group">
+                    <label>Distanza km</label>
+                    <input type="number" id="distMax" value="100" min="0" max="1000">
+                </div>
+                <div class="filter-group">
+                    <label>Motore</label>
+                    <select id="motorFilter">
+                        <option value="">Tutti</option>
+                        <option value="Bosch">Bosch</option>
+                        <option value="Shimano">Shimano</option>
+                        <option value="Yamaha">Yamaha</option>
+                        <option value="Brose">Brose</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Batteria min (Wh)</label>
+                    <input type="number" id="batteryMin" value="400" min="0" max="1000">
+                </div>
+                <div class="filter-group">
+                    <label>Taglia</label>
+                    <select id="frameFilter">
+                        <option value="">Tutti</option>
+                        <option value="M">M</option>
+                        <option value="S2">S2</option>
+                        <option value="L">L</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Score min</label>
+                    <input type="number" id="scoreMin" value="60" min="0" max="100">
+                </div>
+                <div class="filter-group">
+                    <label>Stato</label>
+                    <select id="statusFilter">
+                        <option value="">Tutti</option>
+                        <option value="active">Solo attivi</option>
+                        <option value="rejected">Scartati</option>
+                        <option value="sold">Venduti</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <label class="filter-checkbox"><input type="checkbox" id="favOnly"> ⭐ Solo preferiti</label>
+                </div>
             </div>
-            <div class="filter-group">
-                <label>Distanza km</label>
-                <input type="number" id="distMax" value="100" min="0" max="1000" style="width: 80px">
-            </div>
-            <div class="filter-group">
-                <label>Motore</label>
-                <select id="motorFilter">
-                    <option value="">Tutti</option>
-                    <option value="Bosch">Bosch</option>
-                    <option value="Shimano">Shimano</option>
-                    <option value="Yamaha">Yamaha</option>
-                    <option value="Brose">Brose</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>Batteria min (Wh)</label>
-                <input type="number" id="batteryMin" value="400" min="0" max="1000" style="width: 80px">
-            </div>
-            <div class="filter-group">
-                <label>Taglia</label>
-                <select id="frameFilter">
-                    <option value="">Tutti</option>
-                    <option value="M">M</option>
-                    <option value="S2">S2</option>
-                    <option value="L">L</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>Score min</label>
-                <input type="number" id="scoreMin" value="60" min="0" max="100" style="width: 80px">
-            </div>
-            <div class="filter-group">
-                <label>Stato</label>
-                <select id="statusFilter">
-                    <option value="">Tutti</option>
-                    <option value="active">Solo attivi</option>
-                    <option value="rejected">Scartati</option>
-                    <option value="sold">Venduti</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label>&nbsp;</label>
-                <label class="filter-checkbox"><input type="checkbox" id="favOnly" style="width: auto"> ⭐ Solo preferiti</label>
-            </div>
-            <button class="btn-reset" onclick="resetFilters()">Reset</button>
         </div>
 
         <h2 class="section-title">🏆 Top 10 Deals</h2>
