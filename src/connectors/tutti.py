@@ -95,6 +95,11 @@ class TuttiConnector(BaseConnector):
                 if len(results) >= limit:
                     return results
 
+            logger.info(
+                "[Tutti.ch] '%s' (%s) page %d/%d — %d new match(es), %d total so far",
+                query, canton, page, self.max_pages, new_count, len(results),
+            )
+
             if new_count == 0:
                 break
 

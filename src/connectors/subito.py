@@ -58,6 +58,11 @@ class SubitoConnector(BaseConnector):
                 if len(results) >= limit:
                     return results
 
+            logger.info(
+                "[Subito.it] '%s' page %d/%d — %d new match(es), %d total so far",
+                query, page, self.max_pages, new_count, len(results),
+            )
+
             if new_count == 0:
                 break
 
