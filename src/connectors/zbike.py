@@ -20,26 +20,47 @@ class ZbikeConnector(BaseConnector):
         cfg = config["portals"]["zbike"]
         self.base_url = cfg["base_url"]
         self.category_id = str(cfg.get("category_id", "528"))
+        self.max_pages = cfg.get("max_pages", 10)
 
-    def search(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def search(self, limit: int = 200) -> List[Dict[str, Any]]:
         results = []
+        seen_ids = set()
         url = f"{self.base_url}/wp-json/wc/store/v1/products"
 
-        try:
-            response = self.get(url, params={"category": self.category_id, "per_page": limit})
-            products = response.json()
-        except Exception as e:
-            logger.error("Error fetching Z-Bike products: %s", e)
-            return results
-
-        for product in products:
+        for page in range(1, self.max_pages + 1):
             try:
-                listing = self._parse_product(product)
-                if listing:
-                    results.append(listing)
-            except Exception:
-                logger.debug("Failed to parse Z-Bike product", exc_info=True)
-                continue
+                response = self.get(url, params={"category": self.category_id, "per_page": 50, "page": page})
+                products = response.json()
+            except Exception as e:
+                logger.error("Error fetching Z-Bike products (page %d): %s", page, e)
+                break
+
+            if not products:
+                break
+
+            new_count = 0
+            for product in products:
+                try:
+                    listing = self._parse_product(product)
+                except Exception:
+                    logger.debug("Failed to parse Z-Bike product", exc_info=True)
+                    continue
+                if not listing or listing["portal_id"] in seen_ids:
+                    continue
+                seen_ids.add(listing["portal_id"])
+                results.append(listing)
+                new_count += 1
+                if len(results) >= limit:
+                    return results
+
+            total_pages = int(response.headers.get("X-WP-TotalPages", page) or page)
+            logger.info(
+                "[Z-Bike] page %d/%d — %d new match(es), %d total so far",
+                page, total_pages, new_count, len(results),
+            )
+
+            if page >= total_pages or new_count == 0:
+                break
 
         return results
 
