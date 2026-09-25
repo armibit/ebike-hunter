@@ -106,7 +106,9 @@ portals:
     max_pages: 5
   tcs_velocorner:
     enabled: true
-    base_url: "https://www.tcs.ch/velocorner"
+    base_url: "https://velocorner.ch"
+    category_path: "/en/buy-e-bike/mountainbike/fully"
+    max_pages: 10
   ridewill:
     enabled: true
     base_url: "https://www.ridewill.it"
