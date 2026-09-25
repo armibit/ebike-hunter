@@ -67,6 +67,11 @@ def main():
     db.close()
     print(f"Done — {analyzed}/{len(listings)} listing(s) analyzed.")
 
+    from scripts.generate_dashboard import generate_dashboard
+    dashboard_path = BASE_DIR / "index.html"
+    generate_dashboard(config["app"]["db_path"], str(dashboard_path))
+    print(f"✓ Dashboard refreshed: {dashboard_path}")
+
 
 if __name__ == "__main__":
     main()

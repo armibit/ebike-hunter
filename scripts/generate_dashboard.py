@@ -12,6 +12,22 @@ from db.database import Database
 import yaml
 
 
+def _combine_analysis(bike: dict) -> str:
+    """Merge the deterministic heuristic analysis with Claude's ai_analysis
+    verdict (run separately, on demand, by analyze.py) into the single text
+    block the dashboard displays. ai_analysis is additive — it's appended,
+    never replaces the heuristic text — matching how the two are kept
+    separate in the DB (see Database.save_ai_analysis)."""
+    parts = []
+    if bike.get("user_analysis"):
+        parts.append(bike["user_analysis"])
+    if bike.get("ai_analysis"):
+        ai_score = bike.get("ai_score")
+        score_note = f" (score: {ai_score:.0f}/100)" if ai_score is not None else ""
+        parts.append(f"🤖 Verdetto AI{score_note}:\n{bike['ai_analysis']}")
+    return "\n\n".join(parts)
+
+
 def generate_dashboard(db_path: str, output_path: str = "index.html"):
     """Generate HTML dashboard from DB."""
     db = Database(db_path)
@@ -21,7 +37,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
     cursor.execute("""
     SELECT
         l.id, l.portal, l.title, l.price_chf, l.distance_km, l.url,
-        l.last_seen_at, l.status, l.user_analysis,
+        l.last_seen_at, l.status, l.user_analysis, l.ai_analysis, l.ai_score,
         s.motor_brand, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh, s.frame_size,
         s.travel_front_mm, s.brakes_tier, s.has_red_flag,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
@@ -157,7 +173,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
     for idx, bike in enumerate(top_10, 1):
         score_val = bike["score_total"] or 0
-        analysis = bike["user_analysis"] or "In attesa di valutazione"
+        analysis = _combine_analysis(bike) or "In attesa di valutazione"
         html += f"""            <div class="top-item">
                 <div><strong>#{idx}</strong> <a href="{bike['url']}" target="_blank">{bike['title']}</a> ({bike['portal']})</div>
                 <div class="top-analysis">{analysis}</div>
@@ -210,7 +226,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = bike["frame_size"] or "N/A"
 
-        analysis = bike["user_analysis"] or ""
+        analysis = _combine_analysis(bike)
 
         row_class = "sold" if status == "SOLD" else ""
         # Escape analysis for JS
