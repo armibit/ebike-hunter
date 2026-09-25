@@ -3,6 +3,7 @@ app:
   log_level: "INFO"
   db_path: "/Users/danielearmillotta/ebike-hunter/data/emtb_hunter.db"
   poll_interval_seconds: 900
+  parallel_scans: 5
 
 buyer_profile:
   location:

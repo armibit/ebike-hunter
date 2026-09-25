@@ -50,7 +50,7 @@ class BaseConnector(ABC):
         portals (e.g. tutti.ch) encode search filters into an opaque path
         token that's meaningless to read at a glance.
         """
-        status.update(f"[{self.portal_name}] GET {label or url}")
+        status.update(self.portal_name, f"[{self.portal_name}] GET {label or url}")
         self._rate_limit()
 
         request_headers = self.session.headers.copy()
@@ -82,7 +82,7 @@ class BaseConnector(ABC):
 
     def post(self, url: str, data: Optional[Dict] = None, headers: Optional[Dict] = None) -> requests.Response:
         """Rate-limited POST request with retry on 429."""
-        status.update(f"[{self.portal_name}] POST {url}")
+        status.update(self.portal_name, f"[{self.portal_name}] POST {url}")
         self._rate_limit()
 
         request_headers = self.session.headers.copy()

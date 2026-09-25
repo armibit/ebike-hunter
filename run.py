@@ -8,6 +8,7 @@ import logging
 import sys
 import traceback
 import yaml
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -373,22 +374,40 @@ def main():
     if config["portals"]["ebikestorebrescia"]["enabled"]:
         connectors.append(("Ebikestore Brescia", EbikestorebresciaConnector(config)))
 
-    # Scan each portal
+    # Scan each portal. The search itself (connector.search_all()) is pure
+    # network I/O rate-limited per-connector, so it's safe and effective to
+    # run several portals concurrently — one portal's wait time no longer
+    # blocks the next. Processing results (DB writes, scoring) stays on the
+    # main thread, sequential, as each portal's search finishes.
     total_found = 0
     total_accepted = 0
     total_rejected = 0
+    max_parallel = min(config["app"].get("parallel_scans", 5), len(connectors)) or 1
 
     status.start()
     try:
-        for portal_name, connector in connectors:
-            status.clear()
-            print(f"[{portal_name}] Starting scan...")
-            print("-" * 80)
+        print(f"Scanning {len(connectors)} portals ({max_parallel} in parallel)...")
+        print("-" * 80)
 
-            try:
-                listings = connector.search_all()
+        with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+            future_to_portal = {
+                pool.submit(connector.search_all): (portal_name, connector)
+                for portal_name, connector in connectors
+            }
+
+            for future in as_completed(future_to_portal):
+                portal_name, connector = future_to_portal[future]
+                status.finish(connector.portal_name)
+
+                try:
+                    listings = future.result()
+                except Exception as e:
+                    status.clear()
+                    logger.error("[%s] Error during scan: %s", portal_name, e)
+                    logger.debug(traceback.format_exc())
+                    continue
+
                 total_found += len(listings)
-
                 accepted = 0
                 rejected = 0
 
@@ -403,14 +422,10 @@ def main():
 
                 status.clear()
                 print(f"[{portal_name}] Found: {len(listings)} | Accepted: {accepted} | Rejected: {rejected}")
-                print()
-
-            except Exception as e:
-                logger.error("[%s] Error during scan: %s", portal_name, e)
-                logger.debug(traceback.format_exc())
-                print()
     finally:
         status.stop()
+
+    print()
 
     # Summary
     print("=" * 80)
