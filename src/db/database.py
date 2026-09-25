@@ -49,6 +49,7 @@ class Database:
             distance_km REAL,
             status TEXT NOT NULL DEFAULT 'NEW',
             rejection_reason TEXT,
+            is_favorite INTEGER NOT NULL DEFAULT 0,
             dedupe_signature TEXT,
             image_phash TEXT,
             user_analysis TEXT,
@@ -130,6 +131,8 @@ class Database:
             cursor.execute("ALTER TABLE listings ADD COLUMN ai_score REAL")
         if "ai_analyzed_at" not in columns:
             cursor.execute("ALTER TABLE listings ADD COLUMN ai_analyzed_at TIMESTAMP")
+        if "is_favorite" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
         self.conn.commit()
 
         # Migration: add motor_verified to specifications if missing (older DBs).
@@ -332,6 +335,21 @@ class Database:
                 (status, listing_id),
             )
         self.conn.commit()
+
+    def toggle_favorite(self, listing_id: str) -> bool:
+        """Flip is_favorite for a listing and return the new value. A
+        favorite is independent of status (ACTIVE/REJECTED/SOLD/...) — a
+        starred listing keeps its star even after being marked sold, so it
+        isn't lost from view once you've flagged it as one you actually want."""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Unknown listing_id: {listing_id!r}")
+        new_value = 0 if row["is_favorite"] else 1
+        cursor.execute("UPDATE listings SET is_favorite = ? WHERE id = ?", (new_value, listing_id))
+        self.conn.commit()
+        return bool(new_value)
 
     def get_listing_with_specs(self, listing_id: str) -> Optional[Dict[str, Any]]:
         """Fetch one listing's price/distance plus its full specifications

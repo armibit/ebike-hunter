@@ -82,6 +82,18 @@ def restore(listing_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/listings/<listing_id>/favorite", methods=["POST"])
+def favorite(listing_id):
+    db = Database(DB_PATH)
+    try:
+        new_value = db.toggle_favorite(listing_id)
+    except ValueError:
+        db.close()
+        return jsonify({"error": "listing not found"}), 404
+    db.close()
+    return jsonify({"ok": True, "is_favorite": new_value})
+
+
 @app.route("/api/listings/<listing_id>/specs", methods=["POST"])
 def update_specs(listing_id):
     data = request.get_json(force=True, silent=True) or {}

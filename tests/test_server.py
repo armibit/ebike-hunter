@@ -108,6 +108,37 @@ def test_specs_correction_marks_verified_and_rescores_higher():
     print("✅ Server specs-correction test passed")
 
 
+def test_favorite_toggle_persists_and_survives_reload():
+    db_path = _fresh_db_with_listing()
+    client = server_module.app.test_client()
+
+    resp = client.post("/api/listings/x_1/favorite")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "is_favorite": True}
+
+    # Favoriting must not change status/visibility — still in the default view.
+    assert b'data-id="x_1"' in client.get("/").data
+    assert b'data-favorite="1"' in client.get("/").data
+
+    resp = client.post("/api/listings/x_1/favorite")
+    assert resp.get_json() == {"ok": True, "is_favorite": False}
+    assert b'data-favorite="0"' in client.get("/").data
+
+    Path(db_path).unlink()
+    print("✅ Server favorite-toggle test passed")
+
+
+def test_favorite_unknown_listing_returns_404():
+    db_path = _fresh_db_with_listing()
+    client = server_module.app.test_client()
+
+    resp = client.post("/api/listings/does_not_exist/favorite")
+    assert resp.status_code == 404
+
+    Path(db_path).unlink()
+    print("✅ Server favorite unknown-listing 404 test passed")
+
+
 def test_specs_correction_unknown_listing_returns_404():
     db_path = _fresh_db_with_listing()
     client = server_module.app.test_client()
@@ -125,4 +156,6 @@ if __name__ == "__main__":
     test_sold_marks_listing()
     test_specs_correction_marks_verified_and_rescores_higher()
     test_specs_correction_unknown_listing_returns_404()
+    test_favorite_toggle_persists_and_survives_reload()
+    test_favorite_unknown_listing_returns_404()
     print("\n✅ All server tests passed!")

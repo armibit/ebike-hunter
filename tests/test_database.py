@@ -445,6 +445,42 @@ def test_get_listing_with_specs():
     print("✅ get_listing_with_specs test passed")
 
 
+def test_toggle_favorite():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    listing = {
+        "portal": "tutti", "portal_id": "77777", "url": "https://tutti.ch/fav",
+        "title": "Favorite candidate", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    listing_id, _, _ = db.upsert_listing(listing)
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+    assert cursor.fetchone()["is_favorite"] == 0, "new listings must start unfavorited"
+
+    assert db.toggle_favorite(listing_id) is True
+    cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+    assert cursor.fetchone()["is_favorite"] == 1
+
+    assert db.toggle_favorite(listing_id) is False
+    cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+    assert cursor.fetchone()["is_favorite"] == 0
+
+    try:
+        db.toggle_favorite("does_not_exist")
+        assert False, "should have raised ValueError"
+    except ValueError:
+        pass
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Toggle favorite test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
@@ -458,4 +494,5 @@ if __name__ == "__main__":
     test_price_drop_after_ai_analysis_is_eligible_again()
     test_set_manual_status_reject_and_restore()
     test_get_listing_with_specs()
+    test_toggle_favorite()
     print("\n✅ All database tests passed!")

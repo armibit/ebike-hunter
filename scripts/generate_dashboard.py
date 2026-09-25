@@ -121,7 +121,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     cursor.execute(f"""
     SELECT
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
-        l.first_seen_at, l.last_seen_at, l.status, l.user_analysis, l.ai_analysis, l.ai_score,
+        l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
+        l.user_analysis, l.ai_analysis, l.ai_score,
         s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
         s.battery_capacity_wh, s.frame_size, s.model_year, s.odometer_km,
         s.travel_front_mm, s.brakes_tier, s.has_red_flag,
@@ -131,7 +132,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
     WHERE {where_clause}
-    ORDER BY COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
+    ORDER BY l.is_favorite DESC, COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
@@ -216,6 +217,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         .btn-reject {{ padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
         .btn-sold {{ padding: 6px 12px; background: #757575; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
         .btn-restore {{ padding: 6px 12px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-favorite {{ padding: 6px 12px; background: #f9a825; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
         .btn-save {{ padding: 6px 12px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
         .modal-actions {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; display: flex; gap: 8px; }}
         .edit-specs {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }}
@@ -223,6 +225,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }}
         .edit-specs label {{ display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: #666; }}
         .edit-specs input {{ padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }}
+        .star-btn {{ background: none; border: none; cursor: pointer; font-size: 16px; padding: 0; }}
+        .readonly-banner {{ background: #fff3cd; color: #7a5b00; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; font-size: 13px; }}
+        .readonly-banner code {{ background: rgba(0,0,0,0.08); padding: 1px 5px; border-radius: 3px; }}
     </style>
 </head>
 <body>
@@ -232,15 +237,16 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         <div class="meta">⚠️ Portali bloccati (controllo manuale): <a href="https://www.decathlon.ch/search?from=0&size=40" target="_blank">Decathlon.ch</a> (Cloudflare)</div>
         {'<div class="meta"><a href="/">← Nascondi scartate/vendute</a></div>' if interactive and show_all else ''}
         {'<div class="meta"><a href="/?all=1">Mostra anche scartate/vendute →</a></div>' if interactive and not show_all else ''}
+        {'<div class="readonly-banner">📄 Questa è una copia statica, sola lettura (generata da <code>run.py</code>/<code>analyze.py</code>/<code>generate_dashboard.py</code>). Per scartare, segnare venduta/preferita o correggere le specifiche a mano, avvia <code>python3 server.py</code> invece di aprire questo file.</div>' if not interactive else ''}
 
         <div class="filters">
             <div class="filter-group">
-                <label>Prezzo CHF</label>
+                <label>Budget min (CHF)</label>
                 <input type="range" id="priceMin" min="1000" max="3000" step="100" value="1500" style="width: 120px">
                 <span id="priceMinVal">1500</span>
             </div>
             <div class="filter-group">
-                <label>Prezzo max</label>
+                <label>Budget max (CHF)</label>
                 <input type="range" id="priceMax" min="1500" max="3500" step="100" value="3000" style="width: 120px">
                 <span id="priceMaxVal">3000</span>
             </div>
@@ -275,6 +281,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                 <label>Score min</label>
                 <input type="number" id="scoreMin" value="60" min="0" max="100" style="width: 80px">
             </div>
+            <div class="filter-group">
+                <label>&nbsp;</label>
+                <label style="flex-direction: row; align-items: center; gap: 5px; font-weight: normal;"><input type="checkbox" id="favOnly" style="width: auto"> ⭐ Solo preferiti</label>
+            </div>
             <button onclick="resetFilters()" style="padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 600;">Reset</button>
         </div>
 
@@ -285,8 +295,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     for idx, bike in enumerate(top_10, 1):
         score_val = bike["score_total"] or 0
         analysis = _combine_analysis(bike) or "In attesa di valutazione"
+        fav_prefix = "⭐ " if bike.get("is_favorite") else ""
         html += f"""            <div class="top-item">
-                <div><strong>#{idx}</strong> <a href="{bike['url']}" target="_blank">{bike['title']}</a> ({bike['portal']})</div>
+                <div><strong>#{idx}</strong> {fav_prefix}<a href="{bike['url']}" target="_blank">{bike['title']}</a> ({bike['portal']})</div>
                 <div class="top-analysis">{analysis}</div>
                 <div class="top-meta">Score: {score_val:.1f} | {_format_price(bike)} | {bike['distance_km']:.1f} km</div>
             </div>
@@ -328,6 +339,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         <table id="table">
             <thead>
                 <tr>
+                    <th>⭐</th>
                     <th>Score</th>
                     <th>Prezzo</th>
                     <th>Distanza km</th>
@@ -369,12 +381,19 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         km_text = f"{bike['odometer_km']:.0f}" if bike.get("odometer_km") else "N/A"
 
         analysis = _build_modal_text(bike, history_by_id.get(bike["id"], []))
+        is_favorite = bool(bike.get("is_favorite"))
 
         row_class = "sold" if status == "SOLD" else ""
         # Escape analysis for JS
         analysis_escaped = analysis.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        if interactive:
+            star_cell = f'<button class="star-btn" onclick="toggleFavorite(this)" title="Preferito">{"⭐" if is_favorite else "☆"}</button>'
+        else:
+            star_cell = "⭐" if is_favorite else ""
+
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-favorite="{1 if is_favorite else 0}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+                    <td>{star_cell}</td>
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{price_text}</td>
                     <td>{bike['distance_km']:.1f}</td>
@@ -451,6 +470,20 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             postAction('restore');
         }
 
+        // Favorite toggle — clicked directly from the table row's star
+        // button, not through the modal, so it reads the listing id off
+        // its own row rather than the shared currentListingId.
+        async function toggleFavorite(button) {
+            const listingId = button.closest('tr').getAttribute('data-id');
+            try {
+                const resp = await fetch(`/api/listings/${listingId}/favorite`, {method: 'POST'});
+                if (!resp.ok) throw new Error(await resp.text());
+                location.reload();
+            } catch (e) {
+                alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
+            }
+        }
+
         function saveSpecs() {
             const torque = document.getElementById('editMotorTorque').value;
             const battery = document.getElementById('editBattery').value;
@@ -492,6 +525,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         document.getElementById('batteryMin').addEventListener('input', filterTable);
         document.getElementById('frameFilter').addEventListener('change', filterTable);
         document.getElementById('scoreMin').addEventListener('input', filterTable);
+        document.getElementById('favOnly').addEventListener('change', filterTable);
 
         function filterTable() {
             const priceMin = parseFloat(priceMinInput.value);
@@ -501,6 +535,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             const batteryMin = parseFloat(document.getElementById('batteryMin').value);
             const frameFilter = document.getElementById('frameFilter').value;
             const scoreMin = parseFloat(document.getElementById('scoreMin').value);
+            const favOnly = document.getElementById('favOnly').checked;
 
             const rows = document.querySelectorAll('#tbody tr');
             let visibleCount = 0;
@@ -512,6 +547,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                 const battery = parseFloat(row.dataset.battery);
                 const frame = row.dataset.frame;
                 const score = parseFloat(row.dataset.score);
+                const favorite = row.dataset.favorite === '1';
 
                 let show = true;
                 if (price < priceMin || price > priceMax) show = false;
@@ -520,6 +556,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
                 if (battery < batteryMin) show = false;
                 if (frameFilter && frame !== frameFilter) show = false;
                 if (score < scoreMin) show = false;
+                if (favOnly && !favorite) show = false;
 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
@@ -532,7 +569,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="11" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="12" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }
@@ -553,6 +590,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             document.getElementById('batteryMin').value = 0;
             document.getElementById('frameFilter').value = '';
             document.getElementById('scoreMin').value = 0;
+            document.getElementById('favOnly').checked = false;
             filterTable();
         }
     </script>
