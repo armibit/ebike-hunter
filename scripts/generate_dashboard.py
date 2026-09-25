@@ -717,11 +717,20 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             }
 
             document.getElementById('analysisModal').classList.add('show');
+            // Lock the page behind the overlay so a wheel/trackpad scroll
+            // always reaches the modal — without this, scrolling while the
+            // mouse happens to sit over the dimmed backdrop (very easy once
+            // you navigate with the arrow keys instead of clicking, since
+            // the cursor never moves back over the modal) scrolled the
+            // listing table behind it instead of the modal content.
+            document.body.style.overflow = 'hidden';
+            document.querySelector('.modal-content').scrollTop = 0;
             updateModalNavButtons();
         }
 
         function closeAnalysis() {
             document.getElementById('analysisModal').classList.remove('show');
+            document.body.style.overflow = '';
         }
 
         // Prev/Next cycle through the currently *visible* rows (respecting
