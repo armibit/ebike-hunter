@@ -13,20 +13,49 @@ class VelomarktConnector(BaseConnector):
     def __init__(self, config: Dict[str, Any]):
         super().__init__("velomarkt", config)
         self.base_url = config["portals"]["velomarkt"]["base_url"]
+        self.max_pages = config["portals"]["velomarkt"].get("max_pages", 5)
 
-    def search(self, category: str = "emtb", limit: int = 50) -> List[Dict[str, Any]]:
-        """Search e-MTBs on Velomarkt."""
+    def search(self, category: str = "emtb", limit: int = 200) -> List[Dict[str, Any]]:
+        """Search e-MTBs on Velomarkt, paginating via ?page=N.
+
+        Page 1 alone only surfaces ~33 of up to ~500 listings (site's own
+        pagination nav runs to page 16) — a single fetch was silently
+        dropping the vast majority of results.
+        """
         results = []
+        seen_ids = set()
 
         # URL structure from bike/ project: /en/veloboerse/all-switzerland/ebikes-electric-bikes/emtb-electric-mtb
         url = f"{self.base_url}/en/veloboerse/all-switzerland/ebikes-electric-bikes/{category}"
 
-        try:
-            response = self.get(url)
+        for page in range(1, self.max_pages + 1):
+            try:
+                response = self.get(url, params={"page": page})
+            except Exception as e:
+                logger.error("Error searching Velomarkt: %s", e)
+                break
+
             listings = self._parse_listings(response.text)
-            results.extend(listings[:limit])
-        except Exception as e:
-            logger.error("Error searching Velomarkt: %s", e)
+            if not listings:
+                break
+
+            new_count = 0
+            for listing in listings:
+                if listing["portal_id"] in seen_ids:
+                    continue
+                seen_ids.add(listing["portal_id"])
+                results.append(listing)
+                new_count += 1
+                if len(results) >= limit:
+                    return results
+
+            logger.info(
+                "[Velomarkt] page %d/%d — %d new match(es), %d total so far",
+                page, self.max_pages, new_count, len(results),
+            )
+
+            if new_count == 0:
+                break
 
         return results
 

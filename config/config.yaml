@@ -103,6 +103,7 @@ portals:
     enabled: true
     base_url: "https://www.velomarkt.ch"
     category: "emtb-electric-mtb"
+    max_pages: 5
   tcs_velocorner:
     enabled: true
     base_url: "https://www.tcs.ch/velocorner"
