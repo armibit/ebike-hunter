@@ -77,7 +77,16 @@ def generate_user_analysis(score: float, specs: Dict, listing_data: Dict) -> str
     lines.append(f"**{verdict}**\n")
 
     # Motor analysis
-    if motor and torque:
+    # DB round-trips this as 0/1/None (SQLite has no bool type); the freshly
+    # parsed dict from RegexParser.parse() carries True/False/None instead —
+    # accept either.
+    motor_verified = specs.get("motor_verified")
+    if motor and torque and motor_verified in (False, 0):
+        lines.append(
+            f"• Motor: {motor} — Not named in the text, torque assumed ⚠️ "
+            "VERIFY FROM PHOTOS/SELLER before ruling this out"
+        )
+    elif motor and torque:
         if torque >= 85:
             motor_note = f"{motor} {torque:.0f}Nm — Excellent power ✓✓"
         elif torque >= 75:

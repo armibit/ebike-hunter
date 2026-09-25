@@ -111,7 +111,8 @@ class TcsVelocornerConnector(BaseConnector):
             # last (largest-font) span in the footer is what you actually pay.
             price_raw = 0.0
             price_container = item.select_one("footer.product-card__content-footer > div")
-            price_span = price_container.find("span", recursive=False) if price_container else None
+            price_spans = price_container.find_all("span", recursive=False) if price_container else []
+            price_span = price_spans[-1] if price_spans else None
             if price_span:
                 price_text = price_span.get_text(strip=True)
                 price_match = re.search(r"([\d'.,]+)", price_text)

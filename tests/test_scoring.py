@@ -76,6 +76,49 @@ def test_component_scoring():
     print("✅ Component scoring tests passed")
 
 
+def test_component_scoring_unverified_motor_gets_flat_low_credit():
+    config = {
+        "buyer_profile": {
+            "budget": {"target_price": 2200, "hard_max_price": 3000}
+        },
+        "scoring_weights": {
+            "price_value": 0.35,
+            "component_quality": 0.25,
+            "condition_mileage": 0.15,
+            "location_proximity": 0.15,
+            "fit_geometry": 0.10
+        }
+    }
+    engine = ScoringEngine(config)
+
+    # RegexParser's e-bike-keyword fallback sets motor_torque_nm=60 as a
+    # placeholder with motor_verified=False — it must not score as if it
+    # were a confirmed 60Nm motor (15pts), only a flat, low credit (8pts),
+    # so an unverified listing never outranks one with the same specs but
+    # a genuinely identified motor.
+    specs_unverified = {
+        "battery_capacity_wh": 625,
+        "motor_torque_nm": 60,
+        "motor_verified": False,
+        "brakes_tier": "two_piston",
+        "fork_tier": "mid"
+    }
+    specs_confirmed = {
+        "battery_capacity_wh": 625,
+        "motor_torque_nm": 60,
+        "motor_verified": True,
+        "brakes_tier": "two_piston",
+        "fork_tier": "mid"
+    }
+    score_unverified = engine._score_components(specs_unverified)
+    score_confirmed = engine._score_components(specs_confirmed)
+
+    assert score_unverified < score_confirmed
+    assert score_confirmed - score_unverified == 7  # 15pts tier credit vs flat 8pts
+
+    print("✅ Unverified motor scoring test passed")
+
+
 def test_location_scoring():
     config = {
         "buyer_profile": {
@@ -201,6 +244,7 @@ def test_config_missing_key_raises():
 if __name__ == "__main__":
     test_price_scoring()
     test_component_scoring()
+    test_component_scoring_unverified_motor_gets_flat_low_credit()
     test_location_scoring()
     test_fit_scoring()
     test_full_score_calculation()

@@ -22,7 +22,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
     SELECT
         l.id, l.portal, l.title, l.price_chf, l.distance_km, l.url,
         l.last_seen_at, l.status, l.user_analysis,
-        s.motor_brand, s.motor_torque_nm, s.battery_capacity_wh, s.frame_size,
+        s.motor_brand, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh, s.frame_size,
         s.travel_front_mm, s.brakes_tier, s.has_red_flag,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
         sc.score_fit_geometry
@@ -204,6 +204,8 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         motor_text = f"{bike['motor_brand']}" if bike["motor_brand"] else "N/A"
         if bike.get("motor_torque_nm"):
             motor_text += f" {bike['motor_torque_nm']:.0f}Nm"
+        if bike.get("motor_verified") == 0:
+            motor_text += " ⚠️ da verificare"
 
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = bike["frame_size"] or "N/A"

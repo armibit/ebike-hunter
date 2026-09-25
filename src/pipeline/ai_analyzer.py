@@ -143,11 +143,16 @@ class AIAnalyzer:
             lines.append(f"--- LISTING {listing['id']} ---")
             lines.append(f"Title: {listing.get('title', '')}")
             lines.append(f"Price: {listing.get('price_chf')} CHF | Distance: {listing.get('distance_km')} km")
+            motor_caveat = (
+                " [unverified: guessed from generic e-bike keywords, not a named motor model — "
+                "check the description/photos yourself]"
+                if listing.get("motor_verified") == 0 else ""
+            )
             lines.append(
                 "Specs (regex-extracted): "
                 f"brand={listing.get('brand')}, model={listing.get('model')}, "
                 f"motor={listing.get('motor_brand')} {listing.get('motor_model')} "
-                f"({listing.get('motor_torque_nm')}Nm), battery={listing.get('battery_capacity_wh')}Wh, "
+                f"({listing.get('motor_torque_nm')}Nm){motor_caveat}, battery={listing.get('battery_capacity_wh')}Wh, "
                 f"frame_size={listing.get('frame_size')}, suspension={listing.get('suspension_type')} "
                 f"({listing.get('travel_front_mm')}mm), brakes={listing.get('brakes_tier')}, "
                 f"odometer={listing.get('odometer_km')}km"

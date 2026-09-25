@@ -100,9 +100,17 @@ class ScoringEngine:
         else:
             score += 0
 
-        # Motor (max 30 points)
+        # Motor (max 30 points). An unverified motor (torque guessed from a
+        # generic "e-bike" keyword, not an identified model — see
+        # RegexParser._detect_motor) gets a flat, low score instead of tier
+        # credit: the torque_nm on these is a placeholder, not a real spec,
+        # so it shouldn't score as if it were a confirmed entry-level motor.
+        # It still passes the min-torque filter — a human can check photos —
+        # but it must not outrank a listing with a genuinely identified one.
         motor_nm = specs.get("motor_torque_nm") or 0
-        if motor_nm >= 90:
+        if specs.get("motor_verified") is False:
+            score += 8
+        elif motor_nm >= 90:
             score += 30
         elif motor_nm >= 85:
             score += 28
