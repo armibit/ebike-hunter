@@ -43,6 +43,7 @@ portals:
     enabled: true
     base_url: "https://www.tutti.ch"
     cantons: ["ti", "gr"]
+    max_pages: 6
     search_queries:
       - "ebike fully"
       - "e-mtb full"
@@ -69,7 +70,7 @@ portals:
   upway:
     enabled: true
     base_url: "https://upway.ch"
-    brands: ["cube", "lapierre", "ghost", "haibike", "trek", "specialized"]
+    brands: ["cube", "lapierre", "haibike", "trek", "specialized", "e-mountainbike"]
   decathlon:
     enabled: true
     base_url: "https://www.decathlon.ch/search"
@@ -81,3 +82,30 @@ portals:
   tcs_velocorner:
     enabled: true
     base_url: "https://www.tcs.ch/velocorner"
+  ridewill:
+    enabled: true
+    base_url: "https://www.ridewill.it"
+    category_id: "87"  # e-bike/ebike-usate-km0 (used/demo e-bikes)
+    type_id: "7"        # e-bike department
+    max_pages: 3
+  zbike:
+    enabled: true
+    base_url: "https://z-bike.ch"
+    category_id: "528"  # WooCommerce "usato" category
+  godspeed:
+    enabled: true
+    base_url: "https://www.godspeed.ch"
+    category_path: "/it/e-bikes/occasioni/"
+  ebikelab:
+    enabled: true
+    base_url: "https://ebikelab.it"
+    category_path: "/ebike/usato"
+    max_pages: 4
+  ecycles_shop:
+    enabled: true
+    base_url: "https://ecycles-shop.it"
+    collection: "usato"
+  ebikestorebrescia:
+    enabled: true
+    base_url: "https://ebikestore.shop"
+    category_path: "/20-usato-certificato"

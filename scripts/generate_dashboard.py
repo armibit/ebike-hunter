@@ -29,7 +29,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
-    WHERE l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP')
+    WHERE l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL
     ORDER BY COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
     """)
 
@@ -104,6 +104,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
     <div class="container">
         <h1>🚲 E-Bike Hunter Dashboard</h1>
         <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati</div>
+        <div class="meta">⚠️ Portali bloccati (controllo manuale): <a href="https://www.decathlon.ch/search?from=0&size=40" target="_blank">Decathlon.ch</a> (Cloudflare)</div>
 
         <div class="filters">
             <div class="filter-group">

@@ -82,9 +82,25 @@ def test_unknown_currency_returns_raw():
     print("✅ Unknown currency test passed")
 
 
+def test_ticino_word_boundary_false_positive():
+    norm = Normalizer()
+
+    # "Stiviere" contains the bare substring "ti" but is not the Ticino
+    # abbreviation — must not be misclassified as Ticino.
+    lat, lon, dist, region = norm.resolve_location("Castiglione delle Stiviere, Lombardia")
+    assert region == "lombardia", f"expected lombardia, got {region}"
+
+    # Genuine "TI" canton abbreviation must still resolve to Ticino.
+    lat2, lon2, dist2, region2 = norm.resolve_location("Bellinzona TI")
+    assert region2 == "ticino"
+
+    print("✅ Ticino word-boundary false-positive test passed")
+
+
 if __name__ == "__main__":
     test_currency_normalization()
     test_haversine_distance()
     test_location_resolution()
     test_unknown_currency_returns_raw()
+    test_ticino_word_boundary_false_positive()
     print("\n✅ All normalizer tests passed!")

@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ KNOWN_COORDINATES: Dict[str, Tuple[float, float]] = {
     "milano": (45.4642, 9.1900),
     "rho": (45.5328, 9.0408),
     "legnano": (45.5967, 8.9167),
+    "brescia": (45.5416, 10.2118),
 }
 
 
@@ -81,14 +83,17 @@ class Normalizer:
             if city in loc_lower:
                 lat, lon = coords
                 dist = self.haversine_km(lat, lon)
-                if dist <= 50.0 and any(k in loc_lower for k in ["lugano", "mendrisio", "chiasso", "bellinzona", "locarno", "ticino", "ti"]):
+                if dist <= 50.0 and (
+                    any(k in loc_lower for k in ["lugano", "mendrisio", "chiasso", "bellinzona", "locarno", "ticino"])
+                    or re.search(r"\bti\b", loc_lower)
+                ):
                     region = "ticino"
                 else:
                     region = "lombardia" if dist <= 120.0 else "other"
                 return lat, lon, dist, region
 
         # Regional heuristics
-        if any(t in loc_lower for t in ["ticino", "ti", "lugano", "mendrisiotto"]):
+        if any(t in loc_lower for t in ["ticino", "lugano", "mendrisiotto"]) or re.search(r"\bti\b", loc_lower):
             return LUGANO_LAT, LUGANO_LON, 15.0, "ticino"
         if any(l in loc_lower for l in ["como", "varese", "lecco", "monza", "milano", "lombardia"]):
             return 45.8081, 9.0852, 35.0, "lombardia"

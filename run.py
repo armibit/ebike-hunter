@@ -25,6 +25,12 @@ from connectors.upway import UpwayConnector
 from connectors.decathlon import DecathlonConnector
 from connectors.velomarkt import VelomarktConnector
 from connectors.tcs_velocorner import TcsVelocornerConnector
+from connectors.ridewill import RidewillConnector
+from connectors.zbike import ZbikeConnector
+from connectors.godspeed import GodspeedConnector
+from connectors.ebikelab import EbikelabConnector
+from connectors.ecycles_shop import EcyclesShopConnector
+from connectors.ebikestorebrescia import EbikestorebresciaConnector
 import requests
 
 logging.basicConfig(
@@ -191,12 +197,23 @@ def process_listing(
     normalizer: Normalizer,
     scorer: ScoringEngine,
     db: Database,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    connector: Any = None
 ) -> bool:
     """
     Process a single listing through the pipeline.
     Returns True if accepted, False if rejected.
     """
+    # Enrich with full listing-detail description when the search card gave none —
+    # spec regex (motor/battery) often only appears in the full ad body, not the card.
+    if connector is not None and not listing_raw.get("description_raw"):
+        try:
+            details = connector.get_listing_details(listing_raw["portal_id"], listing_raw["url"])
+            if details.get("description_raw"):
+                listing_raw["description_raw"] = details["description_raw"]
+        except Exception as e:
+            logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e)
+
     # Normalize currency
     price_chf, price_eur = normalizer.normalize_currency(
         listing_raw["price_raw"],
@@ -211,6 +228,11 @@ def process_listing(
 
     # Check filters
     reject_reasons = []
+
+    # Filter: Invalid price (0 or negative means price parsing failed —
+    # never treat this as a valid/cheap listing)
+    if price_chf <= 0:
+        reject_reasons.append("Invalid price (0 or missing — likely a parsing failure)")
 
     # Filter: Price
     if price_chf > config["buyer_profile"]["budget"]["hard_max_price"]:
@@ -333,6 +355,24 @@ def main():
     if config["portals"]["tcs_velocorner"]["enabled"]:
         connectors.append(("TCS Velocorner", TcsVelocornerConnector(config)))
 
+    if config["portals"]["ridewill"]["enabled"]:
+        connectors.append(("Ridewill.it", RidewillConnector(config)))
+
+    if config["portals"]["zbike"]["enabled"]:
+        connectors.append(("Z-Bike.ch", ZbikeConnector(config)))
+
+    if config["portals"]["godspeed"]["enabled"]:
+        connectors.append(("Godspeed.ch", GodspeedConnector(config)))
+
+    if config["portals"]["ebikelab"]["enabled"]:
+        connectors.append(("Ebikelab.it", EbikelabConnector(config)))
+
+    if config["portals"]["ecycles_shop"]["enabled"]:
+        connectors.append(("Ecycles-shop.it", EcyclesShopConnector(config)))
+
+    if config["portals"]["ebikestorebrescia"]["enabled"]:
+        connectors.append(("Ebikestore Brescia", EbikestorebresciaConnector(config)))
+
     # Scan each portal
     total_found = 0
     total_accepted = 0
@@ -350,7 +390,7 @@ def main():
             rejected = 0
 
             for listing in listings:
-                is_accepted = process_listing(listing, parser, normalizer, scorer, db, config)
+                is_accepted = process_listing(listing, parser, normalizer, scorer, db, config, connector)
                 if is_accepted:
                     accepted += 1
                     total_accepted += 1

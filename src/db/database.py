@@ -162,16 +162,19 @@ class Database:
             old_price = existing["price_raw"]
             new_price = item["price_raw"]
             old_status = existing["status"]
-            new_status = item.get("status", old_status)
+            requested_status = item.get("status", old_status)
+            new_status = requested_status
 
-            if new_price < old_price:
+            # Never let a price-drop promotion override an explicit rejection,
+            # and ignore bogus 0/negative prices (failed scraping) as drops.
+            if requested_status != "REJECTED" and new_price > 0 and old_price > 0 and new_price < old_price:
                 is_price_drop = True
                 new_status = "PRICE_DROP"
                 cursor.execute("""
                 INSERT INTO listing_snapshots (listing_id, price_raw, currency, price_chf, status, captured_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, (listing_id, new_price, item["currency"], item["price_chf"], new_status, now))
-            elif old_status == "PRICE_DROP" and new_price == old_price:
+            elif requested_status != "REJECTED" and old_status == "PRICE_DROP" and new_price == old_price:
                 # Keep PRICE_DROP status — price hasn't recovered
                 new_status = "PRICE_DROP"
 
@@ -269,7 +272,7 @@ class Database:
                (SELECT price_raw FROM listing_snapshots WHERE listing_id = l.id ORDER BY captured_at ASC LIMIT 1) as original_price
         FROM listings l
         LEFT JOIN scores sc ON l.id = sc.listing_id
-        WHERE l.status = 'PRICE_DROP'
+        WHERE l.status = 'PRICE_DROP' AND l.rejection_reason IS NULL
         ORDER BY l.last_checked_at DESC
         LIMIT ?
         """, (limit,))

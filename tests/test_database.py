@@ -183,10 +183,87 @@ def test_price_drop_status_persists():
     print("✅ PRICE_DROP persistence test passed")
 
 
+def test_rejected_status_not_overridden_by_price_drop():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    base = {
+        "portal": "subito",
+        "portal_id": "11111",
+        "url": "https://subito.it/rejected",
+        "title": "Bici muscolare no motore",
+        "price_raw": 3000,
+        "currency": "EUR",
+        "price_chf": 2857,
+        "price_eur": 3000,
+        "distance_km": 20.0,
+        "status": "REJECTED",
+        "rejection_reason": "no_motor_detected",
+    }
+    db.upsert_listing(base)
+
+    # Rescraped at a lower price but re-classified REJECTED again — must not
+    # be promoted to PRICE_DROP just because the price fell.
+    rescanned = {**base, "price_raw": 2000, "price_chf": 1905, "price_eur": 2000}
+    _, is_new, is_price_drop = db.upsert_listing(rescanned)
+    assert is_new is False
+    assert is_price_drop is False
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status FROM listings WHERE id = ?", ("subito_11111",))
+    row = cursor.fetchone()
+    assert row["status"] == "REJECTED", "REJECTED status was overridden by a price drop"
+
+    price_drops = db.get_price_drops()
+    assert not any(d["id"] == "subito_11111" for d in price_drops)
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ REJECTED-not-overridden test passed")
+
+
+def test_zero_price_not_treated_as_drop():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    base = {
+        "portal": "decathlon",
+        "portal_id": "22222",
+        "url": "https://decathlon.ch/test",
+        "title": "Rockrider E-ST 900",
+        "price_raw": 2200,
+        "currency": "CHF",
+        "price_chf": 2200,
+        "price_eur": 2310,
+        "distance_km": 40.0,
+        "status": "ACTIVE",
+    }
+    db.upsert_listing(base)
+
+    # A failed scrape reporting price_raw=0.0 must never register as a drop.
+    failed_scrape = {**base, "price_raw": 0.0, "price_chf": 0.0, "price_eur": 0.0}
+    _, is_new, is_price_drop = db.upsert_listing(failed_scrape)
+    assert is_new is False
+    assert is_price_drop is False
+
+    price_drops = db.get_price_drops()
+    assert not any(d["id"] == "decathlon_22222" for d in price_drops)
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Zero-price-not-a-drop test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
     test_price_drop_detection()
     test_specifications_and_score()
     test_price_drop_status_persists()
+    test_rejected_status_not_overridden_by_price_drop()
+    test_zero_price_not_treated_as_drop()
     print("\n✅ All database tests passed!")

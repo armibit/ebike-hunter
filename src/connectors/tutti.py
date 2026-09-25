@@ -31,6 +31,16 @@ class TuttiConnector(BaseConnector):
         self.cantons = config["portals"]["tutti_ch"].get("cantons", ["ti"])
         self.max_pages = config["portals"]["tutti_ch"].get("max_pages", 3)
 
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Strip hyphens/spaces so 'e-bike' and 'ebike' (or 'e-mtb'/'emtb') match."""
+        return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+    def _matches_keywords(self, listing: Dict[str, Any], keywords: List[str]) -> bool:
+        """True if every keyword appears in the normalized title+description."""
+        haystack = self._normalize(f"{listing['title']} {listing['description_raw']}")
+        return all(k in haystack for k in keywords)
+
     def search(self, query: str, canton: str = "ti", limit: int = 50) -> List[Dict[str, Any]]:
         """
         Fetch listings from the Tutti.ch bikes category for a canton,
@@ -41,7 +51,7 @@ class TuttiConnector(BaseConnector):
             return []
 
         slug, token = CATEGORY_TOKENS[canton]
-        keywords = [w.lower() for w in query.split()] if query else []
+        keywords = [self._normalize(w) for w in query.split()] if query else []
         results = []
         seen_ids = set()
 
@@ -62,8 +72,7 @@ class TuttiConnector(BaseConnector):
                 if listing["portal_id"] in seen_ids:
                     continue
                 seen_ids.add(listing["portal_id"])
-                haystack = f"{listing['title']} {listing['description_raw']}".lower()
-                if not all(k in haystack for k in keywords):
+                if not self._matches_keywords(listing, keywords):
                     continue
                 results.append(listing)
                 new_count += 1

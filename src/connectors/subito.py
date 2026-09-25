@@ -33,7 +33,7 @@ class SubitoConnector(BaseConnector):
             params["city"] = province
 
         try:
-            response = self.get(search_url, params=params)
+            response = self.get(search_url, params=params, headers={"Referer": f"{self.base_url}/"})
             listings = self._parse_search_results(response.text, response.url)
             results.extend(listings)
         except Exception as e:
@@ -53,8 +53,12 @@ class SubitoConnector(BaseConnector):
             listings.extend(json_ld_listings)
             return listings
 
-        # Method 2: Parse HTML listing cards
-        cards = soup.find_all("div", class_=lambda c: c and ("item" in c.lower() or "card" in c.lower()))
+        # Method 2: Parse HTML listing cards. Real cards are exactly the
+        # <article> tags — matching by a loose "item"/"card" class substring
+        # also caught page-level wrapper <div>s (ListingContainer,
+        # ItemListContainer) that ancestor every card, each returning the
+        # first listing's link as if it were its own distinct result.
+        cards = soup.find_all("article")
 
         for card in cards[:50]:
             try:
@@ -83,6 +87,14 @@ class SubitoConnector(BaseConnector):
                 for item in items:
                     if item.get("@type") == "Product":
                         offers = item.get("offers", {})
+
+                        # Search-results pages carry one page-level Product
+                        # schema summarizing ALL results (offers is an
+                        # AggregateOffer with lowPrice/highPrice/offerCount,
+                        # no single "price") — not a real listing. Skip it
+                        # and fall through to per-card HTML parsing instead.
+                        if offers.get("@type") == "AggregateOffer" or "price" not in offers:
+                            continue
 
                         listing = {
                             "portal": "subito",
@@ -128,9 +140,10 @@ class SubitoConnector(BaseConnector):
             id_match = re.search(r'/(\d+)\.htm', url)
             portal_id = id_match.group(1) if id_match else url.split("/")[-1].replace(".htm", "")
 
-            # Extract title
-            title_tag = card.find("h2") or card.find(class_=lambda c: c and "title" in c.lower())
-            title = title_tag.get_text(strip=True) if title_tag else ""
+            # Extract title — real cards use an h3, not h2, and no
+            # "*title*"-classed element exists as a fallback.
+            title_tag = card.find(["h2", "h3"]) or card.find(class_=lambda c: c and "title" in c.lower())
+            title = title_tag.get_text(strip=True) if title_tag else (link_tag.get("aria-label") or "")
 
             # Extract price
             price_tag = card.find(string=re.compile(r'€|EUR'))
@@ -178,6 +191,13 @@ class SubitoConnector(BaseConnector):
     def search_all(self) -> List[Dict[str, Any]]:
         """Run all configured search queries."""
         all_results = []
+
+        # Warm up the session on the homepage first so cookies are set before
+        # hitting the search endpoint — reduces first-request bot-defense 403s.
+        try:
+            self.get(self.base_url)
+        except Exception as e:
+            logger.debug("Subito.it warm-up request failed (continuing anyway): %s", e)
 
         for query in self.search_queries:
             # Search without province filter first (all Lombardia)

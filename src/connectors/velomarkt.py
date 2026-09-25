@@ -35,8 +35,14 @@ class VelomarktConnector(BaseConnector):
         listings = []
         soup = BeautifulSoup(html, "lxml")
 
-        # Find product cards/items
-        items = soup.find_all("div", class_=re.compile(r"product|item|listing|ad"))
+        # Find product cards. NOTE: must match the exact "bike-item" card
+        # container, not a loose "item"/"ad" substring — Velomarkt nests
+        # several unrelated divs (item-caption, item-description, item-name,
+        # item-price...) inside each card, all of which also contain "item"
+        # in their class name. A broad regex here previously matched every
+        # nesting level as its own "card", producing ~4 duplicate, mis-scoped
+        # entries per real listing and corrupting price via last-write-wins.
+        items = soup.find_all("div", class_="bike-item")
 
         for item in items:
             try:
@@ -61,13 +67,15 @@ class VelomarktConnector(BaseConnector):
             if not url.startswith("http"):
                 url = f"https://www.velomarkt.ch{url}"
 
-            # Extract ID
-            match = re.search(r"/(\d+)(?:/|$|\?)", url)
+            # Extract ID — Velomarkt slugs end in "-<numeric-id>", no separate
+            # numeric path segment to match against.
+            match = re.search(r"-(\d+)/?$", url)
             listing_id = match.group(1) if match else url.split("/")[-1]
 
-            # Title
-            title_tag = item.find("h2") or item.find("h3") or item.find(class_=re.compile("title"))
-            title = title_tag.get_text(strip=True) if title_tag else ""
+            # Title — real markup has no h2/h3/"*title*" class; the name is
+            # plain anchor text inside the "item-name" block.
+            title_tag = item.find(class_="item-name")
+            title = title_tag.get_text(strip=True) if title_tag else link_tag.get_text(strip=True)
 
             if not title:
                 return None

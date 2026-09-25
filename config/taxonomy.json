@@ -19,7 +19,7 @@
       "patterns": [
         "brose drive s", "brose s mag", "brose mag", "specialized 2.1",
         "specialized 2.2", "specialized 2.0", "turbo levo brose",
-        "motore brose", "90nm", "90 nm"
+        "motore brose", "90nm", "90 nm", "brose drive t", "drive tf"
       ]
     },
     "shimano_ep8": {
@@ -34,11 +34,21 @@
     },
     "yamaha_pwx": {
       "brand": "Yamaha",
-      "model": "PW-X2 / PW-X3",
+      "model": "PW-X2 / PW-X3 / PW-S2",
       "torque_nm": 85,
       "tier": "top",
       "patterns": [
-        "pw-x3", "pwx3", "pw-x2", "pwx2", "yamaha pw-x", "yamaha 85nm"
+        "pw-x3", "pwx3", "pw-x2", "pwx2", "yamaha pw-x", "yamaha 85nm",
+        "pw-s2", "pws2", "yamaha pw-s2"
+      ]
+    },
+    "dji_avinox": {
+      "brand": "DJI",
+      "model": "Avinox M2S",
+      "torque_nm": 105,
+      "tier": "top",
+      "patterns": [
+        "avinox m2s", "dji avinox", "avinox"
       ]
     },
     "rocky_dyname": {
@@ -75,7 +85,8 @@
       "tier": "disallowed",
       "patterns": [
         "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosch active line",
-        "bosch performance line (?!cx)", "shimano e7000", "shimano e8000"
+        "bosch performance line (?!cx)", "shimano e7000", "shimano e8000",
+        "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40"
       ]
     }
   },

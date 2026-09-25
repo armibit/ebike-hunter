@@ -3,18 +3,16 @@
 *.qodo
 *.claude
 ruvector.db
+agentdb.rvf
+agentdb.rvf.lock
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
-*.egg-info/
 dist/
 build/
-.eggs/
-*.egg
 .python-version
 
 # Virtual Environment
@@ -26,27 +24,19 @@ env/
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 *~
 .DS_Store
 
 # Testing
-.coverage
 .pytest_cache/
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-test-results.xml
-coverage.xml
-.tox/
-.hypothesis/
 
 # Local
 .env
 .env.local
 *.log
+index.html
 
 # Old project
 bike/
 data/
+
