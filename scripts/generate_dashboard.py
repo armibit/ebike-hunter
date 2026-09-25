@@ -25,6 +25,64 @@ def _attr(value) -> str:
     )
 
 
+def _format_price(bike: dict) -> str:
+    """Show the price in the currency the listing was actually posted in —
+    not silently converted to CHF. Scoring/filtering still use price_chf
+    internally; this only changes what's displayed. A small "(~X CHF)" hint
+    is appended for non-CHF listings since the budget filters are CHF-based."""
+    price_raw = bike.get("price_raw")
+    currency = (bike.get("currency") or "").upper()
+    price_chf = bike.get("price_chf")
+    if price_raw is None:
+        return f"{price_chf:.0f} CHF" if price_chf is not None else "N/A"
+    text = f"{price_raw:.0f} {currency}".strip()
+    if currency and currency != "CHF" and price_chf is not None:
+        text += f" (~{price_chf:.0f} CHF)"
+    return text
+
+
+def _format_date(iso_str) -> str:
+    if not iso_str:
+        return "N/A"
+    try:
+        return datetime.fromisoformat(str(iso_str)).strftime("%d/%m/%Y")
+    except ValueError:
+        return str(iso_str)[:10]
+
+
+def _format_history(snapshots: list) -> str:
+    if len(snapshots) < 2:
+        return ""
+    return " → ".join(
+        f"{snap['price_raw']:.0f} {snap['currency']} ({_format_date(snap['captured_at'])})"
+        for snap in snapshots
+    )
+
+
+def _build_modal_text(bike: dict, history: list) -> str:
+    """Full detail text for the per-listing modal: publish/age/mileage
+    metadata (mostly parsed by RegexParser from the description — see
+    model_year/odometer_km), price history when the listing has been
+    rescanned at least twice, then the heuristic + AI analysis below.
+
+    Note: only price changes are tracked (listing_snapshots). The seller's
+    description text itself isn't snapshotted anywhere, so an edit to the
+    description (as opposed to the price) can't be surfaced here yet."""
+    anno = bike.get("model_year") or "N/A"
+    km = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
+    lines = [f"📅 Visto la prima volta: {_format_date(bike.get('first_seen_at'))} | Anno modello: {anno} | Percorrenza: {km}"]
+
+    hist_text = _format_history(history)
+    if hist_text:
+        lines.append(f"💰 Storico prezzo: {hist_text}")
+
+    analysis = _combine_analysis(bike)
+    if analysis:
+        lines.append(analysis)
+
+    return "\n\n".join(lines)
+
+
 def _combine_analysis(bike: dict) -> str:
     """Merge the deterministic heuristic analysis with Claude's ai_analysis
     verdict (run separately, on demand, by analyze.py) into the single text
@@ -62,10 +120,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     where_clause = "1=1" if show_all else "l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL"
     cursor.execute(f"""
     SELECT
-        l.id, l.portal, l.title, l.price_chf, l.distance_km, l.url,
-        l.last_seen_at, l.status, l.user_analysis, l.ai_analysis, l.ai_score,
+        l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
+        l.first_seen_at, l.last_seen_at, l.status, l.user_analysis, l.ai_analysis, l.ai_score,
         s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
-        s.battery_capacity_wh, s.frame_size,
+        s.battery_capacity_wh, s.frame_size, s.model_year, s.odometer_km,
         s.travel_front_mm, s.brakes_tier, s.has_red_flag,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
         sc.score_fit_geometry
@@ -77,6 +135,18 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
+
+    # Price history (listing_snapshots), grouped by listing — one query for
+    # all listings rather than one per row, then sliced per-listing below.
+    cursor.execute("""
+    SELECT listing_id, price_raw, currency, captured_at
+    FROM listing_snapshots
+    ORDER BY listing_id, captured_at ASC
+    """)
+    history_by_id = {}
+    for row in cursor.fetchall():
+        history_by_id.setdefault(row["listing_id"], []).append(dict(row))
+
     db.close()
 
     # Top 10
@@ -218,7 +288,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         html += f"""            <div class="top-item">
                 <div><strong>#{idx}</strong> <a href="{bike['url']}" target="_blank">{bike['title']}</a> ({bike['portal']})</div>
                 <div class="top-analysis">{analysis}</div>
-                <div class="top-meta">Score: {score_val:.1f} | {bike['price_chf']:.0f} CHF | {bike['distance_km']:.1f} km</div>
+                <div class="top-meta">Score: {score_val:.1f} | {_format_price(bike)} | {bike['distance_km']:.1f} km</div>
             </div>
 """
 
@@ -259,11 +329,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             <thead>
                 <tr>
                     <th>Score</th>
-                    <th>Prezzo CHF</th>
+                    <th>Prezzo</th>
                     <th>Distanza km</th>
                     <th>Motore</th>
                     <th>Batteria Wh</th>
                     <th>Taglia</th>
+                    <th>Anno</th>
+                    <th>Km</th>
                     <th>Analisi</th>
                     <th>Status</th>
                     <th>Titolo / Link</th>
@@ -292,8 +364,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
 
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = bike["frame_size"] or "N/A"
+        price_text = _format_price(bike)
+        anno_text = bike.get("model_year") or "N/A"
+        km_text = f"{bike['odometer_km']:.0f}" if bike.get("odometer_km") else "N/A"
 
-        analysis = _combine_analysis(bike)
+        analysis = _build_modal_text(bike, history_by_id.get(bike["id"], []))
 
         row_class = "sold" if status == "SOLD" else ""
         # Escape analysis for JS
@@ -301,11 +376,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
 
         html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
-                    <td>{bike['price_chf']:.0f}</td>
+                    <td>{price_text}</td>
                     <td>{bike['distance_km']:.1f}</td>
                     <td><span class="motor">{motor_text}</span></td>
                     <td>{battery_text}</td>
                     <td>{frame_text}</td>
+                    <td>{anno_text}</td>
+                    <td>{km_text}</td>
                     <td><button class="btn-analysis" onclick="showAnalysis(this)">📋 Analisi</button></td>
                     <td><span class="status {status_class}">{status}</span></td>
                     <td><a href="{bike['url']}" target="_blank">{bike['title'][:60]}...</a> <br><small>({bike['portal']})</small></td>
@@ -455,7 +532,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="9" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="11" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }
