@@ -1,17 +1,23 @@
+import base64
 import json
 import logging
 import re
+import msgpack
 from typing import Dict, List, Any, Optional
 from .base import BaseConnector
 
 logger = logging.getLogger(__name__)
 
-# Category tokens from tutti.ch Next.js routing (/it/q/{slug}/{token}).
-# Tokens are opaque but stable — verified 2026-09-24.
-CATEGORY_TOKENS = {
-    "ti": ("biciclette-ticino", "Ak8CoYmljeWNsZXOUwMDAkZOobG9jYXRpb26xZ2VvLWNhbnRvbi10aWNpbm_A"),
-    "gr": ("biciclette-grigioni", "Ak8CoYmljeWNsZXOUwMDAkZOobG9jYXRpb261Z2VvLWNhbnRvbi1ncmF1YnVuZGVuwA"),
+# tutti.ch encodes search filters (term/category/location) into an opaque
+# token used in its Next.js routing (/it/q/{slug}/{token}). Reverse-engineered
+# 2026-09-25: token = "A" + urlsafe_b64(msgpack([term, category_id,
+# [None, None, None, [["location", geo_id, None]]]])), no padding.
+# (slug, geo_id) per canton — slug is cosmetic, geo_id drives the filter.
+CANTON_GEO = {
+    "ti": ("biciclette-ticino", "geo-canton-ticino"),
+    "gr": ("biciclette-grigioni", "geo-canton-graubunden"),
 }
+BICYCLES_CATEGORY_ID = "bicycles"
 
 
 class TuttiConnector(BaseConnector):
@@ -19,9 +25,11 @@ class TuttiConnector(BaseConnector):
 
     Tutti.ch runs a Next.js frontend; listing data is embedded in
     `__NEXT_DATA__` under `props.pageProps.dehydratedState.queries`
-    (React Query dehydrated state). Keyword `?q=` params are ignored
-    server-side, so filtering by keyword is done locally on
-    title/description.
+    (React Query dehydrated state). A raw `?q=` query string param is
+    ignored server-side — real search terms must be baked into the
+    opaque `/it/q/{slug}/{token}` route token (see `_build_token`).
+    Server-side term matching is loose/OR-style, so results are still
+    filtered locally with an AND-of-words check on title/description.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -41,16 +49,24 @@ class TuttiConnector(BaseConnector):
         haystack = self._normalize(f"{listing['title']} {listing['description_raw']}")
         return all(k in haystack for k in keywords)
 
+    @staticmethod
+    def _build_token(term: Optional[str], geo_id: str) -> str:
+        """Build the opaque tutti.ch search token for a term + canton geo filter."""
+        payload = [term, BICYCLES_CATEGORY_ID, [None, None, None, [["location", geo_id, None]]]]
+        packed = msgpack.packb(payload, use_bin_type=False)
+        return "A" + base64.urlsafe_b64encode(packed).decode().rstrip("=")
+
     def search(self, query: str, canton: str = "ti", limit: int = 50) -> List[Dict[str, Any]]:
         """
-        Fetch listings from the Tutti.ch bikes category for a canton,
+        Run a real server-side search on Tutti.ch for a term + canton,
         filtered locally by keyword. Returns raw listing dicts.
         """
-        if canton not in CATEGORY_TOKENS:
+        if canton not in CANTON_GEO:
             logger.warning("[Tutti.ch] Unknown canton '%s', skipping", canton)
             return []
 
-        slug, token = CATEGORY_TOKENS[canton]
+        slug, geo_id = CANTON_GEO[canton]
+        token = self._build_token(query or None, geo_id)
         keywords = [self._normalize(w) for w in query.split()] if query else []
         results = []
         seen_ids = set()

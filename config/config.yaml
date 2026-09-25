@@ -47,20 +47,44 @@ portals:
     search_queries:
       - "ebike fully"
       - "e-mtb full"
+      - "emtb full"
       - "turbo levo"
       - "stereo hybrid"
       - "trek rail"
       - "canyon spectral on"
+      - "haibike"
+      - "moustache"
+      - "cannondale"
+      - "orbea rise"
+      - "scott eride"
+      - "ktm macina"
+      - "focus jam2"
+      - "giant trance"
+      - "merida eone"
+      - "lapierre overvolt"
+      - "santa cruz heckler"
   subito_it:
     enabled: true
     base_url: "https://www.subito.it"
     provinces: ["como", "varese", "lecco", "monza", "milano"]
+    max_pages: 4
     search_queries:
       - "ebike full"
       - "emtb biammortizzata"
       - "turbo levo"
       - "stereo hybrid"
       - "trek rail"
+      - "haibike"
+      - "moustache"
+      - "cannondale"
+      - "orbea rise"
+      - "scott eride"
+      - "ktm macina"
+      - "focus jam2"
+      - "giant trance"
+      - "merida eone"
+      - "lapierre overvolt"
+      - "santa cruz heckler"
   buycycle:
     enabled: true
     base_url: "https://buycycle.com"

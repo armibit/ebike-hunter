@@ -16,28 +16,50 @@ class SubitoConnector(BaseConnector):
         self.base_url = config["portals"]["subito_it"]["base_url"]
         self.search_queries = config["portals"]["subito_it"]["search_queries"]
         self.provinces = config["portals"]["subito_it"].get("provinces", ["como", "varese"])
+        self.max_pages = config["portals"]["subito_it"].get("max_pages", 4)
 
     def search(self, query: str, province: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         """
-        Search Subito.it for listings.
+        Search Subito.it for listings, paginating via the `o` query param.
+        A single page only surfaces ~30 results (plus a handful of repeated
+        sponsored/pinned listings) — real result pools run well past that,
+        so page 1 alone was silently dropping most matches.
         Returns list of raw listing dictionaries.
         """
-        results = []
-
         # Build search URL
         # Subito.it structure: /annunci-lombardia/vendita/biciclette?q=query
         search_url = f"{self.base_url}/annunci-lombardia/vendita/biciclette"
-        params = {"q": query}
-
+        base_params = {"q": query}
         if province:
-            params["city"] = province
+            base_params["city"] = province
 
-        try:
-            response = self.get(search_url, params=params, headers={"Referer": f"{self.base_url}/"})
+        results = []
+        seen_ids = set()
+
+        for page in range(1, self.max_pages + 1):
+            params = {**base_params, "o": page}
+            try:
+                response = self.get(search_url, params=params, headers={"Referer": f"{self.base_url}/"})
+            except Exception as e:
+                logger.error("Error searching Subito.it: %s", e)
+                break
+
             listings = self._parse_search_results(response.text, response.url)
-            results.extend(listings)
-        except Exception as e:
-            logger.error("Error searching Subito.it: %s", e)
+            if not listings:
+                break
+
+            new_count = 0
+            for listing in listings:
+                if listing["portal_id"] in seen_ids:
+                    continue
+                seen_ids.add(listing["portal_id"])
+                results.append(listing)
+                new_count += 1
+                if len(results) >= limit:
+                    return results
+
+            if new_count == 0:
+                break
 
         return results
 
