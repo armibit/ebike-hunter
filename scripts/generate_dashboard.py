@@ -275,6 +275,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     cursor = db.conn.cursor()
     cursor.execute("""
     SELECT
+        l.rowid AS numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
         l.user_analysis, l.ai_analysis, l.ai_score,
@@ -385,6 +386,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .title-link {{ font-weight: 600; color: var(--text); }}
         .title-meta {{ color: var(--text-muted); font-size: 12px; margin-top: 3px; }}
         .ai-icon {{ font-size: 11px; cursor: default; }}
+        .numeric-id {{ color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }}
 
         .score {{ display: inline-flex; align-items: center; justify-content: center; min-width: 42px; padding: 5px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; }}
         .score.high {{ background: var(--success-bg); color: var(--success); }}
@@ -609,6 +611,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         <table id="table">
             <thead>
                 <tr>
+                    <th>#</th>
                     <th>Score</th>
                     <th>Prezzo</th>
                     <th>Distanza</th>
@@ -676,7 +679,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         else:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+                    <td class="numeric-id">#{bike['numeric_id']}</td>
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{price_text}</td>
                     <td>{bike['distance_km']:.1f} km</td>
@@ -704,8 +708,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         function showAnalysis(button) {
             const row = button.closest('tr');
             currentListingId = row.getAttribute('data-id');
+            const numericId = row.getAttribute('data-numeric-id');
             const title = row.querySelector('a').textContent;
-            document.getElementById('modalTitle').textContent = '📋 ' + title;
+            document.getElementById('modalTitle').textContent = `📋 #${numericId} · ${title}`;
 
             const modalBody = document.getElementById('modalBody');
             modalBody.innerHTML = '';
@@ -922,7 +927,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="8" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="9" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }

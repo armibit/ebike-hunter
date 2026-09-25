@@ -268,12 +268,21 @@ class Database:
         """, (analysis, listing_id))
         self.conn.commit()
 
-    def get_listings_needing_ai_analysis(self, limit: int = 200) -> List[Dict[str, Any]]:
+    def get_listings_needing_ai_analysis(
+        self, limit: int = 200, force: bool = False, listing_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Active/price-drop listings due for an AI read: never analyzed yet,
         or analyzed before their most recent price drop. Scoped away from
-        REJECTED/SOLD/DELISTED to bound recurring API cost as the DB grows."""
+        REJECTED/SOLD/DELISTED to bound recurring API cost as the DB grows.
+
+        listing_id: skip all of the above and return just this one listing
+        (any status) — for testing the AI pass against a single annuncio
+        without touching the rest. force: re-send every ACTIVE/PRICE_DROP
+        listing regardless of whether it was already analyzed — for
+        deliberately re-running the AI after a prompt change, at the cost
+        of one API call per listing it processes."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        base_select = """
         SELECT l.id, l.title, l.description_raw, l.price_chf, l.distance_km, l.status,
                s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
@@ -282,13 +291,37 @@ class Database:
         FROM listings l
         LEFT JOIN specifications s ON l.id = s.listing_id
         LEFT JOIN scores sc ON l.id = sc.listing_id
-        WHERE l.status IN ('ACTIVE', 'PRICE_DROP')
-          AND (l.ai_analysis IS NULL
-               OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))
-        ORDER BY sc.score_total DESC
-        LIMIT ?
-        """, (limit,))
+        """
+
+        if listing_id is not None:
+            cursor.execute(base_select + " WHERE l.id = ?", (listing_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+        status_filter = "WHERE l.status IN ('ACTIVE', 'PRICE_DROP')"
+        if not force:
+            status_filter += (
+                " AND (l.ai_analysis IS NULL"
+                " OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))"
+            )
+        cursor.execute(
+            base_select + status_filter + " ORDER BY sc.score_total DESC LIMIT ?", (limit,)
+        )
         return [dict(row) for row in cursor.fetchall()]
+
+    def resolve_listing_id(self, value: str) -> Optional[str]:
+        """Accept either a listing's real id (e.g. "tutti_12345") or the
+        short numeric id shown in the dashboard (SQLite's own rowid — no
+        extra column needed) and return the real id, or None if neither
+        matches. Lets --id on the CLI take whichever one you can see."""
+        cursor = self.conn.cursor()
+        if value.isdigit():
+            cursor.execute("SELECT id FROM listings WHERE rowid = ?", (int(value),))
+            row = cursor.fetchone()
+            if row:
+                return row["id"]
+        cursor.execute("SELECT id FROM listings WHERE id = ?", (value,))
+        row = cursor.fetchone()
+        return row["id"] if row else None
 
     def save_ai_analysis(self, listing_id: str, ai_analysis: str, ai_score: float):
         """Save Claude's verdict for a listing. Additive only — never touches

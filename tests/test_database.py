@@ -343,6 +343,89 @@ def test_get_listings_needing_ai_analysis():
     print("✅ get_listings_needing_ai_analysis filtering test passed")
 
 
+def test_get_listings_needing_ai_analysis_force_ignores_already_analyzed():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    analyzed = {
+        "portal": "tutti", "portal_id": "10", "url": "https://tutti.ch/10",
+        "title": "Already analyzed bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    analyzed_id, _, _ = db.upsert_listing(analyzed)
+    db.save_ai_analysis(analyzed_id, "Already judged.", 70.0)
+
+    # Without force, an already-analyzed ACTIVE listing is skipped (existing
+    # behavior) — with force=True it must come back regardless.
+    assert analyzed_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
+    assert analyzed_id in {row["id"] for row in db.get_listings_needing_ai_analysis(force=True)}
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ get_listings_needing_ai_analysis force=True test passed")
+
+
+def test_get_listings_needing_ai_analysis_by_listing_id():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    target = {
+        "portal": "tutti", "portal_id": "11", "url": "https://tutti.ch/11",
+        "title": "Target bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "REJECTED",
+        "rejection_reason": "no_motor_detected",
+    }
+    target_id, _, _ = db.upsert_listing(target)
+
+    other = {
+        "portal": "tutti", "portal_id": "12", "url": "https://tutti.ch/12",
+        "title": "Other bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    db.upsert_listing(other)
+
+    # A specific listing_id is returned even though it's REJECTED (excluded
+    # from the normal status filter) — a deliberate test-just-one-bike escape
+    # hatch, so it must bypass the status/force filtering entirely.
+    result = db.get_listings_needing_ai_analysis(listing_id=target_id)
+    assert [row["id"] for row in result] == [target_id]
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ get_listings_needing_ai_analysis listing_id test passed")
+
+
+def test_resolve_listing_id_accepts_numeric_rowid_or_real_id():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    listing = {
+        "portal": "tutti", "portal_id": "99", "url": "https://tutti.ch/99",
+        "title": "Numeric id bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    listing_id, _, _ = db.upsert_listing(listing)
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT rowid FROM listings WHERE id = ?", (listing_id,))
+    rowid = cursor.fetchone()["rowid"]
+
+    assert db.resolve_listing_id(str(rowid)) == listing_id
+    assert db.resolve_listing_id(listing_id) == listing_id
+    assert db.resolve_listing_id("999999") is None
+    assert db.resolve_listing_id("does_not_exist") is None
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ resolve_listing_id test passed")
+
+
 def test_price_drop_after_ai_analysis_is_eligible_again():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
@@ -491,6 +574,9 @@ if __name__ == "__main__":
     test_zero_price_not_treated_as_drop()
     test_ai_analysis_columns_and_save()
     test_get_listings_needing_ai_analysis()
+    test_get_listings_needing_ai_analysis_force_ignores_already_analyzed()
+    test_get_listings_needing_ai_analysis_by_listing_id()
+    test_resolve_listing_id_accepts_numeric_rowid_or_real_id()
     test_price_drop_after_ai_analysis_is_eligible_again()
     test_set_manual_status_reject_and_restore()
     test_get_listing_with_specs()

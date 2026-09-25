@@ -7,6 +7,7 @@ ai_score back to the DB. Does not touch score_total or get_top_deals()'s
 filtering — this is a separate, additive, on-demand pass so its API cost
 stays predictable and decoupled from the automatic poll cycle.
 """
+import argparse
 import logging
 import os
 import sys
@@ -38,7 +39,26 @@ def chunked(items: List[Any], size: int) -> List[List[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Rianalizza TUTTI gli annunci attivi/price-drop, anche quelli già "
+             "analizzati in precedenza (es. dopo aver cambiato il prompt AI). "
+             "Costa una chiamata API per ogni annuncio riprocessato.",
+    )
+    parser.add_argument(
+        "--id", dest="listing_id", metavar="ID",
+        help="Analizza solo questo annuncio, per test — accetta sia l'id numerico "
+             "mostrato nella dashboard (es. 42) sia l'id completo (es. tutti_12345). "
+             "Ignora --force e lo stato dell'annuncio.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+
     # override=True: .env is this project's explicit local config (e.g. pointing
     # ANTHROPIC_BASE_URL at a local gateway) — it should win over stray vars
     # already exported in the shell, not the other way around.
@@ -53,7 +73,15 @@ def main():
     analyzer = AIAnalyzer(config["buyer_profile"])
     scorer = ScoringEngine(config)
 
-    listings = db.get_listings_needing_ai_analysis()
+    listing_id = None
+    if args.listing_id is not None:
+        listing_id = db.resolve_listing_id(args.listing_id)
+        if listing_id is None:
+            logger.error("Nessun annuncio trovato con id %r.", args.listing_id)
+            db.close()
+            sys.exit(1)
+
+    listings = db.get_listings_needing_ai_analysis(force=args.force, listing_id=listing_id)
     if not listings:
         print("No listings need AI analysis — all up to date.")
         db.close()
