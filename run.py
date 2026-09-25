@@ -31,12 +31,12 @@ from connectors.godspeed import GodspeedConnector
 from connectors.ebikelab import EbikelabConnector
 from connectors.ecycles_shop import EcyclesShopConnector
 from connectors.ebikestorebrescia import EbikestorebresciaConnector
+from utils.console import status, StatusAwareStreamHandler
 import requests
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+_handler = StatusAwareStreamHandler()
+_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger(__name__)
 
 
@@ -378,33 +378,39 @@ def main():
     total_accepted = 0
     total_rejected = 0
 
-    for portal_name, connector in connectors:
-        print(f"[{portal_name}] Starting scan...")
-        print("-" * 80)
+    status.start()
+    try:
+        for portal_name, connector in connectors:
+            status.clear()
+            print(f"[{portal_name}] Starting scan...")
+            print("-" * 80)
 
-        try:
-            listings = connector.search_all()
-            total_found += len(listings)
+            try:
+                listings = connector.search_all()
+                total_found += len(listings)
 
-            accepted = 0
-            rejected = 0
+                accepted = 0
+                rejected = 0
 
-            for listing in listings:
-                is_accepted = process_listing(listing, parser, normalizer, scorer, db, config, connector)
-                if is_accepted:
-                    accepted += 1
-                    total_accepted += 1
-                else:
-                    rejected += 1
-                    total_rejected += 1
+                for listing in listings:
+                    is_accepted = process_listing(listing, parser, normalizer, scorer, db, config, connector)
+                    if is_accepted:
+                        accepted += 1
+                        total_accepted += 1
+                    else:
+                        rejected += 1
+                        total_rejected += 1
 
-            print(f"[{portal_name}] Found: {len(listings)} | Accepted: {accepted} | Rejected: {rejected}")
-            print()
+                status.clear()
+                print(f"[{portal_name}] Found: {len(listings)} | Accepted: {accepted} | Rejected: {rejected}")
+                print()
 
-        except Exception as e:
-            logger.error("[%s] Error during scan: %s", portal_name, e)
-            logger.debug(traceback.format_exc())
-            print()
+            except Exception as e:
+                logger.error("[%s] Error during scan: %s", portal_name, e)
+                logger.debug(traceback.format_exc())
+                print()
+    finally:
+        status.stop()
 
     # Summary
     print("=" * 80)

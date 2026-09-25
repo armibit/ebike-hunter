@@ -4,6 +4,7 @@ import random
 from curl_cffi import requests
 from typing import Dict, List, Optional, Any
 from abc import ABC, abstractmethod
+from utils.console import status
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class BaseConnector(ABC):
 
     def get(self, url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None) -> requests.Response:
         """Rate-limited GET request with retry on 429/5xx."""
+        status.update(f"[{self.portal_name}] GET {url}")
         self._rate_limit()
 
         request_headers = self.session.headers.copy()
@@ -75,6 +77,7 @@ class BaseConnector(ABC):
 
     def post(self, url: str, data: Optional[Dict] = None, headers: Optional[Dict] = None) -> requests.Response:
         """Rate-limited POST request with retry on 429."""
+        status.update(f"[{self.portal_name}] POST {url}")
         self._rate_limit()
 
         request_headers = self.session.headers.copy()
