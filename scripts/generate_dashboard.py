@@ -12,6 +12,19 @@ from db.database import Database
 import yaml
 
 
+def _attr(value) -> str:
+    """Escape a value for safe embedding inside a double-quoted HTML attribute."""
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def _combine_analysis(bike: dict) -> str:
     """Merge the deterministic heuristic analysis with Claude's ai_analysis
     verdict (run separately, on demand, by analyze.py) into the single text
@@ -28,24 +41,38 @@ def _combine_analysis(bike: dict) -> str:
     return "\n\n".join(parts)
 
 
-def generate_dashboard(db_path: str, output_path: str = "index.html"):
-    """Generate HTML dashboard from DB."""
+def render_dashboard_html(db_path: str, interactive: bool = False, show_all: bool = False) -> str:
+    """Build the dashboard HTML from the DB.
+
+    interactive=True renders the reject/mark-sold/restore buttons and the
+    spec-correction form, wired to POST /api/listings/<id>/... — only
+    meaningful when served by server.py, since a static file:// page has
+    nothing to send those requests to. generate_dashboard() below always
+    calls this with interactive=False so the auto-regenerated index.html
+    (written by run.py/analyze.py) stays a plain read-only snapshot.
+
+    show_all=True drops the ACTIVE/NEW/PRICE_DROP + rejection_reason filter
+    so manually rejected/sold listings are visible again — otherwise, once
+    set_manual_status() removes a listing from that filter, there would be
+    no way to find it again to hit "restore".
+    """
     db = Database(db_path)
 
-    # Fetch all active/price_drop listings with scores + specs
     cursor = db.conn.cursor()
-    cursor.execute("""
+    where_clause = "1=1" if show_all else "l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL"
+    cursor.execute(f"""
     SELECT
         l.id, l.portal, l.title, l.price_chf, l.distance_km, l.url,
         l.last_seen_at, l.status, l.user_analysis, l.ai_analysis, l.ai_score,
-        s.motor_brand, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh, s.frame_size,
+        s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
+        s.battery_capacity_wh, s.frame_size,
         s.travel_front_mm, s.brakes_tier, s.has_red_flag,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
         sc.score_fit_geometry
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
-    WHERE l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL
+    WHERE {where_clause}
     ORDER BY COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
     """)
 
@@ -89,6 +116,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         .status.new {{ background: #bbdefb; color: #01579b; }}
         .status.price-drop {{ background: #f8bbd0; color: #880e4f; }}
         .status.sold {{ background: #ccc; color: #555; text-decoration: line-through; }}
+        .status.rejected {{ background: #ffcdd2; color: #b71c1c; }}
 
         .motor {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
 
@@ -114,13 +142,26 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
         .btn-analysis {{ padding: 4px 8px; background: #1976d2; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
         .btn-analysis:hover {{ background: #1565c0; }}
+
+        .btn-reject {{ padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-sold {{ padding: 6px 12px; background: #757575; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-restore {{ padding: 6px 12px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-save {{ padding: 6px 12px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .modal-actions {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; display: flex; gap: 8px; }}
+        .edit-specs {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }}
+        .edit-specs h3 {{ font-size: 14px; margin-bottom: 10px; }}
+        .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }}
+        .edit-specs label {{ display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: #666; }}
+        .edit-specs input {{ padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚲 E-Bike Hunter Dashboard</h1>
-        <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati</div>
+        <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati{' (tutti gli stati)' if show_all else ''}</div>
         <div class="meta">⚠️ Portali bloccati (controllo manuale): <a href="https://www.decathlon.ch/search?from=0&size=40" target="_blank">Decathlon.ch</a> (Cloudflare)</div>
+        {'<div class="meta"><a href="/">← Nascondi scartate/vendute</a></div>' if interactive and show_all else ''}
+        {'<div class="meta"><a href="/?all=1">Mostra anche scartate/vendute →</a></div>' if interactive and not show_all else ''}
 
         <div class="filters">
             <div class="filter-group">
@@ -189,7 +230,28 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
                 <span class="modal-close" onclick="closeAnalysis()">&times;</span>
                 <h2 id="modalTitle"></h2>
                 <div class="modal-body" id="modalBody"></div>
-            </div>
+"""
+
+    if interactive:
+        html += """                <div class="edit-specs">
+                    <h3>✏️ Correggi specifiche (es. hai riconosciuto il motore da una foto)</h3>
+                    <div class="edit-fields">
+                        <label>Motore <input type="text" id="editMotorBrand" placeholder="es. Bosch"></label>
+                        <label>Modello <input type="text" id="editMotorModel" placeholder="es. Performance CX"></label>
+                        <label>Coppia Nm <input type="number" id="editMotorTorque"></label>
+                        <label>Batteria Wh <input type="number" id="editBattery"></label>
+                        <label>Taglia <input type="text" id="editFrame"></label>
+                    </div>
+                    <button class="btn-save" onclick="saveSpecs()">💾 Salva correzioni</button>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-reject" onclick="rejectListing()">❌ Scarta</button>
+                    <button class="btn-sold" onclick="markSold()">✅ Segna venduta</button>
+                    <button class="btn-restore" onclick="restoreListing()">↩️ Ripristina attiva</button>
+                </div>
+"""
+
+    html += """            </div>
         </div>
 
         <h2 style="font-size: 18px; margin: 30px 0 15px; padding-bottom: 10px; border-bottom: 2px solid #1976d2;">📋 Tutti gli annunci</h2>
@@ -215,7 +277,12 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         score_class = "high" if score_val >= 80 else "mid" if score_val >= 65 else "low"
 
         status = bike["status"]
-        status_class = "new" if status == "NEW" else "price-drop" if status == "PRICE_DROP" else "sold" if status == "SOLD" else ""
+        status_class = (
+            "new" if status == "NEW" else
+            "price-drop" if status == "PRICE_DROP" else
+            "sold" if status == "SOLD" else
+            "rejected" if status == "REJECTED" else ""
+        )
 
         motor_text = f"{bike['motor_brand']}" if bike["motor_brand"] else "N/A"
         if bike.get("motor_torque_nm"):
@@ -232,7 +299,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         # Escape analysis for JS
         analysis_escaped = analysis.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-        html += f"""                <tr class="{row_class}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{bike['price_chf']:.0f}</td>
                     <td>{bike['distance_km']:.1f}</td>
@@ -251,17 +318,72 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
     <script>
         // Modal functions
+        let currentListingId = null;
+
         function showAnalysis(button) {
             const row = button.closest('tr');
+            currentListingId = row.getAttribute('data-id');
             const analysis = row.getAttribute('data-analysis');
             const title = row.querySelector('a').textContent;
             document.getElementById('modalTitle').textContent = '📋 ' + title;
             document.getElementById('modalBody').textContent = analysis;
+
+            const motorBrandInput = document.getElementById('editMotorBrand');
+            if (motorBrandInput) {
+                motorBrandInput.value = row.getAttribute('data-edit-motor-brand') || '';
+                document.getElementById('editMotorModel').value = row.getAttribute('data-edit-motor-model') || '';
+                document.getElementById('editMotorTorque').value = row.getAttribute('data-edit-motor-torque') || '';
+                document.getElementById('editBattery').value = row.getAttribute('data-edit-battery') || '';
+                document.getElementById('editFrame').value = row.getAttribute('data-edit-frame') || '';
+            }
+
             document.getElementById('analysisModal').classList.add('show');
         }
 
         function closeAnalysis() {
             document.getElementById('analysisModal').classList.remove('show');
+        }
+
+        // Reject / mark sold / restore / spec-correction actions — POST to
+        // server.py's API and reload so the page always reflects fresh DB
+        // state. Requires the interactive dashboard (python3 server.py);
+        // opening index.html directly has no server to answer these.
+        async function postAction(path, body) {
+            try {
+                const resp = await fetch(`/api/listings/${currentListingId}/${path}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body || {})
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+                location.reload();
+            } catch (e) {
+                alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py) e di aver aperto http://127.0.0.1:5050 — non il file index.html.\\n\\n' + e.message);
+            }
+        }
+
+        function rejectListing() {
+            if (confirm('Scartare questo annuncio?')) postAction('reject');
+        }
+
+        function markSold() {
+            if (confirm('Segnare questo annuncio come venduto?')) postAction('sold');
+        }
+
+        function restoreListing() {
+            postAction('restore');
+        }
+
+        function saveSpecs() {
+            const torque = document.getElementById('editMotorTorque').value;
+            const battery = document.getElementById('editBattery').value;
+            postAction('specs', {
+                motor_brand: document.getElementById('editMotorBrand').value || null,
+                motor_model: document.getElementById('editMotorModel').value || null,
+                motor_torque_nm: torque !== '' ? parseFloat(torque) : null,
+                battery_capacity_wh: battery !== '' ? parseFloat(battery) : null,
+                frame_size: document.getElementById('editFrame').value || null
+            });
         }
 
         // Close modal on ESC key
@@ -355,11 +477,16 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 </html>
 """
 
-    # Write HTML
+    return html
+
+
+def generate_dashboard(db_path: str, output_path: str = "index.html"):
+    """Write the (read-only, non-interactive) dashboard snapshot to disk.
+    Used by run.py and analyze.py after each scan/analysis pass."""
+    html = render_dashboard_html(db_path, interactive=False)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
-
-    print(f"✓ Dashboard generated: {output_path} ({len(listings)} listings, top 10 deals)")
+    print(f"✓ Dashboard generated: {output_path}")
 
 
 if __name__ == "__main__":
