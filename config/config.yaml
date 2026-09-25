@@ -94,7 +94,9 @@ portals:
   upway:
     enabled: true
     base_url: "https://upway.ch"
+    shop_domain: "upway-switzerland.myshopify.com"
     brands: ["cube", "lapierre", "haibike", "trek", "specialized", "e-mountainbike"]
+    max_pages: 5
   decathlon:
     enabled: true
     base_url: "https://www.decathlon.ch/search"
