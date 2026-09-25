@@ -383,6 +383,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         .title-link {{ font-weight: 600; color: var(--text); }}
         .title-meta {{ color: var(--text-muted); font-size: 12px; margin-top: 3px; }}
+        .ai-icon {{ font-size: 11px; cursor: default; }}
 
         .score {{ display: inline-flex; align-items: center; justify-content: center; min-width: 42px; padding: 5px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; }}
         .score.high {{ background: var(--success-bg); color: var(--success); }}
@@ -648,6 +649,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         anno_text = bike.get("model_year") or "N/A"
         km_text = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
         meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
+        ai_icon = '<span class="ai-icon" title="Analisi AI disponibile">🤖</span> ' if bike.get("ai_analysis") else ''
 
         detail_html = _build_detail_html(bike, history_by_id.get(bike["id"], []))
         row_templates.append(f'<template data-listing-id="{_attr(bike["id"])}">{detail_html}</template>')
@@ -677,7 +679,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td>{battery_text}</td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
-                        <div class="title-meta">{bike['portal']} · {meta_text}</div>
+                        <div class="title-meta">{ai_icon}{bike['portal']} · {meta_text}</div>
                     </td>
                     <td>{actions_cell}</td>
                     <td><span class="status {status_class}">{status}</span></td>
