@@ -24,7 +24,7 @@ def test_generate_user_analysis_is_italian_not_english():
     # rest of the dashboard is Italian-facing.
     text = run.generate_user_analysis(85, _specs(), {"distance_km": 10, "price_chf": 2000})
 
-    italian_markers = ["FORTEMENTE CONSIGLIATA", "Motore", "Batteria", "Taglia", "Prezzo", "Raccomandazione"]
+    italian_markers = ["FORTEMENTE CONSIGLIATA", "Posizione", "Prezzo", "Raccomandazione"]
     for marker in italian_markers:
         assert marker in text, f"expected Italian marker {marker!r} in analysis text"
 
@@ -45,17 +45,36 @@ def test_generate_user_analysis_verdict_tiers():
     print("✅ generate_user_analysis verdict tiers test passed")
 
 
-def test_generate_user_analysis_flags_unverified_motor_for_review():
-    text = run.generate_user_analysis(
-        70, _specs(motor_verified=False), {"distance_km": 10, "price_chf": 2000}
-    )
-    assert "VERIFICA DALLE FOTO" in text
+def test_generate_user_analysis_does_not_duplicate_the_spec_grid():
+    # Motor/battery/frame/suspension/brakes are already shown, with a
+    # verified/unverified badge, in the detail card's spec grid — repeating
+    # them here as prose bullets would just be redundant reading, so this
+    # text should stick to what the grid can't show (condition read,
+    # location framing, price framing, red flags, the headline verdict).
+    text = run.generate_user_analysis(85, _specs(), {"distance_km": 10, "price_chf": 2000})
 
-    print("✅ generate_user_analysis unverified-motor wording test passed")
+    for should_be_absent in ("Motore:", "Batteria:", "Taglia:", "Sospensione:", "Freni:"):
+        assert should_be_absent not in text, f"spec bullet {should_be_absent!r} should have been dropped"
+
+    for should_be_present in ("Condizione:", "Posizione:", "Prezzo:"):
+        assert should_be_present in text
+
+    print("✅ generate_user_analysis non-duplication test passed")
+
+
+def test_generate_user_analysis_includes_red_flags():
+    text = run.generate_user_analysis(
+        70, _specs(red_flag_details=["senza caricatore"]), {"distance_km": 10, "price_chf": 2000}
+    )
+    assert "Segnalazioni" in text
+    assert "senza caricatore" in text
+
+    print("✅ generate_user_analysis red flags test passed")
 
 
 if __name__ == "__main__":
     test_generate_user_analysis_is_italian_not_english()
     test_generate_user_analysis_verdict_tiers()
-    test_generate_user_analysis_flags_unverified_motor_for_review()
+    test_generate_user_analysis_does_not_duplicate_the_spec_grid()
+    test_generate_user_analysis_includes_red_flags()
     print("\n✅ All run.py tests passed!")

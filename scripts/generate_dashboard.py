@@ -114,33 +114,46 @@ def _score_class(value) -> str:
 
 
 def _build_spec_table_html(bike: dict) -> str:
-    """Compact 2-column grid (not a tall list) — specs are the first thing
-    to scan in the detail card, so they shouldn't cost more vertical space
-    than they need to."""
+    """Compact 2-column grid of only the specs actually known — specs are
+    the first thing to scan in the detail card, so an "N/A"/"Non
+    specificato" row for every field the parser didn't catch just pads the
+    card with negative space dressed up as content. Frame size is the one
+    exception: "not found" there is itself a decision-relevant fact (the
+    buyer profile targets specific sizes), so it's always shown."""
+    items = []
+
     motor_bits = [b for b in (bike.get("motor_brand"), bike.get("motor_model")) if b]
-    motor_text = _attr(" ".join(motor_bits)) if motor_bits else "N/A"
-    if bike.get("motor_torque_nm"):
-        motor_text += f" · {bike['motor_torque_nm']:.0f} Nm"
-    if bike.get("motor_brand"):
+    if motor_bits:
+        motor_text = _attr(" ".join(motor_bits))
+        if bike.get("motor_torque_nm"):
+            motor_text += f" · {bike['motor_torque_nm']:.0f} Nm"
         motor_text += (
             ' <span class="badge badge-warn">⚠️ da verificare</span>'
             if bike.get("motor_verified") == 0
             else ' <span class="badge badge-ok">✓ verificato</span>'
         )
+        items.append(("Motore", motor_text))
 
-    suspension_text = _SUSPENSION_LABELS.get(bike.get("suspension_type"), _attr(bike.get("suspension_type")) or "N/A")
-    if bike.get("travel_front_mm"):
-        suspension_text += f" · {bike['travel_front_mm']:.0f}mm"
+    if bike.get("battery_capacity_wh"):
+        items.append(("Batteria", f"{bike['battery_capacity_wh']:.0f} Wh"))
 
-    items = [
-        ("Motore", motor_text),
-        ("Batteria", f"{bike['battery_capacity_wh']:.0f} Wh" if bike.get("battery_capacity_wh") else "N/A"),
-        ("Taglia", _attr(bike.get("frame_size")) or "N/A"),
-        ("Anno modello", bike.get("model_year") or "N/A"),
-        ("Percorrenza", f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"),
-        ("Sospensione", suspension_text),
-        ("Freni", _BRAKES_LABELS.get(bike.get("brakes_tier"), _attr(bike.get("brakes_tier")) or "N/A")),
-    ]
+    items.append(("Taglia", _attr(bike.get("frame_size")) or "N/A"))
+
+    if bike.get("model_year"):
+        items.append(("Anno modello", bike["model_year"]))
+
+    if bike.get("odometer_km"):
+        items.append(("Percorrenza", f"{bike['odometer_km']:.0f} km"))
+
+    if bike.get("suspension_type") and bike["suspension_type"] != "unknown":
+        suspension_text = _SUSPENSION_LABELS.get(bike["suspension_type"], _attr(bike["suspension_type"]))
+        if bike.get("travel_front_mm"):
+            suspension_text += f" · {bike['travel_front_mm']:.0f}mm"
+        items.append(("Sospensione", suspension_text))
+
+    if bike.get("brakes_tier") and bike["brakes_tier"] != "unknown":
+        items.append(("Freni", _BRAKES_LABELS.get(bike["brakes_tier"], _attr(bike["brakes_tier"]))))
+
     items_html = "".join(
         f'<div class="spec-item"><div class="spec-label">{label}</div><div class="spec-value">{value}</div></div>'
         for label, value in items
@@ -369,12 +382,16 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .motor {{ background: #f3f4f6; color: var(--text); padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 500; display: inline-block; }}
 
         .row-actions {{ display: flex; align-items: center; gap: 6px; }}
-        .icon-btn {{ width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); cursor: pointer; font-size: 14px; line-height: 1; transition: background .15s, border-color .15s; }}
-        .icon-btn:hover {{ background: var(--bg); }}
+        /* Each row action has its own colour at rest, not only on hover —
+           four identical pale-grey squares read as one blob until you
+           hover each in turn to find out what it does. */
+        .icon-btn {{ width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 13px; line-height: 1; transition: filter .15s; }}
+        .icon-btn:hover {{ filter: brightness(0.96); }}
         .icon-star {{ border: none; background: none; font-size: 18px; color: #f59e0b; }}
-        .icon-star:hover {{ background: none; }}
-        .icon-danger:hover {{ background: var(--danger-bg); border-color: var(--danger); }}
-        .icon-success:hover {{ background: var(--success-bg); border-color: var(--success); }}
+        .icon-star:hover {{ filter: none; }}
+        .icon-details {{ background: var(--primary-light); border-color: #bfdbfe; color: var(--primary); }}
+        .icon-danger {{ background: var(--danger-bg); border-color: #fecaca; color: var(--danger); }}
+        .icon-success {{ background: var(--success-bg); border-color: #bbf7d0; color: var(--success); }}
         .btn-details {{ padding: 6px 12px; background: var(--primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }}
         .btn-details:hover {{ background: var(--primary-dark); }}
 
@@ -605,9 +622,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             actions_cell = (
                 '<div class="row-actions">'
                 f'{star_btn}'
-                '<button class="icon-btn" onclick="showAnalysis(this)" title="Dettagli e correzioni">📋</button>'
+                '<button class="icon-btn icon-details" onclick="showAnalysis(this)" title="Dettagli e correzioni">📋</button>'
                 '<button class="icon-btn icon-danger" onclick="rejectRow(this)" title="Scarta — non mi interessa">✕</button>'
-                '<button class="icon-btn icon-success" onclick="soldRow(this)" title="Segna come venduta">✅</button>'
+                '<button class="icon-btn icon-success" onclick="soldRow(this)" title="Segna come venduta">✓</button>'
                 '</div>'
             )
         else:

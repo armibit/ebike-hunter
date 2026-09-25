@@ -10,6 +10,7 @@ import json
 from typing import Any, Dict, Optional
 
 from db.database import Database
+from pipeline.analysis_text import generate_user_analysis
 from pipeline.scoring import ScoringEngine
 
 EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size"]
@@ -51,4 +52,11 @@ def apply_spec_correction(
     listing_data = {"price_chf": current.get("price_chf"), "distance_km": current.get("distance_km")}
     score_result = scorer.calculate_score(listing_data, current)
     db.save_score(listing_id, score_result)
+
+    # Otherwise the written verdict keeps describing the pre-correction
+    # specs (e.g. still calling the motor unverified after you've just
+    # confirmed it) even though the score and spec grid have moved on.
+    analysis = generate_user_analysis(score_result["score_total"], current, listing_data)
+    db.save_user_analysis(listing_id, analysis)
+
     return score_result

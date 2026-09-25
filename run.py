@@ -16,6 +16,7 @@ BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 from db.database import Database
+from pipeline.analysis_text import generate_user_analysis
 from pipeline.regex_parser import RegexParser
 from pipeline.normalizer import Normalizer
 from pipeline.scoring import ScoringEngine
@@ -46,150 +47,6 @@ def load_config() -> Dict[str, Any]:
     config_path = BASE_DIR / "config" / "config.yaml"
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
-
-
-def generate_user_analysis(score: float, specs: Dict, listing_data: Dict) -> str:
-    """Generate detailed user analysis based on score and specs."""
-    motor = specs.get("motor_brand")
-    torque = specs.get("motor_torque_nm")
-    battery = specs.get("battery_capacity_wh")
-    frame = specs.get("frame_size")
-    suspension = specs.get("suspension_type")
-    brakes = specs.get("brakes_tier")
-    travel = specs.get("travel_front_mm")
-    odometer = specs.get("odometer_km")
-    distance = listing_data.get("distance_km", 0)
-    price = listing_data.get("price_chf", 0)
-    red_flags = specs.get("red_flag_details", [])
-
-    lines = []
-
-    # Intestazione: verdetto
-    if score >= 85:
-        verdict = "🟢 FORTEMENTE CONSIGLIATA - Prima scelta da vedere"
-    elif score >= 75:
-        verdict = "🟡 DA CONSIDERARE - Buon equilibrio tra le specifiche"
-    elif score >= 65:
-        verdict = "🟠 ACCETTABILE - Rispetta i requisiti minimi"
-    else:
-        verdict = "🔴 PRIORITÀ BASSA - Non è un match ideale"
-
-    lines.append(f"**{verdict}**\n")
-
-    # Analisi motore
-    # DB round-trips this as 0/1/None (SQLite has no bool type); the freshly
-    # parsed dict from RegexParser.parse() carries True/False/None instead —
-    # accept either.
-    motor_verified = specs.get("motor_verified")
-    if motor and torque and motor_verified in (False, 0):
-        lines.append(
-            f"• Motore: {motor} — Non nominato nel testo, coppia presunta ⚠️ "
-            "VERIFICA DALLE FOTO/VENDITORE prima di escluderla"
-        )
-    elif motor and torque:
-        if torque >= 85:
-            motor_note = f"{motor} {torque:.0f}Nm — Potenza eccellente ✓✓"
-        elif torque >= 75:
-            motor_note = f"{motor} {torque:.0f}Nm — Buona potenza ✓"
-        else:
-            motor_note = f"{motor} {torque:.0f}Nm — Debole, sotto la soglia target"
-        lines.append(f"• Motore: {motor_note}")
-    elif motor:
-        lines.append(f"• Motore: {motor} — Coppia non specificata (chiedi al venditore)")
-    else:
-        lines.append("• Motore: Non rilevato — Probabilmente non è una e-bike o le specifiche non sono chiare")
-
-    # Analisi batteria
-    if battery:
-        if battery >= 625:
-            batt_note = f"{battery:.0f}Wh — Autonomia eccellente ✓✓"
-        elif battery >= 500:
-            batt_note = f"{battery:.0f}Wh — Buona autonomia ✓"
-        else:
-            batt_note = f"{battery:.0f}Wh — Autonomia limitata ⚠️"
-        lines.append(f"• Batteria: {batt_note}")
-    else:
-        lines.append("• Batteria: Non specificata (chiedi al venditore)")
-
-    # Analisi taglia
-    if frame:
-        if frame == "M":
-            frame_note = "Corrispondenza perfetta ✓✓"
-        elif frame in ("S2", "S3"):
-            frame_note = "Vicina, potrebbe andare bene"
-        else:
-            frame_note = f"Taglia {frame} — potrebbe non adattarsi a 170cm"
-        lines.append(f"• Taglia: {frame} — {frame_note}")
-    else:
-        lines.append("• Taglia: Non specificata (critico — chiedi subito)")
-
-    # Analisi sospensioni
-    if suspension:
-        if suspension == "full_suspension":
-            susp_note = "Full suspension ✓✓"
-        elif suspension == "hardtail":
-            susp_note = "Hardtail (accettabile solo se prezzo/specifiche eccezionali)"
-        else:
-            susp_note = "Tipo di sospensione sconosciuto"
-        if travel:
-            susp_note += f" — {travel}mm di escursione"
-        lines.append(f"• Sospensione: {susp_note}")
-
-    # Analisi freni
-    if brakes:
-        if brakes in ("four_piston", "high"):
-            brake_note = "Freni di fascia alta ✓✓"
-        elif brakes in ("two_piston", "mid"):
-            brake_note = "Freni di fascia media ✓"
-        else:
-            brake_note = f"{brakes}"
-        lines.append(f"• Freni: {brake_note}")
-
-    # Analisi condizione
-    if odometer:
-        if odometer < 500:
-            cond_note = "Chilometraggio molto basso ✓✓"
-        elif odometer < 2000:
-            cond_note = "Chilometraggio basso ✓"
-        elif odometer < 5000:
-            cond_note = "Utilizzo normale"
-        else:
-            cond_note = "Chilometraggio alto — verifica le condizioni"
-        lines.append(f"• Condizione: {odometer:.0f} km — {cond_note}")
-
-    # Analisi distanza
-    if distance < 15:
-        dist_note = f"Molto vicina ({distance:.1f}km) ✓✓ — Facile da visitare"
-    elif distance < 30:
-        dist_note = f"Nelle vicinanze ({distance:.1f}km) ✓ — Raggiungibile in treno"
-    elif distance < 60:
-        dist_note = f"Distanza media ({distance:.1f}km) — Organizza la trasferta"
-    else:
-        dist_note = f"Lontana ({distance:.1f}km) — Vale la pena solo con specifiche molto buone"
-    lines.append(f"• Posizione: {dist_note}")
-
-    # Analisi prezzo
-    target_price = 2200
-    if price < 1800:
-        price_note = f"Sotto il target ({price:.0f} CHF) ✓✓ — Ottimo affare"
-    elif price < target_price:
-        price_note = f"Nel budget ({price:.0f} CHF, target {target_price}) ✓"
-    else:
-        price_note = f"Sopra il target ({price:.0f} CHF, target {target_price}) — Prova a negoziare"
-    lines.append(f"• Prezzo: {price_note}")
-
-    # Segnalazioni
-    if red_flags:
-        flag_str = ", ".join(red_flags[:3])
-        lines.append(f"\n⚠️  Segnalazioni: {flag_str}")
-
-    # Raccomandazione finale
-    lines.append(f"\n**Raccomandazione**: Punteggio {score:.0f}/100. " +
-                ("Vale la pena andare a vederla di persona — alta probabilità di match." if score >= 80 else
-                 "Buona opzione, vale la pena approfondire." if score >= 70 else
-                 "Accettabile ma non ideale. Confronta prima con altre opzioni."))
-
-    return "\n".join(lines)
 
 
 def check_listing_validity(url: str, timeout: int = 5) -> bool:
@@ -510,18 +367,25 @@ def main():
     else:
         print("✓ All existing listings still valid")
 
-    # Generate user_analysis for listings without one
+    # Regenerate user_analysis for every active listing, not just ones
+    # missing it — it's a pure, cheap, local recomputation from specs/score
+    # already in the DB (no network/API cost), so there's no reason to let
+    # stale text survive a wording or language change (this is exactly how
+    # a batch of listings ended up stuck showing English text after the
+    # heuristic copy was translated to Italian — nothing re-ran it). This
+    # also means a manual spec correction's new score shows consistent text
+    # next scan, not a description that still reflects the old spec.
     cursor.execute("""
     SELECT l.id, COALESCE(sc.score_total, 0) as score, l.price_chf, l.distance_km
     FROM listings l
     LEFT JOIN scores sc ON l.id = sc.listing_id
-    WHERE l.status IN ('ACTIVE', 'PRICE_DROP', 'NEW') AND l.user_analysis IS NULL
+    WHERE l.status IN ('ACTIVE', 'PRICE_DROP', 'NEW')
     """)
-    listings_without_analysis = cursor.fetchall()
+    active_listings = cursor.fetchall()
 
-    if listings_without_analysis:
-        print(f"Generating analysis for {len(listings_without_analysis)} listings...")
-        for listing_id, score, price, distance in listings_without_analysis:
+    if active_listings:
+        print(f"Generating analysis for {len(active_listings)} listings...")
+        for listing_id, score, price, distance in active_listings:
             # Fetch specs for this listing
             cursor.execute("SELECT * FROM specifications WHERE listing_id = ?", (listing_id,))
             spec_row = cursor.fetchone()
@@ -530,9 +394,9 @@ def main():
                 listing_data = {"price_chf": price, "distance_km": distance}
                 analysis = generate_user_analysis(float(score), specs, listing_data)
                 db.save_user_analysis(listing_id, analysis)
-        print(f"✓ Generated analysis for {len(listings_without_analysis)} listings")
+        print(f"✓ Generated analysis for {len(active_listings)} listings")
     else:
-        print("✓ All listings already have analysis")
+        print("✓ No active listings to analyze")
 
     print()
 

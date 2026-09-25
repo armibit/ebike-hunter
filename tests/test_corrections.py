@@ -56,6 +56,27 @@ def test_apply_spec_correction_marks_verified_and_rescores_higher():
     print("✅ apply_spec_correction verifies motor and rescores higher")
 
 
+def test_apply_spec_correction_regenerates_user_analysis_text():
+    # Otherwise the written verdict keeps describing the pre-correction
+    # specs (e.g. still reading as an unverified motor right after you've
+    # just confirmed it) even though the score and spec grid have moved on.
+    db_path, db = _fresh_db_with_unverified_motor()
+    db.save_user_analysis("x_1", "Vecchio testo obsoleto.")
+    scorer = ScoringEngine(CONFIG)
+
+    apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85})
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT user_analysis FROM listings WHERE id = ?", ("x_1",))
+    analysis = cursor.fetchone()["user_analysis"]
+    assert analysis != "Vecchio testo obsoleto."
+    assert "Raccomandazione" in analysis
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ apply_spec_correction regenerates user_analysis text")
+
+
 def test_apply_spec_correction_ignores_unknown_fields():
     db_path, db = _fresh_db_with_unverified_motor()
     scorer = ScoringEngine(CONFIG)
@@ -102,6 +123,7 @@ def test_apply_spec_correction_clearing_field_does_not_mark_verified():
 
 if __name__ == "__main__":
     test_apply_spec_correction_marks_verified_and_rescores_higher()
+    test_apply_spec_correction_regenerates_user_analysis_text()
     test_apply_spec_correction_ignores_unknown_fields()
     test_apply_spec_correction_unknown_listing_returns_none()
     test_apply_spec_correction_clearing_field_does_not_mark_verified()
