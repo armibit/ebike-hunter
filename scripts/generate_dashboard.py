@@ -246,7 +246,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
             </div>
             <div class="filter-group">
                 <label>Distanza km</label>
-                <input type="number" id="distMax" value="100" min="0" max="500" style="width: 80px">
+                <input type="number" id="distMax" value="100" min="0" max="1000" style="width: 80px">
             </div>
             <div class="filter-group">
                 <label>Motore</label>
@@ -538,15 +538,21 @@ def render_dashboard_html(db_path: str, interactive: bool = False, show_all: boo
         }
 
         function resetFilters() {
-            priceMinInput.value = 1500;
-            priceMaxInput.value = 3000;
-            priceMinVal.textContent = 1500;
-            priceMaxVal.textContent = 3000;
-            document.getElementById('distMax').value = 100;
+            // "Reset" must mean "show everything again", not "reapply the
+            // typical 1500-3000/60+/400Wh+ starting range" — it used to set
+            // those same restrictive defaults and then filter by them,
+            // which silently hid every listing outside that range (looked
+            // like most of the list had vanished). Use each input's own
+            // min/max bounds so nothing is excluded.
+            priceMinInput.value = priceMinInput.min;
+            priceMaxInput.value = priceMaxInput.max;
+            priceMinVal.textContent = priceMinInput.value;
+            priceMaxVal.textContent = priceMaxInput.value;
+            document.getElementById('distMax').value = document.getElementById('distMax').max;
             document.getElementById('motorFilter').value = '';
-            document.getElementById('batteryMin').value = 400;
+            document.getElementById('batteryMin').value = 0;
             document.getElementById('frameFilter').value = '';
-            document.getElementById('scoreMin').value = 60;
+            document.getElementById('scoreMin').value = 0;
             filterTable();
         }
     </script>
