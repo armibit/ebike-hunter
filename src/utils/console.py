@@ -13,6 +13,7 @@ import time
 
 _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _WIDTH = 118
+_SEPARATOR = "─" * _WIDTH
 
 
 class StatusLine:
@@ -59,10 +60,14 @@ class StatusLine:
         with self._lock:
             frame = _FRAMES[self._frame % len(_FRAMES)]
             self._frame += 1
-            lines = [
+            job_lines = [
                 f"{frame} {self._lines[k]}"[:_WIDTH].ljust(_WIDTH)
                 for k in self._order if self._lines.get(k)
             ]
+            # A leading separator row, redrawn as part of the block itself, keeps
+            # the live status area visually distinct from scrolling log lines
+            # above it — otherwise both look like plain text in scrollback.
+            lines = [_SEPARATOR] + job_lines if job_lines else []
             old_n, new_n = self._rendered_count, len(lines)
 
             if old_n:

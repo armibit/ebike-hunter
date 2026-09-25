@@ -407,11 +407,21 @@ def main():
                     logger.debug(traceback.format_exc())
                     continue
 
+                logger.info("✓ [%s] scan done — %d listing(s) found, processing...", portal_name, len(listings))
+
                 total_found += len(listings)
                 accepted = 0
                 rejected = 0
+                enrich_key = f"{connector.portal_name}:enrich"
 
-                for listing in listings:
+                for idx, listing in enumerate(listings, 1):
+                    # Only listings missing a description trigger a live detail
+                    # fetch (base.get() re-updates connector.portal_name's own
+                    # status line while it runs) — label that sub-phase under
+                    # its own key so it reads as "still working" rather than a
+                    # stale scan line resurrecting after status.finish() above.
+                    if not listing.get("description_raw"):
+                        status.update(enrich_key, f"[{portal_name}] fetching detail {idx}/{len(listings)}")
                     is_accepted = process_listing(listing, parser, normalizer, scorer, db, config, connector)
                     if is_accepted:
                         accepted += 1
@@ -420,6 +430,7 @@ def main():
                         rejected += 1
                         total_rejected += 1
 
+                status.finish(enrich_key)
                 status.clear()
                 print(f"[{portal_name}] Found: {len(listings)} | Accepted: {accepted} | Rejected: {rejected}")
     finally:
