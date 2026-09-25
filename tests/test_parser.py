@@ -35,6 +35,43 @@ def test_motor_detection():
     print("✅ Motor detection tests passed")
 
 
+def test_motor_detection_handles_real_world_phrasing_and_typos():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # Real seller listing: "Performance CX" without "Line", plus the very
+    # common "Perfomance" typo (missing the second r) — neither was matched
+    # before the patterns were widened; this pins that fix.
+    desc = (
+        "Modello: e-bike MTB Bulls Aminga Eva trail full suspesion\n"
+        "Anno: 2020\nBatteria: 500wh\nKm totali: 1241\n"
+        "Motore: bosch Perfomance CX\nTaglia: M"
+    )
+    specs = parser.parse("e-bike MTB Bulls Aminga Eva", desc)
+    assert specs["motor_brand"] == "Bosch"
+    assert specs["motor_torque_nm"] == 85
+    assert specs["motor_verified"] is True
+    assert specs["odometer_km"] == 1241
+
+    # Correctly-spelled "Performance CX" (no "Line") must also match.
+    specs2 = parser.parse("Trek Rail", "Motore Bosch Performance CX, batteria 625Wh")
+    assert specs2["motor_brand"] == "Bosch"
+    assert specs2["motor_torque_nm"] == 85
+
+    print("✅ Real-world motor phrasing/typo test passed")
+
+
+def test_odometer_extracts_km_totali_label_phrasing():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    specs = parser.parse("Trek Rail", "Km totali: 1241")
+    assert specs["odometer_km"] == 1241
+
+    specs2 = parser.parse("Trek Rail", "Km totale 850")
+    assert specs2["odometer_km"] == 850
+
+    print("✅ 'Km totali' odometer phrasing test passed")
+
+
 def test_motor_verified_flag():
     parser = RegexParser(TAXONOMY_PATH)
 
@@ -153,6 +190,8 @@ def test_odometer_no_false_positives():
 
 if __name__ == "__main__":
     test_motor_detection()
+    test_motor_detection_handles_real_world_phrasing_and_typos()
+    test_odometer_extracts_km_totali_label_phrasing()
     test_motor_verified_flag()
     test_battery_extraction()
     test_frame_size_detection()

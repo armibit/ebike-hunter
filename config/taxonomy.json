@@ -6,7 +6,7 @@
       "torque_nm": 85,
       "tier": "top",
       "patterns": [
-        "bosch cx", "performance line cx", "cx gen4", "cx gen 4",
+        "bosch cx", "perfor?mance line cx", "perfor?mance cx", "cx gen4", "cx gen 4",
         "cx smart system", "smart system", "smartsystem", "bosch 85nm",
         "bosch 85 nm", "cx gen5"
       ]
@@ -75,7 +75,7 @@
       "torque_nm": 65,
       "tier": "mid",
       "patterns": [
-        "bosch performance (?!cx)", "performance line (?!cx)", "bosch 65nm"
+        "bosch perfor?mance (?!cx)", "perfor?mance line (?!cx)", "bosch 65nm"
       ]
     },
     "yamaha_pwst": {

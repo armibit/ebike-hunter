@@ -201,6 +201,13 @@ class RegexParser:
             r"(?:percorsi|percorso|chilometri|kilometers?|odometer|km\s+percors)[^\d]*(\d+)",
             r"(\d+)\s*km\s+percors",
             r"chilometri\s*[:\-]?\s*(\d+)",
+            r"chilometraggio\s*[:\-]?\s*(\d+)",
+            # "Km totali: 1241" / "Km totale: 1241" — a field-label phrasing
+            # ("<unit> totali: <value>") distinct from the generic km-value
+            # fallback below, which the word "totali" between "km" and the
+            # number would otherwise defeat.
+            r"km\s*total[ei]\s*[:\-]?\s*(\d+)",
+            r"total[ei]\s*km\s*[:\-]?\s*(\d+)",
             r"km\s*[:\-]?\s*(\d+)(?!\s*(?:wh|mm|nm|travel))",
         ]
         for pattern in patterns:

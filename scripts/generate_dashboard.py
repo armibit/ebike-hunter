@@ -178,7 +178,8 @@ def _build_detail_html(bike: dict, history: list) -> str:
     sections = [
         f'<div class="detail-section"><h3>💰 Prezzo</h3>'
         f'<p class="detail-price">{_attr(_format_price(bike))}</p>'
-        f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}</p></div>',
+        f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}'
+        f' · <a href="{_attr(bike.get("url"))}" target="_blank">Apri annuncio originale ↗</a></p></div>',
         _build_price_history_html(history),
         _build_spec_table_html(bike),
         _build_red_flags_html(bike),
@@ -494,9 +495,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         html += """                <div class="edit-specs">
                     <h3>✏️ Correggi specifiche (es. hai riconosciuto il motore da una foto)</h3>
                     <div class="edit-fields">
-                        <label>Motore <input type="text" id="editMotorBrand" placeholder="es. Bosch"></label>
-                        <label>Modello <input type="text" id="editMotorModel" placeholder="es. Performance CX"></label>
-                        <label>Coppia Nm <input type="number" id="editMotorTorque"></label>
+                        <label>Marca motore <input type="text" id="editMotorBrand" placeholder="es. Bosch"></label>
+                        <label>Modello motore <input type="text" id="editMotorModel" placeholder="es. Performance CX Gen4"></label>
+                        <label>Coppia motore (Nm) <input type="number" id="editMotorTorque"></label>
                         <label>Batteria Wh <input type="number" id="editBattery"></label>
                         <label>Taglia <input type="text" id="editFrame"></label>
                     </div>
