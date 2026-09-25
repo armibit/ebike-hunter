@@ -12,28 +12,141 @@ from db.database import Database
 import yaml
 
 
-def generate_dashboard(db_path: str, output_path: str = "index.html"):
-    """Generate HTML dashboard from DB."""
+def _attr(value) -> str:
+    """Escape a value for safe embedding inside a double-quoted HTML attribute."""
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _format_price(bike: dict) -> str:
+    """Show the price in the currency the listing was actually posted in —
+    not silently converted to CHF. Scoring/filtering still use price_chf
+    internally; this only changes what's displayed. A small "(~X CHF)" hint
+    is appended for non-CHF listings since the budget filters are CHF-based."""
+    price_raw = bike.get("price_raw")
+    currency = (bike.get("currency") or "").upper()
+    price_chf = bike.get("price_chf")
+    if price_raw is None:
+        return f"{price_chf:.0f} CHF" if price_chf is not None else "N/A"
+    text = f"{price_raw:.0f} {currency}".strip()
+    if currency and currency != "CHF" and price_chf is not None:
+        text += f" (~{price_chf:.0f} CHF)"
+    return text
+
+
+def _format_date(iso_str) -> str:
+    if not iso_str:
+        return "N/A"
+    try:
+        return datetime.fromisoformat(str(iso_str)).strftime("%d/%m/%Y")
+    except ValueError:
+        return str(iso_str)[:10]
+
+
+def _format_history(snapshots: list) -> str:
+    if len(snapshots) < 2:
+        return ""
+    return " → ".join(
+        f"{snap['price_raw']:.0f} {snap['currency']} ({_format_date(snap['captured_at'])})"
+        for snap in snapshots
+    )
+
+
+def _build_modal_text(bike: dict, history: list) -> str:
+    """Full detail text for the per-listing modal: publish/age/mileage
+    metadata (mostly parsed by RegexParser from the description — see
+    model_year/odometer_km), price history when the listing has been
+    rescanned at least twice, then the heuristic + AI analysis below.
+
+    Note: only price changes are tracked (listing_snapshots). The seller's
+    description text itself isn't snapshotted anywhere, so an edit to the
+    description (as opposed to the price) can't be surfaced here yet."""
+    anno = bike.get("model_year") or "N/A"
+    km = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
+    lines = [f"📅 Visto la prima volta: {_format_date(bike.get('first_seen_at'))} | Anno modello: {anno} | Percorrenza: {km}"]
+
+    hist_text = _format_history(history)
+    if hist_text:
+        lines.append(f"💰 Storico prezzo: {hist_text}")
+
+    analysis = _combine_analysis(bike)
+    if analysis:
+        lines.append(analysis)
+
+    return "\n\n".join(lines)
+
+
+def _combine_analysis(bike: dict) -> str:
+    """Merge the deterministic heuristic analysis with Claude's ai_analysis
+    verdict (run separately, on demand, by analyze.py) into the single text
+    block the dashboard displays. ai_analysis is additive — it's appended,
+    never replaces the heuristic text — matching how the two are kept
+    separate in the DB (see Database.save_ai_analysis)."""
+    parts = []
+    if bike.get("user_analysis"):
+        parts.append(bike["user_analysis"])
+    if bike.get("ai_analysis"):
+        ai_score = bike.get("ai_score")
+        score_note = f" (score: {ai_score:.0f}/100)" if ai_score is not None else ""
+        parts.append(f"🤖 Verdetto AI{score_note}:\n{bike['ai_analysis']}")
+    return "\n\n".join(parts)
+
+
+def render_dashboard_html(db_path: str, interactive: bool = False, show_all: bool = False) -> str:
+    """Build the dashboard HTML from the DB.
+
+    interactive=True renders the reject/mark-sold/restore buttons and the
+    spec-correction form, wired to POST /api/listings/<id>/... — only
+    meaningful when served by server.py, since a static file:// page has
+    nothing to send those requests to. generate_dashboard() below always
+    calls this with interactive=False so the auto-regenerated index.html
+    (written by run.py/analyze.py) stays a plain read-only snapshot.
+
+    show_all=True drops the ACTIVE/NEW/PRICE_DROP + rejection_reason filter
+    so manually rejected/sold listings are visible again — otherwise, once
+    set_manual_status() removes a listing from that filter, there would be
+    no way to find it again to hit "restore".
+    """
     db = Database(db_path)
 
-    # Fetch all active/price_drop listings with scores + specs
     cursor = db.conn.cursor()
-    cursor.execute("""
+    where_clause = "1=1" if show_all else "l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL"
+    cursor.execute(f"""
     SELECT
-        l.id, l.portal, l.title, l.price_chf, l.distance_km, l.url,
-        l.last_seen_at, l.status, l.user_analysis,
-        s.motor_brand, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh, s.frame_size,
+        l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
+        l.first_seen_at, l.last_seen_at, l.status, l.user_analysis, l.ai_analysis, l.ai_score,
+        s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
+        s.battery_capacity_wh, s.frame_size, s.model_year, s.odometer_km,
         s.travel_front_mm, s.brakes_tier, s.has_red_flag,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
         sc.score_fit_geometry
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
-    WHERE l.status IN ('ACTIVE', 'NEW', 'PRICE_DROP') AND l.rejection_reason IS NULL
+    WHERE {where_clause}
     ORDER BY COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
+
+    # Price history (listing_snapshots), grouped by listing — one query for
+    # all listings rather than one per row, then sliced per-listing below.
+    cursor.execute("""
+    SELECT listing_id, price_raw, currency, captured_at
+    FROM listing_snapshots
+    ORDER BY listing_id, captured_at ASC
+    """)
+    history_by_id = {}
+    for row in cursor.fetchall():
+        history_by_id.setdefault(row["listing_id"], []).append(dict(row))
+
     db.close()
 
     # Top 10
@@ -73,6 +186,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         .status.new {{ background: #bbdefb; color: #01579b; }}
         .status.price-drop {{ background: #f8bbd0; color: #880e4f; }}
         .status.sold {{ background: #ccc; color: #555; text-decoration: line-through; }}
+        .status.rejected {{ background: #ffcdd2; color: #b71c1c; }}
 
         .motor {{ background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
 
@@ -98,13 +212,26 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
         .btn-analysis {{ padding: 4px 8px; background: #1976d2; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; }}
         .btn-analysis:hover {{ background: #1565c0; }}
+
+        .btn-reject {{ padding: 6px 12px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-sold {{ padding: 6px 12px; background: #757575; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-restore {{ padding: 6px 12px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .btn-save {{ padding: 6px 12px; background: #2e7d32; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600; }}
+        .modal-actions {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; display: flex; gap: 8px; }}
+        .edit-specs {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee; }}
+        .edit-specs h3 {{ font-size: 14px; margin-bottom: 10px; }}
+        .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }}
+        .edit-specs label {{ display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: #666; }}
+        .edit-specs input {{ padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🚲 E-Bike Hunter Dashboard</h1>
-        <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati</div>
+        <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati{' (tutti gli stati)' if show_all else ''}</div>
         <div class="meta">⚠️ Portali bloccati (controllo manuale): <a href="https://www.decathlon.ch/search?from=0&size=40" target="_blank">Decathlon.ch</a> (Cloudflare)</div>
+        {'<div class="meta"><a href="/">← Nascondi scartate/vendute</a></div>' if interactive and show_all else ''}
+        {'<div class="meta"><a href="/?all=1">Mostra anche scartate/vendute →</a></div>' if interactive and not show_all else ''}
 
         <div class="filters">
             <div class="filter-group">
@@ -157,11 +284,11 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
     for idx, bike in enumerate(top_10, 1):
         score_val = bike["score_total"] or 0
-        analysis = bike["user_analysis"] or "In attesa di valutazione"
+        analysis = _combine_analysis(bike) or "In attesa di valutazione"
         html += f"""            <div class="top-item">
                 <div><strong>#{idx}</strong> <a href="{bike['url']}" target="_blank">{bike['title']}</a> ({bike['portal']})</div>
                 <div class="top-analysis">{analysis}</div>
-                <div class="top-meta">Score: {score_val:.1f} | {bike['price_chf']:.0f} CHF | {bike['distance_km']:.1f} km</div>
+                <div class="top-meta">Score: {score_val:.1f} | {_format_price(bike)} | {bike['distance_km']:.1f} km</div>
             </div>
 """
 
@@ -173,7 +300,28 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
                 <span class="modal-close" onclick="closeAnalysis()">&times;</span>
                 <h2 id="modalTitle"></h2>
                 <div class="modal-body" id="modalBody"></div>
-            </div>
+"""
+
+    if interactive:
+        html += """                <div class="edit-specs">
+                    <h3>✏️ Correggi specifiche (es. hai riconosciuto il motore da una foto)</h3>
+                    <div class="edit-fields">
+                        <label>Motore <input type="text" id="editMotorBrand" placeholder="es. Bosch"></label>
+                        <label>Modello <input type="text" id="editMotorModel" placeholder="es. Performance CX"></label>
+                        <label>Coppia Nm <input type="number" id="editMotorTorque"></label>
+                        <label>Batteria Wh <input type="number" id="editBattery"></label>
+                        <label>Taglia <input type="text" id="editFrame"></label>
+                    </div>
+                    <button class="btn-save" onclick="saveSpecs()">💾 Salva correzioni</button>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-reject" onclick="rejectListing()">❌ Scarta</button>
+                    <button class="btn-sold" onclick="markSold()">✅ Segna venduta</button>
+                    <button class="btn-restore" onclick="restoreListing()">↩️ Ripristina attiva</button>
+                </div>
+"""
+
+    html += """            </div>
         </div>
 
         <h2 style="font-size: 18px; margin: 30px 0 15px; padding-bottom: 10px; border-bottom: 2px solid #1976d2;">📋 Tutti gli annunci</h2>
@@ -181,11 +329,13 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
             <thead>
                 <tr>
                     <th>Score</th>
-                    <th>Prezzo CHF</th>
+                    <th>Prezzo</th>
                     <th>Distanza km</th>
                     <th>Motore</th>
                     <th>Batteria Wh</th>
                     <th>Taglia</th>
+                    <th>Anno</th>
+                    <th>Km</th>
                     <th>Analisi</th>
                     <th>Status</th>
                     <th>Titolo / Link</th>
@@ -199,7 +349,12 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
         score_class = "high" if score_val >= 80 else "mid" if score_val >= 65 else "low"
 
         status = bike["status"]
-        status_class = "new" if status == "NEW" else "price-drop" if status == "PRICE_DROP" else "sold" if status == "SOLD" else ""
+        status_class = (
+            "new" if status == "NEW" else
+            "price-drop" if status == "PRICE_DROP" else
+            "sold" if status == "SOLD" else
+            "rejected" if status == "REJECTED" else ""
+        )
 
         motor_text = f"{bike['motor_brand']}" if bike["motor_brand"] else "N/A"
         if bike.get("motor_torque_nm"):
@@ -209,20 +364,25 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = bike["frame_size"] or "N/A"
+        price_text = _format_price(bike)
+        anno_text = bike.get("model_year") or "N/A"
+        km_text = f"{bike['odometer_km']:.0f}" if bike.get("odometer_km") else "N/A"
 
-        analysis = bike["user_analysis"] or ""
+        analysis = _build_modal_text(bike, history_by_id.get(bike["id"], []))
 
         row_class = "sold" if status == "SOLD" else ""
         # Escape analysis for JS
         analysis_escaped = analysis.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-        html += f"""                <tr class="{row_class}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-analysis="{analysis_escaped}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
-                    <td>{bike['price_chf']:.0f}</td>
+                    <td>{price_text}</td>
                     <td>{bike['distance_km']:.1f}</td>
                     <td><span class="motor">{motor_text}</span></td>
                     <td>{battery_text}</td>
                     <td>{frame_text}</td>
+                    <td>{anno_text}</td>
+                    <td>{km_text}</td>
                     <td><button class="btn-analysis" onclick="showAnalysis(this)">📋 Analisi</button></td>
                     <td><span class="status {status_class}">{status}</span></td>
                     <td><a href="{bike['url']}" target="_blank">{bike['title'][:60]}...</a> <br><small>({bike['portal']})</small></td>
@@ -235,17 +395,72 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
     <script>
         // Modal functions
+        let currentListingId = null;
+
         function showAnalysis(button) {
             const row = button.closest('tr');
+            currentListingId = row.getAttribute('data-id');
             const analysis = row.getAttribute('data-analysis');
             const title = row.querySelector('a').textContent;
             document.getElementById('modalTitle').textContent = '📋 ' + title;
             document.getElementById('modalBody').textContent = analysis;
+
+            const motorBrandInput = document.getElementById('editMotorBrand');
+            if (motorBrandInput) {
+                motorBrandInput.value = row.getAttribute('data-edit-motor-brand') || '';
+                document.getElementById('editMotorModel').value = row.getAttribute('data-edit-motor-model') || '';
+                document.getElementById('editMotorTorque').value = row.getAttribute('data-edit-motor-torque') || '';
+                document.getElementById('editBattery').value = row.getAttribute('data-edit-battery') || '';
+                document.getElementById('editFrame').value = row.getAttribute('data-edit-frame') || '';
+            }
+
             document.getElementById('analysisModal').classList.add('show');
         }
 
         function closeAnalysis() {
             document.getElementById('analysisModal').classList.remove('show');
+        }
+
+        // Reject / mark sold / restore / spec-correction actions — POST to
+        // server.py's API and reload so the page always reflects fresh DB
+        // state. Requires the interactive dashboard (python3 server.py);
+        // opening index.html directly has no server to answer these.
+        async function postAction(path, body) {
+            try {
+                const resp = await fetch(`/api/listings/${currentListingId}/${path}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body || {})
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+                location.reload();
+            } catch (e) {
+                alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py) e di aver aperto http://127.0.0.1:5050 — non il file index.html.\\n\\n' + e.message);
+            }
+        }
+
+        function rejectListing() {
+            if (confirm('Scartare questo annuncio?')) postAction('reject');
+        }
+
+        function markSold() {
+            if (confirm('Segnare questo annuncio come venduto?')) postAction('sold');
+        }
+
+        function restoreListing() {
+            postAction('restore');
+        }
+
+        function saveSpecs() {
+            const torque = document.getElementById('editMotorTorque').value;
+            const battery = document.getElementById('editBattery').value;
+            postAction('specs', {
+                motor_brand: document.getElementById('editMotorBrand').value || null,
+                motor_model: document.getElementById('editMotorModel').value || null,
+                motor_torque_nm: torque !== '' ? parseFloat(torque) : null,
+                battery_capacity_wh: battery !== '' ? parseFloat(battery) : null,
+                frame_size: document.getElementById('editFrame').value || null
+            });
         }
 
         // Close modal on ESC key
@@ -317,7 +532,7 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="9" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="11" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }
@@ -339,11 +554,16 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 </html>
 """
 
-    # Write HTML
+    return html
+
+
+def generate_dashboard(db_path: str, output_path: str = "index.html"):
+    """Write the (read-only, non-interactive) dashboard snapshot to disk.
+    Used by run.py and analyze.py after each scan/analysis pass."""
+    html = render_dashboard_html(db_path, interactive=False)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
-
-    print(f"✓ Dashboard generated: {output_path} ({len(listings)} listings, top 10 deals)")
+    print(f"✓ Dashboard generated: {output_path}")
 
 
 if __name__ == "__main__":

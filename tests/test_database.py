@@ -373,6 +373,78 @@ def test_price_drop_after_ai_analysis_is_eligible_again():
     print("✅ Price-drop re-eligibility test passed")
 
 
+def test_set_manual_status_reject_and_restore():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    listing = {
+        "portal": "tutti", "portal_id": "55555", "url": "https://tutti.ch/manual",
+        "title": "Manually reviewed bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    listing_id, _, _ = db.upsert_listing(listing)
+
+    db.set_manual_status(listing_id, "REJECTED")
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", (listing_id,))
+    row = cursor.fetchone()
+    assert row["status"] == "REJECTED"
+    assert row["rejection_reason"]
+
+    # Undo must clear the rejection_reason too, not just flip status back.
+    db.set_manual_status(listing_id, "ACTIVE")
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", (listing_id,))
+    row = cursor.fetchone()
+    assert row["status"] == "ACTIVE"
+    assert row["rejection_reason"] is None
+
+    db.set_manual_status(listing_id, "SOLD")
+    cursor.execute("SELECT status FROM listings WHERE id = ?", (listing_id,))
+    assert cursor.fetchone()["status"] == "SOLD"
+
+    try:
+        db.set_manual_status(listing_id, "BOGUS")
+        assert False, "should have raised ValueError"
+    except ValueError:
+        pass
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Manual status reject/restore test passed")
+
+
+def test_get_listing_with_specs():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    listing = {
+        "portal": "tutti", "portal_id": "66666", "url": "https://tutti.ch/specs",
+        "title": "Spec lookup bike", "price_raw": 2100, "currency": "CHF",
+        "price_chf": 2100, "price_eur": 2205, "distance_km": 12.0, "status": "ACTIVE",
+    }
+    listing_id, _, _ = db.upsert_listing(listing)
+    db.save_specifications(listing_id, {
+        "motor_brand": "Unknown Motor", "motor_torque_nm": 60, "motor_verified": False,
+        "battery_capacity_wh": 625, "frame_size": "M",
+    })
+
+    fetched = db.get_listing_with_specs(listing_id)
+    assert fetched["price_chf"] == 2100
+    assert fetched["distance_km"] == 12.0
+    assert fetched["motor_brand"] == "Unknown Motor"
+    assert fetched["motor_verified"] == 0
+
+    assert db.get_listing_with_specs("nonexistent_id") is None
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ get_listing_with_specs test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
@@ -384,4 +456,6 @@ if __name__ == "__main__":
     test_ai_analysis_columns_and_save()
     test_get_listings_needing_ai_analysis()
     test_price_drop_after_ai_analysis_is_eligible_again()
+    test_set_manual_status_reject_and_restore()
+    test_get_listing_with_specs()
     print("\n✅ All database tests passed!")

@@ -306,6 +306,53 @@ class Database:
         """, (status, now, listing_id))
         self.conn.commit()
 
+    def set_manual_status(self, listing_id: str, status: str, reason: Optional[str] = None):
+        """User-driven status override from the interactive dashboard
+        (server.py) — REJECTED ("non mi piace"), SOLD, or ACTIVE (undo).
+        Distinct from mark_sold_or_delisted(), which the scanner itself uses
+        for automated 404-detected SOLD marks; this one also clears/sets
+        rejection_reason so a restored listing doesn't carry a stale one."""
+        if status not in ("REJECTED", "SOLD", "ACTIVE"):
+            raise ValueError(f"Unsupported manual status: {status!r}")
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        if status == "REJECTED":
+            cursor.execute(
+                "UPDATE listings SET status = ?, rejection_reason = ?, delisted_at = ? WHERE id = ?",
+                (status, reason or "Scartata manualmente dall'utente", now, listing_id),
+            )
+        elif status == "SOLD":
+            cursor.execute(
+                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = ? WHERE id = ?",
+                (status, now, listing_id),
+            )
+        else:  # ACTIVE — undo a manual reject/sold
+            cursor.execute(
+                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = NULL WHERE id = ?",
+                (status, listing_id),
+            )
+        self.conn.commit()
+
+    def get_listing_with_specs(self, listing_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch one listing's price/distance plus its full specifications
+        row, flattened into a single dict — everything the scoring engine
+        and save_specifications() need to apply and persist a manual spec
+        correction from the dashboard."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+        SELECT l.id, l.price_chf, l.distance_km,
+               s.brand, s.model, s.model_year, s.category, s.suspension_type,
+               s.travel_front_mm, s.travel_rear_mm, s.frame_size, s.motor_brand,
+               s.motor_model, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh,
+               s.odometer_km, s.brakes_model, s.brakes_tier, s.fork_tier,
+               s.has_red_flag, s.red_flag_details
+        FROM listings l
+        LEFT JOIN specifications s ON l.id = s.listing_id
+        WHERE l.id = ?
+        """, (listing_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def get_top_deals(self, min_score: float = 65.0, limit: int = 50) -> List[Dict[str, Any]]:
         cursor = self.conn.cursor()
         cursor.execute("""
