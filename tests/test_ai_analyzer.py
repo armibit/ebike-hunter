@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,7 +6,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE
+from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE, DEFAULT_MODEL
 
 BUYER_PROFILE = {
     "location": {"name": "Lugano, Ticino"},
@@ -67,29 +68,56 @@ def test_analyze_batch_too_large_raises():
 
 
 def test_analyze_batch_happy_path_parses_results():
-    client = MagicMock()
-    client.messages.create.return_value = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "Good condition, minor cosmetic scratch noted.", "ai_score": 78.0},
-    ])
-    analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+    prev = os.environ.pop("ANTHROPIC_MODEL", None)
+    try:
+        client = MagicMock()
+        client.messages.create.return_value = _tool_use_response([
+            {"listing_id": "tutti_1", "ai_analysis": "Good condition, minor cosmetic scratch noted.", "ai_score": 78.0},
+        ])
+        analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
-    results = analyzer.analyze_batch([_listing("tutti_1")])
+        results = analyzer.analyze_batch([_listing("tutti_1")])
 
-    assert results == [{
-        "listing_id": "tutti_1",
-        "ai_analysis": "Good condition, minor cosmetic scratch noted.",
-        "ai_score": 78.0,
-    }]
+        assert results == [{
+            "listing_id": "tutti_1",
+            "ai_analysis": "Good condition, minor cosmetic scratch noted.",
+            "ai_score": 78.0,
+        }]
 
-    call_kwargs = client.messages.create.call_args.kwargs
-    assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
-    assert call_kwargs["tool_choice"] == {"type": "tool", "name": "submit_analysis"}
-    assert call_kwargs["tools"][0]["name"] == "submit_analysis"
-    prompt = call_kwargs["messages"][0]["content"]
-    assert "tutti_1" in prompt
-    assert "graffio" in prompt  # raw description text must reach the prompt verbatim
-    assert "Lugano" in prompt  # buyer profile context included
+        call_kwargs = client.messages.create.call_args.kwargs
+        assert call_kwargs["model"] == DEFAULT_MODEL
+        assert call_kwargs["tool_choice"] == {"type": "tool", "name": "submit_analysis"}
+        assert call_kwargs["tools"][0]["name"] == "submit_analysis"
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "tutti_1" in prompt
+        assert "graffio" in prompt  # raw description text must reach the prompt verbatim
+        assert "Lugano" in prompt  # buyer profile context included
+    finally:
+        if prev is not None:
+            os.environ["ANTHROPIC_MODEL"] = prev
     print("✅ AI analyze_batch happy path test passed")
+
+
+def test_analyze_batch_respects_anthropic_model_env_override():
+    prev = os.environ.get("ANTHROPIC_MODEL")
+    os.environ["ANTHROPIC_MODEL"] = "local-llama-70b"
+    try:
+        client = MagicMock()
+        client.messages.create.return_value = _tool_use_response([
+            {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": 70.0},
+        ])
+        analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+
+        analyzer.analyze_batch([_listing("tutti_1")])
+
+        call_kwargs = client.messages.create.call_args.kwargs
+        assert call_kwargs["model"] == "local-llama-70b"
+    finally:
+        if prev is None:
+            os.environ.pop("ANTHROPIC_MODEL", None)
+        else:
+            os.environ["ANTHROPIC_MODEL"] = prev
+    print("✅ AI analyze_batch ANTHROPIC_MODEL override test passed")
 
 
 def test_analyze_batch_api_error_returns_empty_list():
@@ -173,6 +201,7 @@ if __name__ == "__main__":
     test_analyze_batch_empty_input_skips_api_call()
     test_analyze_batch_too_large_raises()
     test_analyze_batch_happy_path_parses_results()
+    test_analyze_batch_respects_anthropic_model_env_override()
     test_analyze_batch_api_error_returns_empty_list()
     test_parse_response_skips_unknown_listing_id()
     test_parse_response_skips_incomplete_result()

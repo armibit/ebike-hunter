@@ -15,14 +15,29 @@ deterministic score_total but never replace or influence it, so
 Database.get_top_deals()'s filtering stays fully deterministic.
 """
 import logging
+import os
 from typing import Any, Dict, List
 
 import anthropic
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
+# ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL are read
+# automatically by anthropic.Anthropic() — only the model needs wiring up
+# by hand, since messages.create() has no env-var default for it. This is
+# what lets an Anthropic-compatible local/self-hosted endpoint stand in for
+# the real API: point ANTHROPIC_BASE_URL at it and set ANTHROPIC_MODEL to
+# whatever model name that endpoint expects.
+#
+# Resolved lazily (not at import time) so a value set in .env, which is
+# loaded by analyze.py's main() *after* this module is imported, still
+# takes effect.
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_BATCH_SIZE = 15  # keeps one call's prompt + output comfortably in-budget
+
+
+def _resolve_model() -> str:
+    return os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
 
 _RESULT_TOOL = {
     "name": "submit_analysis",
@@ -83,7 +98,7 @@ class AIAnalyzer:
         prompt = self._build_prompt(listings)
         try:
             response = self.client.messages.create(
-                model=MODEL,
+                model=_resolve_model(),
                 max_tokens=4096,
                 tools=[_RESULT_TOOL],
                 tool_choice={"type": "tool", "name": "submit_analysis"},
