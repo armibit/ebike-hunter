@@ -64,130 +64,130 @@ def generate_user_analysis(score: float, specs: Dict, listing_data: Dict) -> str
 
     lines = []
 
-    # Header: Verdict
+    # Intestazione: verdetto
     if score >= 85:
-        verdict = "🟢 HIGHLY RECOMMENDED - Top candidate for viewing"
+        verdict = "🟢 FORTEMENTE CONSIGLIATA - Prima scelta da vedere"
     elif score >= 75:
-        verdict = "🟡 WORTH CONSIDERING - Good balance of specs"
+        verdict = "🟡 DA CONSIDERARE - Buon equilibrio tra le specifiche"
     elif score >= 65:
-        verdict = "🟠 ACCEPTABLE - Meets minimum requirements"
+        verdict = "🟠 ACCETTABILE - Rispetta i requisiti minimi"
     else:
-        verdict = "🔴 LOWER PRIORITY - Not ideal match"
+        verdict = "🔴 PRIORITÀ BASSA - Non è un match ideale"
 
     lines.append(f"**{verdict}**\n")
 
-    # Motor analysis
+    # Analisi motore
     # DB round-trips this as 0/1/None (SQLite has no bool type); the freshly
     # parsed dict from RegexParser.parse() carries True/False/None instead —
     # accept either.
     motor_verified = specs.get("motor_verified")
     if motor and torque and motor_verified in (False, 0):
         lines.append(
-            f"• Motor: {motor} — Not named in the text, torque assumed ⚠️ "
-            "VERIFY FROM PHOTOS/SELLER before ruling this out"
+            f"• Motore: {motor} — Non nominato nel testo, coppia presunta ⚠️ "
+            "VERIFICA DALLE FOTO/VENDITORE prima di escluderla"
         )
     elif motor and torque:
         if torque >= 85:
-            motor_note = f"{motor} {torque:.0f}Nm — Excellent power ✓✓"
+            motor_note = f"{motor} {torque:.0f}Nm — Potenza eccellente ✓✓"
         elif torque >= 75:
-            motor_note = f"{motor} {torque:.0f}Nm — Good power ✓"
+            motor_note = f"{motor} {torque:.0f}Nm — Buona potenza ✓"
         else:
-            motor_note = f"{motor} {torque:.0f}Nm — Weak, below target"
-        lines.append(f"• Motor: {motor_note}")
+            motor_note = f"{motor} {torque:.0f}Nm — Debole, sotto la soglia target"
+        lines.append(f"• Motore: {motor_note}")
     elif motor:
-        lines.append(f"• Motor: {motor} — Torque not specified (check with seller)")
+        lines.append(f"• Motore: {motor} — Coppia non specificata (chiedi al venditore)")
     else:
-        lines.append("• Motor: Not detected — Likely not an e-bike or specs unclear")
+        lines.append("• Motore: Non rilevato — Probabilmente non è una e-bike o le specifiche non sono chiare")
 
-    # Battery analysis
+    # Analisi batteria
     if battery:
         if battery >= 625:
-            batt_note = f"{battery:.0f}Wh — Excellent range ✓✓"
+            batt_note = f"{battery:.0f}Wh — Autonomia eccellente ✓✓"
         elif battery >= 500:
-            batt_note = f"{battery:.0f}Wh — Good range ✓"
+            batt_note = f"{battery:.0f}Wh — Buona autonomia ✓"
         else:
-            batt_note = f"{battery:.0f}Wh — Limited range ⚠️"
-        lines.append(f"• Battery: {batt_note}")
+            batt_note = f"{battery:.0f}Wh — Autonomia limitata ⚠️"
+        lines.append(f"• Batteria: {batt_note}")
     else:
-        lines.append("• Battery: Not specified (ask seller)")
+        lines.append("• Batteria: Non specificata (chiedi al venditore)")
 
-    # Frame size analysis
+    # Analisi taglia
     if frame:
         if frame == "M":
-            frame_note = "Perfect match ✓✓"
+            frame_note = "Corrispondenza perfetta ✓✓"
         elif frame in ("S2", "S3"):
-            frame_note = "Close fit, might work"
+            frame_note = "Vicina, potrebbe andare bene"
         else:
-            frame_note = f"Size {frame} — may not fit 170cm"
-        lines.append(f"• Frame Size: {frame} — {frame_note}")
+            frame_note = f"Taglia {frame} — potrebbe non adattarsi a 170cm"
+        lines.append(f"• Taglia: {frame} — {frame_note}")
     else:
-        lines.append("• Frame Size: Not specified (critical — ask immediately)")
+        lines.append("• Taglia: Non specificata (critico — chiedi subito)")
 
-    # Suspension analysis
+    # Analisi sospensioni
     if suspension:
         if suspension == "full_suspension":
             susp_note = "Full suspension ✓✓"
         elif suspension == "hardtail":
-            susp_note = "Hardtail (acceptable if price/specs exceptional)"
+            susp_note = "Hardtail (accettabile solo se prezzo/specifiche eccezionali)"
         else:
-            susp_note = f"Unknown suspension type"
+            susp_note = "Tipo di sospensione sconosciuto"
         if travel:
-            susp_note += f" — {travel}mm travel"
-        lines.append(f"• Suspension: {susp_note}")
+            susp_note += f" — {travel}mm di escursione"
+        lines.append(f"• Sospensione: {susp_note}")
 
-    # Brakes analysis
+    # Analisi freni
     if brakes:
         if brakes in ("four_piston", "high"):
-            brake_note = "High-end brakes ✓✓"
+            brake_note = "Freni di fascia alta ✓✓"
         elif brakes in ("two_piston", "mid"):
-            brake_note = "Mid-range brakes ✓"
+            brake_note = "Freni di fascia media ✓"
         else:
             brake_note = f"{brakes}"
-        lines.append(f"• Brakes: {brake_note}")
+        lines.append(f"• Freni: {brake_note}")
 
-    # Condition analysis
+    # Analisi condizione
     if odometer:
         if odometer < 500:
-            cond_note = "Very low mileage ✓✓"
+            cond_note = "Chilometraggio molto basso ✓✓"
         elif odometer < 2000:
-            cond_note = "Low mileage ✓"
+            cond_note = "Chilometraggio basso ✓"
         elif odometer < 5000:
-            cond_note = "Normal usage"
+            cond_note = "Utilizzo normale"
         else:
-            cond_note = f"High mileage — verify condition"
-        lines.append(f"• Condition: {odometer:.0f} km — {cond_note}")
+            cond_note = "Chilometraggio alto — verifica le condizioni"
+        lines.append(f"• Condizione: {odometer:.0f} km — {cond_note}")
 
-    # Distance analysis
+    # Analisi distanza
     if distance < 15:
-        dist_note = f"Very close ({distance:.1f}km) ✓✓ — Easy visit"
+        dist_note = f"Molto vicina ({distance:.1f}km) ✓✓ — Facile da visitare"
     elif distance < 30:
-        dist_note = f"Nearby ({distance:.1f}km) ✓ — Reachable by train"
+        dist_note = f"Nelle vicinanze ({distance:.1f}km) ✓ — Raggiungibile in treno"
     elif distance < 60:
-        dist_note = f"Moderate ({distance:.1f}km) — Plan trip"
+        dist_note = f"Distanza media ({distance:.1f}km) — Organizza la trasferta"
     else:
-        dist_note = f"Far ({distance:.1f}km) — Worth it only if very good specs"
-    lines.append(f"• Location: {dist_note}")
+        dist_note = f"Lontana ({distance:.1f}km) — Vale la pena solo con specifiche molto buone"
+    lines.append(f"• Posizione: {dist_note}")
 
-    # Price analysis
+    # Analisi prezzo
     target_price = 2200
     if price < 1800:
-        price_note = f"Below target ({price:.0f} CHF) ✓✓ — Excellent value"
+        price_note = f"Sotto il target ({price:.0f} CHF) ✓✓ — Ottimo affare"
     elif price < target_price:
-        price_note = f"In budget ({price:.0f} CHF, target {target_price}) ✓"
+        price_note = f"Nel budget ({price:.0f} CHF, target {target_price}) ✓"
     else:
-        price_note = f"Above target ({price:.0f} CHF, target {target_price}) — Negotiate"
-    lines.append(f"• Price: {price_note}")
+        price_note = f"Sopra il target ({price:.0f} CHF, target {target_price}) — Prova a negoziare"
+    lines.append(f"• Prezzo: {price_note}")
 
-    # Red flags
+    # Segnalazioni
     if red_flags:
         flag_str = ", ".join(red_flags[:3])
-        lines.append(f"\n⚠️  Red flags: {flag_str}")
+        lines.append(f"\n⚠️  Segnalazioni: {flag_str}")
 
-    # Final recommendation
-    lines.append(f"\n**Recommendation**: Score {score:.0f}/100. " +
-                ("Go see this bike — high likelihood of match." if score >= 80 else
-                 "Good option, worth exploring." if score >= 70 else
-                 "Acceptable but not ideal. Compare with other options first."))
+    # Raccomandazione finale
+    lines.append(f"\n**Raccomandazione**: Punteggio {score:.0f}/100. " +
+                ("Vale la pena andare a vederla di persona — alta probabilità di match." if score >= 80 else
+                 "Buona opzione, vale la pena approfondire." if score >= 70 else
+                 "Accettabile ma non ideale. Confronta prima con altre opzioni."))
 
     return "\n".join(lines)
 

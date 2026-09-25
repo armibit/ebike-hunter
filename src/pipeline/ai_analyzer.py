@@ -57,10 +57,13 @@ _RESULT_TOOL = {
                         "ai_analysis": {
                             "type": "string",
                             "description": (
-                                "2-4 sentence verdict for a human buyer. Reference specific "
-                                "details from the description (condition notes, wear, seller "
-                                "remarks, brand/model reputation, known issues) — don't just "
-                                "restate the specs table."
+                                "2-4 sentence verdict for a human buyer, written in ITALIAN "
+                                "(the buyer is Italian-speaking; the listing description may be "
+                                "in Italian, German, French or English — always answer in Italian "
+                                "regardless of the source language). Reference specific details "
+                                "from the description (condition notes, wear, seller remarks, "
+                                "brand/model reputation, known issues) — don't just restate the "
+                                "specs table."
                             ),
                         },
                         "ai_score": {
@@ -135,6 +138,10 @@ class AIAnalyzer:
         profile = self.buyer_profile
         lines = [
             "You are helping a buyer evaluate used e-mountain-bike listings.",
+            "",
+            "Write ai_analysis in ITALIAN, always — the buyer is Italian-speaking. "
+            "The listing description you're reading may be in Italian, German, French "
+            "or English; that never changes the output language.",
             "",
             "Buyer profile:",
             f"- Location: {profile.get('location', {}).get('name', 'unknown')}",

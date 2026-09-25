@@ -108,7 +108,15 @@ _SUSPENSION_LABELS = {"full_suspension": "Full suspension", "hardtail": "Hardtai
 _BRAKES_LABELS = {"four_piston": "4 pistoncini (top)", "two_piston": "2 pistoncini", "unknown": "Non specificati"}
 
 
+def _score_class(value) -> str:
+    value = value or 0
+    return "high" if value >= 80 else "mid" if value >= 65 else "low"
+
+
 def _build_spec_table_html(bike: dict) -> str:
+    """Compact 2-column grid (not a tall list) — specs are the first thing
+    to scan in the detail card, so they shouldn't cost more vertical space
+    than they need to."""
     motor_bits = [b for b in (bike.get("motor_brand"), bike.get("motor_model")) if b]
     motor_text = _attr(" ".join(motor_bits)) if motor_bits else "N/A"
     if bike.get("motor_torque_nm"):
@@ -124,7 +132,7 @@ def _build_spec_table_html(bike: dict) -> str:
     if bike.get("travel_front_mm"):
         suspension_text += f" · {bike['travel_front_mm']:.0f}mm"
 
-    rows = [
+    items = [
         ("Motore", motor_text),
         ("Batteria", f"{bike['battery_capacity_wh']:.0f} Wh" if bike.get("battery_capacity_wh") else "N/A"),
         ("Taglia", _attr(bike.get("frame_size")) or "N/A"),
@@ -133,8 +141,11 @@ def _build_spec_table_html(bike: dict) -> str:
         ("Sospensione", suspension_text),
         ("Freni", _BRAKES_LABELS.get(bike.get("brakes_tier"), _attr(bike.get("brakes_tier")) or "N/A")),
     ]
-    rows_html = "".join(f"<tr><td>{label}</td><td>{value}</td></tr>" for label, value in rows)
-    return f'<div class="detail-section"><h3>⚙️ Specifiche</h3><table class="spec-table">{rows_html}</table></div>'
+    items_html = "".join(
+        f'<div class="spec-item"><div class="spec-label">{label}</div><div class="spec-value">{value}</div></div>'
+        for label, value in items
+    )
+    return f'<div class="detail-section"><h3>⚙️ Specifiche</h3><div class="spec-grid">{items_html}</div></div>'
 
 
 def _build_score_breakdown_html(bike: dict) -> str:
@@ -174,16 +185,30 @@ def _build_detail_html(bike: dict, history: list) -> str:
     single wall-of-escaped-text approach (which also had a real bug: it
     escaped newlines to the literal two characters "\\n" for a JS-string
     context that was never actually used, so they rendered as literal
-    backslash-n in the page instead of line breaks)."""
+    backslash-n in the page instead of line breaks).
+
+    Ordered by what's actually useful to scan first, top to bottom: a
+    compact price+score+link strip, then specs (the primary "does this
+    match?" check), then any warnings, then the two written verdicts
+    (heuristic, then AI), and only at the bottom the price history and the
+    score sub-breakdown — reference detail you dig into, not headline info,
+    so it shouldn't push the important stuff below the fold."""
+    total = bike.get("score_total") or 0
+    top_bar = (
+        '<div class="detail-section">'
+        '<div class="detail-topbar">'
+        f'<span class="detail-price">{_attr(_format_price(bike))}</span>'
+        f'<span class="score {_score_class(total)}">{total:.0f}</span>'
+        f'<a href="{_attr(bike.get("url"))}" target="_blank">Apri annuncio originale ↗</a>'
+        "</div>"
+        f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}</p>'
+        "</div>"
+    )
+
     sections = [
-        f'<div class="detail-section"><h3>💰 Prezzo</h3>'
-        f'<p class="detail-price">{_attr(_format_price(bike))}</p>'
-        f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}'
-        f' · <a href="{_attr(bike.get("url"))}" target="_blank">Apri annuncio originale ↗</a></p></div>',
-        _build_price_history_html(history),
+        top_bar,
         _build_spec_table_html(bike),
         _build_red_flags_html(bike),
-        _build_score_breakdown_html(bike),
     ]
 
     if bike.get("user_analysis"):
@@ -200,6 +225,9 @@ def _build_detail_html(bike: dict, history: list) -> str:
             f'<span class="badge badge-ai">{score_note}</span></h3>'
             f'{_render_text_block(bike["ai_analysis"])}</div>'
         )
+
+    sections.append(_build_price_history_html(history))
+    sections.append(_build_score_breakdown_html(bike))
 
     return "".join(s for s in sections if s)
 
@@ -363,15 +391,17 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .detail-section h3 {{ font-size: 13px; margin-bottom: 10px; color: var(--primary); text-transform: uppercase; letter-spacing: .03em; }}
         .detail-section p {{ margin: 6px 0; }}
         .detail-section ul {{ margin: 6px 0 6px 20px; }}
-        .detail-price {{ font-size: 22px; font-weight: 700; }}
-        .detail-sub {{ font-size: 12px; color: var(--text-muted); }}
+        .detail-topbar {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
+        .detail-price {{ font-size: 20px; font-weight: 700; }}
+        .detail-sub {{ font-size: 12px; color: var(--text-muted); margin-top: 4px; }}
         .detail-warning {{ background: var(--warning-bg); border-radius: var(--radius-sm); padding: 14px 16px; border-bottom: none; }}
         .detail-warning h3 {{ color: #92400e; }}
         .detail-ai {{ background: var(--primary-light); border-radius: var(--radius-sm); padding: 14px 16px; border-bottom: none; }}
 
-        .spec-table {{ width: 100%; border-collapse: collapse; box-shadow: none; }}
-        .spec-table td {{ padding: 7px 8px; border-bottom: 1px solid var(--bg); font-size: 13px; }}
-        .spec-table td:first-child {{ color: var(--text-muted); width: 40%; }}
+        .spec-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 20px; }}
+        .spec-item {{ min-width: 0; }}
+        .spec-label {{ font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }}
+        .spec-value {{ font-size: 14px; font-weight: 600; }}
 
         .price-history {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
         .price-chip {{ background: var(--bg); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; }}
@@ -504,7 +534,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <button class="btn-save" onclick="saveSpecs()">💾 Salva correzioni</button>
                 </div>
                 <div class="modal-actions">
-                    <button class="btn-reject" onclick="rejectListing()">❌ Scarta</button>
+                    <button class="btn-reject" onclick="rejectListing()">✕ Scarta</button>
                     <button class="btn-sold" onclick="markSold()">✅ Segna venduta</button>
                     <button class="btn-restore" onclick="restoreListing()">↩️ Ripristina attiva</button>
                 </div>
@@ -534,7 +564,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
     for idx, bike in enumerate(listings):
         score_val = bike["score_total"] or 0
-        score_class = "high" if score_val >= 80 else "mid" if score_val >= 65 else "low"
+        score_class = _score_class(score_val)
 
         status = bike["status"]
         status_class = (
@@ -576,7 +606,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 '<div class="row-actions">'
                 f'{star_btn}'
                 '<button class="icon-btn" onclick="showAnalysis(this)" title="Dettagli e correzioni">📋</button>'
-                '<button class="icon-btn icon-danger" onclick="rejectRow(this)" title="Scarta — non mi interessa">❌</button>'
+                '<button class="icon-btn icon-danger" onclick="rejectRow(this)" title="Scarta — non mi interessa">✕</button>'
                 '<button class="icon-btn icon-success" onclick="soldRow(this)" title="Segna come venduta">✅</button>'
                 '</div>'
             )

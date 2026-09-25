@@ -260,6 +260,16 @@ def test_build_prompt_includes_all_listings():
     print("✅ AI build_prompt multi-listing test passed")
 
 
+def test_build_prompt_instructs_italian_output():
+    # The buyer is Italian-speaking; the listing text itself can be in any
+    # language, but ai_analysis must always come back in Italian.
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=MagicMock())
+    prompt = analyzer._build_prompt([_listing("tutti_1")])
+
+    assert "ITALIAN" in prompt
+    print("✅ AI build_prompt Italian-instruction test passed")
+
+
 if __name__ == "__main__":
     test_analyze_batch_empty_input_skips_api_call()
     test_analyze_batch_too_large_raises()
@@ -274,4 +284,5 @@ if __name__ == "__main__":
     test_parse_response_drops_malformed_corrected_specs_fields()
     test_parse_response_missing_corrected_specs_defaults_to_empty()
     test_build_prompt_includes_all_listings()
+    test_build_prompt_instructs_italian_output()
     print("\n✅ All AI analyzer tests passed!")
