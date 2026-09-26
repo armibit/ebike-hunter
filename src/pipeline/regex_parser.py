@@ -85,6 +85,23 @@ class RegexParser:
                         "verified": True
                     }
 
+        # Fallback: no known brand/model matched, but the text states an explicit
+        # torque number anyway — common for budget/generic-motor brands that aren't
+        # (and can't realistically all be) in taxonomy.json's curated motor list, e.g.
+        # "Maximum Torque 65 N·m" on a Lankeleisi listing. This is a real value read
+        # off the text, not a guess, so — unlike the generic e-bike-keyword fallback
+        # below — it's marked verified.
+        torque_match = re.search(r"\b(\d{2,3})\s*n[\s.·]?m\b", text, re.IGNORECASE)
+        if torque_match:
+            torque = int(torque_match.group(1))
+            if 20 <= torque <= 160:
+                return {
+                    "brand": "Unknown Motor",
+                    "model": "Not specified",
+                    "torque_nm": torque,
+                    "verified": True
+                }
+
         # Fallback: if text contains e-bike keywords, assume it's an e-bike with unknown
         # motor rather than rejecting it outright — a listing whose description simply
         # doesn't name the motor (common when it's only visible in a photo) shouldn't be

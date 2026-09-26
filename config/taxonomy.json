@@ -164,7 +164,7 @@
       "full-suspension", "doppia sospensione", "all-mountain", "enduro", "trail"
     ],
     "hardtail_disallowed": [
-      "hardtail", "front", "monoammortizzata", "front suspended", "hard tail",
+      "hardtail", "monoammortizzata", "front suspended", "hard tail",
       "front-suspension", "hard-tail"
     ]
   },

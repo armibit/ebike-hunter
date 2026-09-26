@@ -93,6 +93,40 @@ def test_motor_verified_flag():
     assert specs_none["motor_brand"] is None
     assert specs_none["motor_verified"] is None
 
+
+def test_motor_reads_explicit_torque_for_unrecognized_brand():
+    # A budget/generic motor brand that isn't in taxonomy.json's curated
+    # list (e.g. Lankeleisi's own motor) still states its real torque in
+    # the text — that's a value read off the text, not a guess, so it must
+    # be used (and marked verified) instead of falling back to the flat
+    # 60Nm "unverified guess" placeholder.
+    parser = RegexParser(TAXONOMY_PATH)
+
+    specs = parser.parse(
+        "Lankeleisi MG600 Pro 29 Full Suspension E-MTB",
+        "Maximum Torque 65 N·m Controller 18A Controller Riding Mode",
+    )
+    assert specs["motor_brand"] == "Unknown Motor"
+    assert specs["motor_torque_nm"] == 65
+    assert specs["motor_verified"] is True
+
+    # Same, with the "N.m" (period) and plain "Nm" spellings.
+    specs_period = parser.parse("Generic e-bike", "torque of up to 65 N.m , allowing you to control terrain")
+    assert specs_period["motor_torque_nm"] == 65
+    assert specs_period["motor_verified"] is True
+
+    specs_plain = parser.parse("Generic e-bike", "Motor torque: 70Nm, great for climbing")
+    assert specs_plain["motor_torque_nm"] == 70
+    assert specs_plain["motor_verified"] is True
+
+    # An implausible number (well outside any real e-bike motor's range)
+    # must NOT be taken at face value — falls through to the generic
+    # unverified e-bike-keyword fallback instead.
+    specs_out_of_range = parser.parse("E-bike", "Some unrelated spec: 999 Nm torque wrench")
+    assert specs_out_of_range["motor_brand"] == "Unknown Motor"
+    assert specs_out_of_range["motor_torque_nm"] == 60
+    assert specs_out_of_range["motor_verified"] is False
+
     print("✅ Motor verified flag tests passed")
 
 
@@ -134,6 +168,15 @@ def test_suspension_type():
     title2 = "E-MTB hardtail"
     specs2 = parser.parse(title2, "")
     assert specs2["suspension_type"] == "hardtail"
+
+    # Regression: a bare "front" keyword in hardtail_disallowed used to
+    # match the completely ordinary "150mm front travel" phrasing every
+    # full-suspension bike's own spec sheet uses (front fork travel vs.
+    # rear shock travel) — misreading a genuine full-suspension bike as a
+    # hardtail purely because its description names its front travel.
+    title3 = "Lankeleisi MG600 Pro Full Suspension E-MTB"
+    specs3 = parser.parse(title3, "150mm front travel 130mm rear travel, full suspension")
+    assert specs3["suspension_type"] == "full_suspension"
 
     print("✅ Suspension type tests passed")
 
@@ -193,6 +236,7 @@ if __name__ == "__main__":
     test_motor_detection_handles_real_world_phrasing_and_typos()
     test_odometer_extracts_km_totali_label_phrasing()
     test_motor_verified_flag()
+    test_motor_reads_explicit_torque_for_unrecognized_brand()
     test_battery_extraction()
     test_frame_size_detection()
     test_suspension_type()

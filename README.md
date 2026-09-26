@@ -1,10 +1,10 @@
 # E-Bike Hunter
 
-Personal, local tool that scrapes used full-suspension e-MTB classifieds across 13 portals (Switzerland + Northern Italy), scores them against a buyer profile, flags AI-read spec corrections and red flags, and shows everything in an interactive dashboard.
+Personal, local tool that scrapes full-suspension e-MTB classifieds — mostly used, plus a couple of new-bike budget retailers — across 14 portals (Switzerland + Northern Italy + EU), scores them against a buyer profile, flags AI-read spec corrections and red flags, and shows everything in an interactive dashboard.
 
 ## Features
 
-- **13 portal connectors**: Tutti.ch, Subito.it, Buycycle, Upway, Decathlon.ch, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia
+- **14 portal connectors**: Tutti.ch, Subito.it, Buycycle, Upway, Decathlon.ch, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia, Buybestgear.com (new bikes, not used — see below)
 - **Zero-token parsing**: regex/taxonomy-based spec extraction (motor, battery, frame size, brakes, travel, odometer, model year) — no LLM calls in the main scan
 - **Deterministic scoring**: 0–100 score from price, components, condition/mileage, distance, fit
 - **Optional AI second opinion**: `analyze.py` sends listings to Claude Haiku for an independent Italian-language verdict, red-flag/condition reading from the raw description, and — only when the seller's own text names it — spec corrections the regex parser missed
@@ -25,7 +25,7 @@ Configured in `config/config.yaml` — current defaults:
 ## Architecture
 
 ```
-[13 portal connectors]  src/connectors/*.py
+[14 portal connectors]  src/connectors/*.py
        ↓
 [Regex parser]  src/pipeline/regex_parser.py + config/taxonomy.json
   motor · battery · frame size · brakes · suspension · travel · odometer · model year

@@ -33,6 +33,7 @@ from connectors.godspeed import GodspeedConnector
 from connectors.ebikelab import EbikelabConnector
 from connectors.ecycles_shop import EcyclesShopConnector
 from connectors.ebikestorebrescia import EbikestorebresciaConnector
+from connectors.buybestgear import BuybestgearConnector
 from utils.console import status, StatusAwareStreamHandler
 import requests
 
@@ -239,6 +240,9 @@ def main():
 
     if config["portals"]["ebikestorebrescia"]["enabled"]:
         connectors.append(("Ebikestore Brescia", EbikestorebresciaConnector(config)))
+
+    if config["portals"]["buybestgear"]["enabled"]:
+        connectors.append(("Buybestgear.com", BuybestgearConnector(config)))
 
     # Scan each portal. The search itself (connector.search_all()) is pure
     # network I/O rate-limited per-connector, so it's safe and effective to
