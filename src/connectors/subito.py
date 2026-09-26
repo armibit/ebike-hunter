@@ -199,14 +199,29 @@ class SubitoConnector(BaseConnector):
             return None
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
-        """Fetch detailed listing information."""
+        """Fetch detailed listing information.
+
+        Prefers the detail page's own JSON-LD Product schema for the
+        description: the clean, full text (confirmed against a live
+        listing — includes the whole "Specifiche:" block, motor/battery/
+        frame size and all), no HTML entities, and not tied to Subito's
+        CSS module class names — which had already silently broken this
+        once, looking for a `<div class="*description*">` when the real
+        page now wraps the text in a `<p>` instead (a `find("div", ...)`
+        never matches a `<p>` regardless of its class), and is ambiguous
+        even for the right tag ("description-title", the heading right
+        above it, also contains the substring "description"). Falls back
+        to a tag-agnostic, exact-suffix class scrape only if JSON-LD is
+        ever missing.
+        """
         try:
             response = self.get(url)
             soup = BeautifulSoup(response.text, "lxml")
 
-            # Extract description
-            desc_tag = soup.find("div", class_=lambda c: c and "description" in c.lower())
-            description = desc_tag.get_text(strip=True) if desc_tag else ""
+            description = self._extract_json_ld_description(soup)
+            if not description:
+                desc_tag = soup.find(class_=lambda c: c and re.search(r"description$", c.lower()))
+                description = desc_tag.get_text(strip=True) if desc_tag else ""
 
             return {
                 "description_raw": description
@@ -214,6 +229,19 @@ class SubitoConnector(BaseConnector):
         except Exception as e:
             logger.error("Error fetching details for %s: %s", listing_id, e)
             return {}
+
+    def _extract_json_ld_description(self, soup: BeautifulSoup) -> str:
+        """The first JSON-LD Product schema's own description field, or ""."""
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if item.get("@type") == "Product" and item.get("description"):
+                    return item["description"]
+        return ""
 
     def search_all(self) -> List[Dict[str, Any]]:
         """Run all configured search queries."""

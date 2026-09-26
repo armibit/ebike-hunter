@@ -74,8 +74,70 @@ def test_parse_card_extracts_title_via_h3_and_real_price():
     assert listing["currency"] == "EUR"
 
 
+# Real detail-page markup (confirmed live, 2026-09-26, listing 659597935):
+# the visible description sits in a <p> — not a <div>, which get_listing_
+# details() used to require — whose CSS-module class ends in "description",
+# right after an <h2> whose class ends in "description-title" (a substring-
+# only match would grab that heading's "Descrizione" text instead). The
+# page's own JSON-LD Product schema separately carries the same full text.
+DETAIL_PAGE_HTML = """
+<html><body>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Product","name":"CUBE Stereo Hybrid 140 HPC SLX 750",
+ "description":"taglia M\\n\\nebike con 7000 km ma in ottimo stato\\n\\nSpecifiche:\\n\\nMotore Bosch Performance CX Gen4\\nCoppia massima 85 Nm\\nBatteria integrata Bosch PowerTube 750 Wh",
+ "offers":{"@type":"Offer","priceCurrency":"EUR","price":2499}}
+</script>
+<h2 class="headline-6 index-module__IqE8Fa__description-title">Descrizione</h2>
+<p class="body-text book index-module__IqE8Fa__description">taglia M
+
+ebike con 7000 km ma in ottimo stato
+
+Specifiche:
+
+Motore Bosch Performance CX Gen4
+Coppia massima 85 Nm
+Batteria integrata Bosch PowerTube 750 Wh</p>
+</body></html>
+"""
+
+# Same page but with the JSON-LD script removed, to exercise the CSS-class
+# fallback path on its own.
+DETAIL_PAGE_HTML_NO_JSON_LD = """
+<html><body>
+<h2 class="headline-6 index-module__IqE8Fa__description-title">Descrizione</h2>
+<p class="body-text book index-module__IqE8Fa__description">taglia M
+
+Specifiche: Motore Bosch Performance CX Gen4, Coppia massima 85 Nm</p>
+</body></html>
+"""
+
+
+def test_get_listing_details_reads_full_description_from_json_ld():
+    connector = _make_connector()
+    connector.get = lambda url, **kwargs: type("R", (), {"text": DETAIL_PAGE_HTML})()
+
+    details = connector.get_listing_details("659597935", "https://www.subito.it/x")
+
+    assert "Motore Bosch Performance CX Gen4" in details["description_raw"]
+    assert "Coppia massima 85 Nm" in details["description_raw"]
+    assert "Batteria integrata Bosch PowerTube 750 Wh" in details["description_raw"]
+
+
+def test_get_listing_details_falls_back_to_description_class_not_title():
+    connector = _make_connector()
+    connector.get = lambda url, **kwargs: type("R", (), {"text": DETAIL_PAGE_HTML_NO_JSON_LD})()
+
+    details = connector.get_listing_details("659597935", "https://www.subito.it/x")
+
+    assert "Motore Bosch Performance CX Gen4" in details["description_raw"]
+    # Must not have grabbed the "description-title" heading instead.
+    assert details["description_raw"].strip() != "Descrizione"
+
+
 if __name__ == "__main__":
     test_aggregate_offer_json_ld_is_skipped_not_treated_as_listing()
     test_wrapper_div_is_not_matched_as_a_card()
     test_parse_card_extracts_title_via_h3_and_real_price()
+    test_get_listing_details_reads_full_description_from_json_ld()
+    test_get_listing_details_falls_back_to_description_class_not_title()
     print("\n✅ All Subito connector tests passed!")
