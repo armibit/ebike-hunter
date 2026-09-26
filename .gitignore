@@ -34,7 +34,6 @@ env/
 .env
 .env.local
 *.log
-index.html
 
 # Old project
 bike/
