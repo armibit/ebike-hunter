@@ -85,18 +85,21 @@ class UpwayConnector(BaseConnector):
                 except ValueError:
                     pass
 
-            body_text = BeautifulSoup(product.get("body_html", "") or "", "lxml").get_text(" ", strip=True)
-            # Human-readable tags (e.g. "Bosch Performance Line") carry motor/spec info
-            # the body text often omits — skip machine-readable "key:value" facet tags.
-            readable_tags = [t for t in product.get("tags", []) if ":" not in t]
-            description_raw = " ".join([body_text] + readable_tags)
-
             return {
                 "portal": "upway",
                 "portal_id": str(product.get("id") or handle),
                 "url": f"{self.base_url}/products/{handle}",
                 "title": title,
-                "description_raw": description_raw,
+                # Left empty on purpose. products.json's body_html is only
+                # the marketing blurb ("Warum wir es lieben") — the actual
+                # battery/motor/frame spec table (Batteriekapazität,
+                # Drehmoment Motor, Herstellergröße...) is server-rendered
+                # on the product page itself and never appears anywhere in
+                # this JSON feed. Leaving this empty makes run.py's own
+                # "still missing a description" check call
+                # get_listing_details() below for every listing, which
+                # fetches that page and supplies the real specs.
+                "description_raw": "",
                 "price_raw": price_raw,
                 "currency": "CHF",
                 "location_raw": "Switzerland",
@@ -105,9 +108,37 @@ class UpwayConnector(BaseConnector):
             logger.debug("Failed to parse Upway product", exc_info=True)
             return None
 
+    @staticmethod
+    def _section_text(soup: BeautifulSoup, heading: str) -> str:
+        """Text of the section under an <h2> with this exact heading —
+        Upway renders each spec/blurb block as <h2>Heading</h2> followed by
+        a sibling <div> inside a shared wrapper <div>, so two levels up from
+        the heading covers the whole block, heading included."""
+        for h2 in soup.find_all("h2"):
+            if h2.get_text(strip=True) == heading:
+                container = h2.find_parent("div")
+                if container and container.parent:
+                    container = container.parent
+                return container.get_text(" ", strip=True)
+        return ""
+
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
-        """No-op: products.json already returns the full description and tags."""
-        return {}
+        """Fetch the product page for the structured spec table and the
+        marketing blurb — both server-rendered HTML, no JS execution
+        needed (confirmed: present in a plain GET's response body), but
+        absent from products.json entirely."""
+        try:
+            response = self.get(url)
+            soup = BeautifulSoup(response.text, "lxml")
+            parts = [
+                self._section_text(soup, "Warum wir es lieben"),
+                self._section_text(soup, "Spezifikationen"),
+            ]
+            description_raw = " ".join(p for p in parts if p)
+            return {"description_raw": description_raw} if description_raw else {}
+        except Exception as e:
+            logger.error("Error fetching Upway details %s: %s", listing_id, e)
+            return {}
 
     def search_all(self) -> List[Dict[str, Any]]:
         """Search all configured brands."""
