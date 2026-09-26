@@ -71,8 +71,47 @@ def test_parse_listings_no_zero_price_duplicates():
     assert all(l["price_raw"] > 0 for l in listings), "no listing should parse to a spurious 0.0 price"
 
 
+# Real detail-page markup (confirmed live, 2026-09-26, "Specialized S-Works
+# Turbo Levo 4"): a loose class_=re.compile("description|details") search
+# on the full page hits the "Similar ads" sidebar first — every card there
+# is literally class="item-description", but its text is just price + city
+# ("CHF 4'999.- 8610 Zurich"), never the real product. The actual
+# description sits three DOM levels below an <h2>Description</h2> heading,
+# with no stable class/id of its own.
+DETAIL_PAGE_HTML = """
+<html><body>
+<div class="similar-ads">
+  <div class="item-description d-flex">CHF 4'999.- 8610 Zurich</div>
+  <div class="item-description d-flex">CHF 3'999.- 8404 Zurich</div>
+</div>
+<div class="col-12 mb-3 mt-sm-3">
+  <div class="d-flex align-items-center mb-3">
+    <div><h2 class="text-uppercase h3 mb-0">Description</h2></div>
+  </div>
+  <p><strong>Specialized S-Works Turbo Levo 4 blue 850W 111Nm 9</strong></p>
+  Specialized S-Works Turbo Levo 4 850W 111Nm 900Wh Akku<br>
+  Verfügbare Grössen: S2 / S3 / S4 / S5<br>
+</div>
+</body></html>
+"""
+
+
+def test_get_listing_details_reads_real_description_not_similar_ads_sidebar():
+    connector = _make_connector()
+    connector.get = lambda url, **kwargs: type("R", (), {"text": DETAIL_PAGE_HTML})()
+
+    details = connector.get_listing_details("408475", "https://velomarkt.ch/x")
+
+    assert "900Wh" in details["description_raw"]
+    assert "111Nm" in details["description_raw"]
+    # Must NOT have grabbed a sidebar card's price/location text.
+    assert "8610 Zurich" not in details["description_raw"]
+    assert "8404 Zurich" not in details["description_raw"]
+
+
 if __name__ == "__main__":
     test_parse_listings_matches_exact_card_only()
     test_parse_item_extracts_title_price_and_id()
     test_parse_listings_no_zero_price_duplicates()
+    test_get_listing_details_reads_real_description_not_similar_ads_sidebar()
     print("\n✅ All Velomarkt connector tests passed!")

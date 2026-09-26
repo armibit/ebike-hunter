@@ -104,12 +104,27 @@ class RidewillConnector(BaseConnector):
         }
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
-        """Fetch full product page (title already carries most specs, this is a fallback)."""
+        """Fetch full product page (title already carries most specs, this is a fallback).
+
+        The old class_=re.compile("description|...") selector never actually
+        matched this product's own text — verified live: the product page's
+        "Descrizione" tab lives at `[data-tab-content="descrizione"]`, but a
+        "prodotti correlati" (related products) carousel elsewhere on the
+        same page uses `class="box-product__description"` on each of its
+        cards, and a loose substring match hits those FIRST (document
+        order), silently returning a *different, unrelated* product's name
+        every time — not empty, so it was never obviously broken, just
+        always wrong. The real description tab also has the actual spec
+        table (Motore, Batteria (Wh), Escursione (mm)...), which the
+        carousel cards never carried at all.
+        """
         try:
             response = self.get(url)
             soup = BeautifulSoup(response.text, "lxml")
-            desc_tag = soup.find(class_=re.compile("description|scheda|caratteristiche"))
-            description = desc_tag.get_text(strip=True) if desc_tag else ""
+            desc_tag = soup.select_one('[data-tab-content="descrizione"]')
+            if not desc_tag:
+                desc_tag = soup.find(class_=re.compile("description|scheda|caratteristiche"))
+            description = desc_tag.get_text(" ", strip=True) if desc_tag else ""
             return {"description_raw": description}
         except Exception as e:
             logger.error("Error fetching Ridewill details %s: %s", listing_id, e)

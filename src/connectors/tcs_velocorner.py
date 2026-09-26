@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from typing import Dict, List, Any, Optional
@@ -140,20 +141,54 @@ class TcsVelocornerConnector(BaseConnector):
             return None
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
-        """Fetch detailed listing."""
+        """Fetch detailed listing.
+
+        The generic class_=re.compile("description|specs|details") selector
+        never matched anything on the real page (verified live: 0 matches)
+        — every listing silently got an empty description_raw. The real
+        content lives in two places instead: the seller's own free-text
+        description, only present in the page's JSON-LD Product schema
+        (wrapped in a top-level "@graph" array, not a bare Product object —
+        the previous code, and _extract_json_ld-style helpers elsewhere in
+        this project, only handle the bare/array form), and a clean,
+        comprehensive spec table (motor, battery Wh, frame size, mileage,
+        suspension, travel...) in a `<div id="product-characteristics">`
+        that isn't part of the description at all. Both are combined here.
+        """
         try:
             response = self.get(url)
             soup = BeautifulSoup(response.text, "lxml")
 
-            description = ""
-            desc_tag = soup.find(class_=re.compile("description|specs|details"))
-            if desc_tag:
-                description = desc_tag.get_text(strip=True)
+            parts = [
+                self._extract_json_ld_description(soup),
+                self._extract_characteristics(soup),
+            ]
+            description = " ".join(p for p in parts if p)
+            if not description:
+                desc_tag = soup.find(class_=re.compile("description|specs|details"))
+                description = desc_tag.get_text(strip=True) if desc_tag else ""
 
             return {"description_raw": description}
         except Exception as e:
             logger.error("Error fetching TCS Velocorner details %s: %s", listing_id, e)
             return {}
+
+    def _extract_json_ld_description(self, soup: BeautifulSoup) -> str:
+        """The page's JSON-LD Product description, from inside its "@graph" wrapper."""
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            graph = data.get("@graph", [data]) if isinstance(data, dict) else data
+            for item in graph:
+                if isinstance(item, dict) and item.get("@type") == "Product" and item.get("description"):
+                    return item["description"]
+        return ""
+
+    def _extract_characteristics(self, soup: BeautifulSoup) -> str:
+        tag = soup.select_one("#product-characteristics")
+        return tag.get_text(" ", strip=True) if tag else ""
 
     def search_all(self) -> List[Dict[str, Any]]:
         """Search all listings."""

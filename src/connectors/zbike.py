@@ -1,4 +1,6 @@
+import html
 import logging
+import re
 from typing import Dict, List, Any
 from .base import BaseConnector
 
@@ -69,12 +71,23 @@ class ZbikeConnector(BaseConnector):
         minor_unit = int(prices.get("currency_minor_unit", 2))
         price_raw = float(prices.get("price", 0) or 0) / (10 ** minor_unit)
 
+        # The WooCommerce Store API has no "summary" field at all — this was
+        # silently returning "" for every listing, forever (no detail-page
+        # fallback exists here either, get_listing_details() is a no-op).
+        # The real field is "description" (short_description is usually
+        # empty on this shop, "description" carries the actual write-up
+        # with motor/battery specs) — confirmed live against real products.
+        body_html = product.get("description", "") or product.get("short_description", "") or ""
+        description_raw = re.sub(r"<[^>]+>", " ", body_html)
+        description_raw = html.unescape(description_raw)
+        description_raw = re.sub(r"\s+", " ", description_raw).strip()
+
         return {
             "portal": "zbike",
             "portal_id": str(product.get("id", "")),
             "url": product.get("permalink", ""),
             "title": product.get("name", ""),
-            "description_raw": product.get("summary", "") or "",
+            "description_raw": description_raw,
             "price_raw": price_raw,
             "currency": prices.get("currency_code", "CHF"),
             "location_raw": "Mendrisio, Ticino",

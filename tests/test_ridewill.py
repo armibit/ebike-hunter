@@ -80,8 +80,57 @@ def test_parse_products_finds_all_cards_in_fragment():
     assert portal_ids == {"123456", "654321"}
 
 
+# Real detail-page markup (confirmed live, 2026-09-26): the product's own
+# spec table lives in a tab at [data-tab-content="descrizione"] — but the
+# SAME page also carries a "prodotti correlati" carousel further down whose
+# cards reuse class="box-product__description" (the same class real search
+# cards use for their title link, see CARD_HTML above). A loose
+# class-substring search hits the carousel first and silently returns a
+# different, unrelated product's text.
+DETAIL_PAGE_HTML = """
+<html><body>
+<div class="tab-content tab-content--active" data-tab-content="descrizione">
+  <div class="product-features">
+    <div class="product-features__line">
+      <div class="product-features__label">Taglia:</div>
+      <div class="product-features__value"> L</div>
+    </div>
+    <div class="product-features__line">
+      <div class="product-features__label">Motore:</div>
+      <div class="product-features__value"> Bosch Performance CX Gen4</div>
+    </div>
+    <div class="product-features__line">
+      <div class="product-features__label">Batteria (Wh):</div>
+      <div class="product-features__value"> 750</div>
+    </div>
+  </div>
+  Bici usata in ottime condizioni, Bosch Performance CX Gen4, 85 Nm, batteria 750 Wh.
+</div>
+<div class="related-products">
+  <a class="box-product__description" href="/p/it/altro-modello/999999/">
+    Hyperion 29'' 120mm 11v Bafang M410 630Wh Grigio Taglia S
+  </a>
+</div>
+</body></html>
+"""
+
+
+def test_get_listing_details_reads_real_tab_not_related_products_carousel():
+    connector = _make_connector()
+    connector.get = lambda url, **kwargs: type("R", (), {"text": DETAIL_PAGE_HTML})()
+
+    details = connector.get_listing_details("123456", "https://www.ridewill.it/p/it/x/123456/")
+
+    assert "Bosch Performance CX Gen4" in details["description_raw"]
+    assert "750" in details["description_raw"]
+    # Must NOT have grabbed the unrelated related-product carousel entry.
+    assert "Hyperion" not in details["description_raw"]
+    assert "Bafang" not in details["description_raw"]
+
+
 if __name__ == "__main__":
     test_parse_card_extracts_fields_offline()
     test_parse_card_handles_absolute_url_and_missing_price()
     test_parse_products_finds_all_cards_in_fragment()
+    test_get_listing_details_reads_real_tab_not_related_products_carousel()
     print("\n✅ All Ridewill connector tests passed!")

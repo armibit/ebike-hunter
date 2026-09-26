@@ -146,20 +146,41 @@ class VelomarktConnector(BaseConnector):
             return None
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
-        """Fetch detailed listing."""
+        """Fetch detailed listing.
+
+        A loose class_=re.compile("description|details") search on the full
+        detail page hits the "Similar ads" sidebar first — verified live:
+        22 matches for a real listing, every single one a sidebar card
+        whose class is literally "item-description" but whose text is just
+        "CHF 4'999.- 8610 Zurich" (price + city, no specs at all), never the
+        real product. The actual description sits several DOM levels below
+        an <h2>Description</h2> heading instead — no stable class/id on the
+        real container, only that heading text to anchor on.
+        """
         try:
             response = self.get(url)
             soup = BeautifulSoup(response.text, "lxml")
 
-            description = ""
-            desc_tag = soup.find(class_=re.compile("description|details"))
-            if desc_tag:
-                description = desc_tag.get_text(strip=True)
+            description = self._description_section_text(soup)
+            if not description:
+                desc_tag = soup.find(class_=re.compile("description|details"))
+                description = desc_tag.get_text(strip=True) if desc_tag else ""
 
             return {"description_raw": description}
         except Exception as e:
             logger.error("Error fetching Velomarkt details %s: %s", listing_id, e)
             return {}
+
+    @staticmethod
+    def _description_section_text(soup: BeautifulSoup) -> str:
+        for h2 in soup.find_all("h2"):
+            if h2.get_text(strip=True) == "Description":
+                container = h2
+                for _ in range(3):
+                    if container.parent:
+                        container = container.parent
+                return container.get_text(" ", strip=True)
+        return ""
 
     def search_all(self) -> List[Dict[str, Any]]:
         """Search all e-MTBs."""
