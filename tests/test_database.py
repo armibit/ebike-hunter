@@ -322,21 +322,40 @@ def test_get_listings_needing_ai_analysis():
     analyzed_id, _, _ = db.upsert_listing(analyzed)
     db.save_ai_analysis(analyzed_id, "Already judged.", 70.0)
 
-    # Rejected — must NOT be returned regardless of ai_analysis state.
-    rejected = {
+    # Rejected by the scan's own hard filters (never scored — no motor
+    # detected at all) — must NOT be returned, or the AI would burn calls
+    # on obvious junk.
+    rejected_unscored = {
         "portal": "tutti", "portal_id": "3", "url": "https://tutti.ch/3",
-        "title": "Rejected bike", "price_raw": 2000, "currency": "CHF",
+        "title": "Rejected unscored bike", "price_raw": 2000, "currency": "CHF",
         "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0,
         "status": "REJECTED", "rejection_reason": "no_motor_detected",
     }
-    db.upsert_listing(rejected)
+    db.upsert_listing(rejected_unscored)
+
+    # Rejected AFTER being scored (manual "Scarta", or a spec correction
+    # that pushed it outside your own criteria) — it was a real candidate
+    # once, so it MUST still be returned, not silently skipped forever.
+    rejected_scored = {
+        "portal": "tutti", "portal_id": "4", "url": "https://tutti.ch/4",
+        "title": "Rejected but scored bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0,
+        "status": "REJECTED", "rejection_reason": "Taglia esclusa dopo correzione manuale",
+    }
+    rejected_scored_id, _, _ = db.upsert_listing(rejected_scored)
+    db.save_score(rejected_scored_id, {
+        "score_total": 82.0, "score_price_value": 82.0, "score_component_quality": 82.0,
+        "score_condition_mileage": 82.0, "score_location_proximity": 82.0,
+        "score_fit_geometry": 82.0, "is_deal_target": False, "breakdown": {},
+    })
 
     eligible = db.get_listings_needing_ai_analysis()
     eligible_ids = {row["id"] for row in eligible}
 
     assert pending_id in eligible_ids
     assert analyzed_id not in eligible_ids
-    assert all("rejected" not in row["title"].lower() for row in eligible)
+    assert rejected_scored_id in eligible_ids
+    assert all("unscored" not in row["title"].lower() for row in eligible)
 
     db.close()
     Path(db_path).unlink()
@@ -451,12 +470,13 @@ def test_get_high_score_ai_exclusions():
             db.save_ai_analysis(listing_id, ai_analysis, score_total)
         return listing_id
 
-    # High score but rejected (manually, or by a spec correction) — must be
-    # explained, not silently invisible.
-    rejected_id = _make("20", "High score but rejected", "REJECTED", 82.0,
-                         rejection_reason="Taglia esclusa dopo correzione manuale")
+    # High score but rejected (manually, or by a spec correction), never
+    # analyzed — now genuinely eligible (a scored listing is always in
+    # scope regardless of status), so it must NOT be explained away here.
+    rejected_scored_id = _make("20", "High score but rejected", "REJECTED", 82.0,
+                                rejection_reason="Taglia esclusa dopo correzione manuale")
 
-    # High score, ACTIVE, but already analyzed — must be explained too
+    # High score, ACTIVE, but already analyzed — must be explained
     # (needs --force to redo).
     analyzed_id = _make("21", "High score, already analyzed", "ACTIVE", 75.0, ai_analysis="Verdetto.")
 
@@ -469,11 +489,30 @@ def test_get_high_score_ai_exclusions():
 
     exclusions = {row["id"]: row for row in db.get_high_score_ai_exclusions(min_score=70.0)}
 
-    assert rejected_id in exclusions
-    assert "REJECTED" in exclusions[rejected_id]["reason"]
+    assert rejected_scored_id not in exclusions
     assert analyzed_id in exclusions
     assert "già analizzata" in exclusions[analyzed_id]["reason"]
     assert eligible_id not in exclusions
+
+    # Confirm it actually comes back from the real eligibility query too,
+    # not just "not excluded" in the diagnostic.
+    assert rejected_scored_id in {row["id"] for row in db.get_listings_needing_ai_analysis()}
+
+    # Rejected by the scan's own hard filters — never scored at all. At
+    # min_score=0 it's still correctly explained away (and still excluded
+    # from the real eligibility query), unlike the scored case above.
+    unscored_listing = {
+        "portal": "tutti", "portal_id": "24", "url": "https://tutti.ch/24",
+        "title": "Rejected, never scored", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0,
+        "status": "REJECTED", "rejection_reason": "no_motor_detected",
+    }
+    unscored_id, _, _ = db.upsert_listing(unscored_listing)
+
+    exclusions_zero = {row["id"]: row for row in db.get_high_score_ai_exclusions(min_score=0.0)}
+    assert unscored_id in exclusions_zero
+    assert "mai valutata" in exclusions_zero[unscored_id]["reason"]
+    assert unscored_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
 
     db.close()
     Path(db_path).unlink()

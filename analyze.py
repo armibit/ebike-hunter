@@ -83,13 +83,13 @@ def main():
 
     listings = db.get_listings_needing_ai_analysis(force=args.force, listing_id=listing_id)
 
-    # Diagnostic: a decent score_total doesn't mean a listing is still
-    # eligible for the AI pass — it keeps whatever score it had before being
-    # rejected (by the initial scan, a manual "Scarta", or a spec correction
-    # that pushed it outside your own criteria), and an already-analyzed
-    # ACTIVE listing is skipped on purpose unless you pass --force. Print
-    # both cases explicitly instead of leaving "why wasn't this processed"
-    # to be reverse-engineered from silence.
+    # Diagnostic: a scored listing is always in scope for the AI pass
+    # regardless of status — REJECTED (manual "Scarta", or a spec
+    # correction that pushed it outside your own criteria) included — so
+    # the only reason a decent-scoring listing wouldn't be processed now is
+    # that it was already analyzed (skipped on purpose unless you pass
+    # --force). Print it explicitly instead of leaving "why wasn't this
+    # processed" to be reverse-engineered from silence.
     if listing_id is None and not args.force:
         exclusions = db.get_high_score_ai_exclusions(min_score=70.0)
         if exclusions:

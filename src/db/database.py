@@ -271,16 +271,24 @@ class Database:
     def get_listings_needing_ai_analysis(
         self, limit: int = 200, force: bool = False, listing_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Active/price-drop listings due for an AI read: never analyzed yet,
-        or analyzed before their most recent price drop. Scoped away from
-        REJECTED/SOLD/DELISTED to bound recurring API cost as the DB grows.
+        """Listings due for an AI read: never analyzed yet, or analyzed
+        before their most recent price drop.
+
+        In scope: ACTIVE/PRICE_DROP listings (as always), PLUS any listing
+        that was scored at some point and later left that status — REJECTED
+        by a manual "Scarta" click, or by the auto-reject-on-correction
+        feature — since it was a real candidate once and still deserves an
+        AI opinion, not silence. Out of scope: listings rejected by the
+        original scan's hard filters (no motor detected, hardtail, wrong
+        size, over budget) and therefore never scored at all — sending
+        those to the AI would just burn API calls on obvious junk.
 
         listing_id: skip all of the above and return just this one listing
         (any status) — for testing the AI pass against a single annuncio
-        without touching the rest. force: re-send every ACTIVE/PRICE_DROP
-        listing regardless of whether it was already analyzed — for
-        deliberately re-running the AI after a prompt change, at the cost
-        of one API call per listing it processes."""
+        without touching the rest. force: re-send every in-scope listing
+        regardless of whether it was already analyzed — for deliberately
+        re-running the AI after a prompt change, at the cost of one API
+        call per listing it processes."""
         cursor = self.conn.cursor()
         base_select = """
         SELECT l.id, l.title, l.description_raw, l.price_chf, l.distance_km, l.status,
@@ -297,14 +305,14 @@ class Database:
             cursor.execute(base_select + " WHERE l.id = ?", (listing_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-        status_filter = "WHERE l.status IN ('ACTIVE', 'PRICE_DROP')"
+        scope_filter = "WHERE (l.status IN ('ACTIVE', 'PRICE_DROP') OR sc.score_total IS NOT NULL)"
         if not force:
-            status_filter += (
+            scope_filter += (
                 " AND (l.ai_analysis IS NULL"
                 " OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))"
             )
         cursor.execute(
-            base_select + status_filter + " ORDER BY sc.score_total DESC LIMIT ?", (limit,)
+            base_select + scope_filter + " ORDER BY sc.score_total DESC LIMIT ?", (limit,)
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -326,13 +334,14 @@ class Database:
     def get_high_score_ai_exclusions(self, min_score: float = 70.0) -> List[Dict[str, Any]]:
         """Diagnostic for "why didn't analyze.py touch this listing" — every
         listing scoring >= min_score that get_listings_needing_ai_analysis()
-        is NOT currently returning, with the reason: its status isn't
-        ACTIVE/PRICE_DROP (most often REJECTED — either the original scan's
-        hard filters, a manual "Scarta" click, or a spec correction that
-        pushed it outside your own criteria — all of which keep whatever
-        score_total it had before, so a rejected listing can still show a
-        good score), or it was already analyzed and isn't due for a re-check
-        (needs --force to redo)."""
+        is NOT currently returning, with the reason. In practice, for any
+        min_score > 0 this can only be "already analyzed — needs --force"
+        — a scored listing is always in scope regardless of status (see
+        get_listings_needing_ai_analysis's docstring), so REJECTED/SOLD
+        alone no longer excludes it. The status branch below only matters
+        for min_score <= 0, where an unscored (score_total NULL, rejected
+        by the original scan's hard filters) listing could otherwise show
+        up here with nothing to explain."""
         cursor = self.conn.cursor()
         cursor.execute("""
         SELECT l.id, l.rowid AS numeric_id, l.title, l.status,
@@ -347,8 +356,9 @@ class Database:
         excluded = []
         for row in cursor.fetchall():
             row = dict(row)
-            if row["status"] not in ("ACTIVE", "PRICE_DROP"):
-                row["reason"] = f"stato {row['status']} (non ACTIVE/PRICE_DROP — vedi rejection_reason)"
+            in_scope = row["status"] in ("ACTIVE", "PRICE_DROP") or row["score_total"] is not None
+            if not in_scope:
+                row["reason"] = f"stato {row['status']} e mai valutata (scartata dai filtri automatici dello scan)"
             elif row["ai_analysis"] is not None:
                 due_for_recheck = (
                     row["status"] == "PRICE_DROP"
