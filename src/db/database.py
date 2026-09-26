@@ -7,6 +7,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Default rejection_reason set by set_manual_status(status="REJECTED") when
+# the caller (server.py's ✕ "Scarta" button) gives no specific reason —
+# distinguishes a deliberate "I don't want this one" from an automatic
+# rejection (the scan's hard filters, or a spec correction that pushed a
+# listing outside the buyer's own criteria), so other code — see
+# pipeline/corrections.py — can tell whether a REJECTED listing is a
+# candidate for the AI to reconsider or an explicit human decision to leave
+# alone.
+MANUAL_REJECT_REASON = "Scartata manualmente dall'utente"
+
 
 class Database:
     def __init__(self, db_path: str):
@@ -274,14 +284,18 @@ class Database:
         """Listings due for an AI read: never analyzed yet, or analyzed
         before their most recent price drop.
 
-        In scope: ACTIVE/PRICE_DROP listings (as always), PLUS any listing
-        that was scored at some point and later left that status — REJECTED
-        by a manual "Scarta" click, or by the auto-reject-on-correction
-        feature — since it was a real candidate once and still deserves an
-        AI opinion, not silence. Out of scope: listings rejected by the
-        original scan's hard filters (no motor detected, hardtail, wrong
-        size, over budget) and therefore never scored at all — sending
-        those to the AI would just burn API calls on obvious junk.
+        In scope: everything except SOLD/DELISTED (genuinely off the
+        market — no decision left to make either way) and a listing you
+        explicitly rejected by hand with no other reason
+        (rejection_reason == MANUAL_REJECT_REASON — you already looked at
+        it and said no, so leave that alone). That deliberately INCLUDES
+        listings rejected by the original scan's own hard filters (no
+        motor detected, wrong size, weak motor/battery) — the regex
+        parser can miss a spec that's actually spelled out in the
+        description (an odd phrasing, a typo, text split across lines),
+        so a listing rejected purely on a regex miss deserves the AI's
+        eyes too, not silence. Its corrected_specs can then restore it to
+        ACTIVE — see pipeline/corrections.py.
 
         listing_id: skip all of the above and return just this one listing
         (any status) — for testing the AI pass against a single annuncio
@@ -292,6 +306,7 @@ class Database:
         cursor = self.conn.cursor()
         base_select = """
         SELECT l.id, l.title, l.description_raw, l.price_chf, l.distance_km, l.status,
+               l.rejection_reason,
                s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
                s.brakes_tier, s.odometer_km, s.red_flag_details,
@@ -305,14 +320,19 @@ class Database:
             cursor.execute(base_select + " WHERE l.id = ?", (listing_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-        scope_filter = "WHERE (l.status IN ('ACTIVE', 'PRICE_DROP') OR sc.score_total IS NOT NULL)"
+        scope_filter = (
+            "WHERE l.status NOT IN ('SOLD', 'DELISTED')"
+            " AND NOT (l.status = 'REJECTED' AND l.rejection_reason = ?)"
+        )
+        params: List[Any] = [MANUAL_REJECT_REASON]
         if not force:
             scope_filter += (
                 " AND (l.ai_analysis IS NULL"
                 " OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))"
             )
+        params.append(limit)
         cursor.execute(
-            base_select + scope_filter + " ORDER BY sc.score_total DESC LIMIT ?", (limit,)
+            base_select + scope_filter + " ORDER BY sc.score_total DESC LIMIT ?", params
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -334,17 +354,15 @@ class Database:
     def get_high_score_ai_exclusions(self, min_score: float = 70.0) -> List[Dict[str, Any]]:
         """Diagnostic for "why didn't analyze.py touch this listing" — every
         listing scoring >= min_score that get_listings_needing_ai_analysis()
-        is NOT currently returning, with the reason. In practice, for any
-        min_score > 0 this can only be "already analyzed — needs --force"
-        — a scored listing is always in scope regardless of status (see
-        get_listings_needing_ai_analysis's docstring), so REJECTED/SOLD
-        alone no longer excludes it. The status branch below only matters
-        for min_score <= 0, where an unscored (score_total NULL, rejected
-        by the original scan's hard filters) listing could otherwise show
-        up here with nothing to explain."""
+        is NOT currently returning, with the reason: SOLD/DELISTED (off the
+        market), an explicit manual "Scarta" with no other reason (your own
+        decision, left alone on purpose), or already analyzed (needs
+        --force to redo). A REJECTED listing with an automatic reason (the
+        scan's hard filters, or a spec correction) is NOT excluded by
+        status alone anymore — see get_listings_needing_ai_analysis."""
         cursor = self.conn.cursor()
         cursor.execute("""
-        SELECT l.id, l.rowid AS numeric_id, l.title, l.status,
+        SELECT l.id, l.rowid AS numeric_id, l.title, l.status, l.rejection_reason,
                l.ai_analysis, l.ai_analyzed_at, l.last_seen_at,
                sc.score_total
         FROM listings l
@@ -356,9 +374,10 @@ class Database:
         excluded = []
         for row in cursor.fetchall():
             row = dict(row)
-            in_scope = row["status"] in ("ACTIVE", "PRICE_DROP") or row["score_total"] is not None
-            if not in_scope:
-                row["reason"] = f"stato {row['status']} e mai valutata (scartata dai filtri automatici dello scan)"
+            if row["status"] in ("SOLD", "DELISTED"):
+                row["reason"] = f"stato {row['status']} (non più sul mercato)"
+            elif row["status"] == "REJECTED" and row["rejection_reason"] == MANUAL_REJECT_REASON:
+                row["reason"] = "scartata manualmente da te — lasciata invariata"
             elif row["ai_analysis"] is not None:
                 due_for_recheck = (
                     row["status"] == "PRICE_DROP"
@@ -404,7 +423,7 @@ class Database:
         if status == "REJECTED":
             cursor.execute(
                 "UPDATE listings SET status = ?, rejection_reason = ?, delisted_at = ? WHERE id = ?",
-                (status, reason or "Scartata manualmente dall'utente", now, listing_id),
+                (status, reason or MANUAL_REJECT_REASON, now, listing_id),
             )
         elif status == "SOLD":
             cursor.execute(
@@ -440,7 +459,7 @@ class Database:
         correction from the dashboard."""
         cursor = self.conn.cursor()
         cursor.execute("""
-        SELECT l.id, l.price_chf, l.distance_km,
+        SELECT l.id, l.price_chf, l.distance_km, l.status, l.rejection_reason,
                s.brand, s.model, s.model_year, s.category, s.suspension_type,
                s.travel_front_mm, s.travel_rear_mm, s.frame_size, s.motor_brand,
                s.motor_model, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh,

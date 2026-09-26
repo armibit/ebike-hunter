@@ -322,20 +322,20 @@ def test_get_listings_needing_ai_analysis():
     analyzed_id, _, _ = db.upsert_listing(analyzed)
     db.save_ai_analysis(analyzed_id, "Already judged.", 70.0)
 
-    # Rejected by the scan's own hard filters (never scored — no motor
-    # detected at all) — must NOT be returned, or the AI would burn calls
-    # on obvious junk.
-    rejected_unscored = {
+    # Rejected by the scan's own hard filters, never scored — the whole
+    # point of including rejects: the regex parser can miss a spec that's
+    # actually in the description, so this MUST now be returned too.
+    rejected_by_hard_filter = {
         "portal": "tutti", "portal_id": "3", "url": "https://tutti.ch/3",
-        "title": "Rejected unscored bike", "price_raw": 2000, "currency": "CHF",
+        "title": "Rejected by hard filter", "price_raw": 2000, "currency": "CHF",
         "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0,
-        "status": "REJECTED", "rejection_reason": "no_motor_detected",
+        "status": "REJECTED", "rejection_reason": "No motor detected (likely not an e-bike)",
     }
-    db.upsert_listing(rejected_unscored)
+    rejected_by_hard_filter_id, _, _ = db.upsert_listing(rejected_by_hard_filter)
 
-    # Rejected AFTER being scored (manual "Scarta", or a spec correction
-    # that pushed it outside your own criteria) — it was a real candidate
-    # once, so it MUST still be returned, not silently skipped forever.
+    # Rejected AFTER being scored (a spec correction that pushed it outside
+    # your own criteria) — it was a real candidate once, so it MUST still
+    # be returned, not silently skipped forever.
     rejected_scored = {
         "portal": "tutti", "portal_id": "4", "url": "https://tutti.ch/4",
         "title": "Rejected but scored bike", "price_raw": 2000, "currency": "CHF",
@@ -349,13 +349,34 @@ def test_get_listings_needing_ai_analysis():
         "score_fit_geometry": 82.0, "is_deal_target": False, "breakdown": {},
     })
 
+    # Rejected by hand with no other reason — your own explicit decision,
+    # must be left alone, NOT sent to the AI.
+    rejected_manually = {
+        "portal": "tutti", "portal_id": "5", "url": "https://tutti.ch/5",
+        "title": "Manually rejected bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    rejected_manually_id, _, _ = db.upsert_listing(rejected_manually)
+    db.set_manual_status(rejected_manually_id, "REJECTED")  # no reason -> MANUAL_REJECT_REASON
+
+    # SOLD — genuinely off the market, must NOT be returned.
+    sold = {
+        "portal": "tutti", "portal_id": "6", "url": "https://tutti.ch/6",
+        "title": "Sold bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    sold_id, _, _ = db.upsert_listing(sold)
+    db.set_manual_status(sold_id, "SOLD")
+
     eligible = db.get_listings_needing_ai_analysis()
     eligible_ids = {row["id"] for row in eligible}
 
     assert pending_id in eligible_ids
     assert analyzed_id not in eligible_ids
+    assert rejected_by_hard_filter_id in eligible_ids
     assert rejected_scored_id in eligible_ids
-    assert all("unscored" not in row["title"].lower() for row in eligible)
+    assert rejected_manually_id not in eligible_ids
+    assert sold_id not in eligible_ids
 
     db.close()
     Path(db_path).unlink()
@@ -498,21 +519,43 @@ def test_get_high_score_ai_exclusions():
     # not just "not excluded" in the diagnostic.
     assert rejected_scored_id in {row["id"] for row in db.get_listings_needing_ai_analysis()}
 
-    # Rejected by the scan's own hard filters — never scored at all. At
-    # min_score=0 it's still correctly explained away (and still excluded
-    # from the real eligibility query), unlike the scored case above.
+    # Rejected by the scan's own hard filters — never scored at all, but
+    # now genuinely in scope too (the whole point of the fix), so it must
+    # NOT be explained away even at min_score=0.
     unscored_listing = {
         "portal": "tutti", "portal_id": "24", "url": "https://tutti.ch/24",
-        "title": "Rejected, never scored", "price_raw": 2000, "currency": "CHF",
+        "title": "Rejected by hard filter, never scored", "price_raw": 2000, "currency": "CHF",
         "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0,
-        "status": "REJECTED", "rejection_reason": "no_motor_detected",
+        "status": "REJECTED", "rejection_reason": "No motor detected (likely not an e-bike)",
     }
     unscored_id, _, _ = db.upsert_listing(unscored_listing)
 
     exclusions_zero = {row["id"]: row for row in db.get_high_score_ai_exclusions(min_score=0.0)}
-    assert unscored_id in exclusions_zero
-    assert "mai valutata" in exclusions_zero[unscored_id]["reason"]
-    assert unscored_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
+    assert unscored_id not in exclusions_zero
+    assert unscored_id in {row["id"] for row in db.get_listings_needing_ai_analysis()}
+
+    # Rejected manually, with no other reason — your own explicit call,
+    # left alone. Must be explained even at min_score=0 (it's unscored).
+    manual_reject_listing = {
+        "portal": "tutti", "portal_id": "25", "url": "https://tutti.ch/25",
+        "title": "Manually rejected", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    manual_reject_id, _, _ = db.upsert_listing(manual_reject_listing)
+    db.set_manual_status(manual_reject_id, "REJECTED")
+
+    exclusions_zero = {row["id"]: row for row in db.get_high_score_ai_exclusions(min_score=0.0)}
+    assert manual_reject_id in exclusions_zero
+    assert "scartata manualmente" in exclusions_zero[manual_reject_id]["reason"]
+    assert manual_reject_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
+
+    # SOLD, with a real score — genuinely off the market, must be
+    # explained (and excluded from the real query) regardless of score.
+    sold_id = _make("26", "Sold high scorer", "SOLD", 90.0)
+    exclusions_high = {row["id"]: row for row in db.get_high_score_ai_exclusions(min_score=70.0)}
+    assert sold_id in exclusions_high
+    assert "SOLD" in exclusions_high[sold_id]["reason"]
+    assert sold_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
 
     db.close()
     Path(db_path).unlink()

@@ -9,7 +9,7 @@ description and confidently naming a spec the regex parser missed).
 import json
 from typing import Any, Dict, Optional
 
-from db.database import Database
+from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
 from pipeline.scoring import ScoringEngine
 
@@ -47,6 +47,36 @@ def _corrected_reject_reason(current: Dict[str, Any], applied_fields: list, conf
     return None
 
 
+def _meets_original_hard_filters(current: Dict[str, Any], config: Dict[str, Any]) -> Optional[str]:
+    """Mirrors run.py's process_listing() hard filters exactly — used only
+    to decide whether an automatically-REJECTED listing (the scan's own
+    filters, or a previous correction — never a manual "Scarta", see
+    MANUAL_REJECT_REASON) can be restored to ACTIVE once a correction
+    supplies a spec the regex parser missed. Deliberately looser than
+    _corrected_reject_reason's strict target_sizes check, which exists for
+    a fresh, deliberate correction of that exact field — here, 'unknown'
+    or an unlisted-but-not-explicitly-disallowed frame size passes, exactly
+    as it would have at scan time, since the original rejection may have
+    been about a completely different field."""
+    if current.get("frame_size") == "disallowed":
+        return f"Taglia non ammessa ({current.get('frame_size')})"
+
+    hw = config.get("hardware_requirements", {})
+    motor_nm = current.get("motor_torque_nm")
+    if motor_nm is None:
+        return "Nessun motore rilevato"
+    min_motor_nm = hw.get("min_motor_torque_nm")
+    if min_motor_nm is not None and motor_nm < min_motor_nm:
+        return f"Motore troppo debole ({motor_nm:.0f}Nm < {min_motor_nm}Nm)"
+
+    battery_wh = current.get("battery_capacity_wh")
+    min_battery_wh = hw.get("min_battery_wh")
+    if battery_wh is not None and min_battery_wh is not None and battery_wh < min_battery_wh:
+        return f"Batteria troppo piccola ({battery_wh:.0f}Wh < {min_battery_wh}Wh)"
+
+    return None
+
+
 def apply_spec_correction(
     db: Database,
     scorer: ScoringEngine,
@@ -59,13 +89,25 @@ def apply_spec_correction(
     listing doesn't exist. Only keys in EDITABLE_SPEC_FIELDS are applied —
     anything else in corrected_fields is silently ignored.
 
-    When config is given, a correction that pushes the listing outside the
-    buyer's own criteria (wrong frame size, motor/battery below the hard
-    minimums) marks it REJECTED — see _corrected_reject_reason(). Passing
-    config=None skips that check (score/text still update normally)."""
+    When config is given: for a currently ACTIVE/PRICE_DROP listing, a
+    correction that pushes it outside the buyer's own criteria (wrong
+    frame size, motor/battery below the hard minimums) marks it REJECTED
+    — see _corrected_reject_reason(). For a listing that's REJECTED for an
+    automatic reason (the scan's hard filters, or an earlier correction —
+    never a manual "Scarta", which is left alone), the correction is
+    instead checked against every hard requirement via
+    _meets_original_hard_filters(); if it now passes, the listing is
+    restored to ACTIVE — this is the whole point of sending rejected
+    listings to the AI pass: the regex parser can miss a spec the
+    description actually states. Passing config=None skips all of this
+    (score/text still update normally, status untouched)."""
     current = db.get_listing_with_specs(listing_id)
     if current is None:
         return None
+
+    was_auto_rejected = (
+        current.get("status") == "REJECTED" and current.get("rejection_reason") != MANUAL_REJECT_REASON
+    )
 
     # A field present with an explicit None/"" clears it back to unset —
     # that's a deliberate "I don't actually know this" from whoever is
@@ -100,8 +142,15 @@ def apply_spec_correction(
     db.save_user_analysis(listing_id, analysis)
 
     if config is not None:
-        reject_reason = _corrected_reject_reason(current, applied_fields, config)
-        if reject_reason:
-            db.set_manual_status(listing_id, "REJECTED", reason=reject_reason)
+        if was_auto_rejected:
+            reject_reason = _meets_original_hard_filters(current, config)
+            if reject_reason is None:
+                db.set_manual_status(listing_id, "ACTIVE")
+            else:
+                db.set_manual_status(listing_id, "REJECTED", reason=reject_reason)
+        else:
+            reject_reason = _corrected_reject_reason(current, applied_fields, config)
+            if reject_reason:
+                db.set_manual_status(listing_id, "REJECTED", reason=reject_reason)
 
     return score_result
