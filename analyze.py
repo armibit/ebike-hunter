@@ -82,6 +82,22 @@ def main():
             sys.exit(1)
 
     listings = db.get_listings_needing_ai_analysis(force=args.force, listing_id=listing_id)
+
+    # Diagnostic: a decent score_total doesn't mean a listing is still
+    # eligible for the AI pass — it keeps whatever score it had before being
+    # rejected (by the initial scan, a manual "Scarta", or a spec correction
+    # that pushed it outside your own criteria), and an already-analyzed
+    # ACTIVE listing is skipped on purpose unless you pass --force. Print
+    # both cases explicitly instead of leaving "why wasn't this processed"
+    # to be reverse-engineered from silence.
+    if listing_id is None and not args.force:
+        exclusions = db.get_high_score_ai_exclusions(min_score=70.0)
+        if exclusions:
+            print(f"\n⚠️  {len(exclusions)} annunci con punteggio >= 70 NON verranno analizzati ora:")
+            for item in exclusions:
+                print(f"   #{item['numeric_id']} score={item['score_total']:.1f} \"{item['title'][:60]}\" — {item['reason']}")
+            print()
+
     if not listings:
         print("No listings need AI analysis — all up to date.")
         db.close()

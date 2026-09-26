@@ -426,6 +426,60 @@ def test_resolve_listing_id_accepts_numeric_rowid_or_real_id():
     print("✅ resolve_listing_id test passed")
 
 
+def test_get_high_score_ai_exclusions():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+
+    db = Database(db_path)
+
+    def _make(portal_id, title, status, score_total, ai_analysis=None, rejection_reason=None):
+        listing = {
+            "portal": "tutti", "portal_id": portal_id, "url": f"https://tutti.ch/{portal_id}",
+            "title": title, "price_raw": 2000, "currency": "CHF",
+            "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": status,
+        }
+        if rejection_reason:
+            listing["rejection_reason"] = rejection_reason
+        listing_id, _, _ = db.upsert_listing(listing)
+        db.save_score(listing_id, {
+            "score_total": score_total, "score_price_value": score_total,
+            "score_component_quality": score_total, "score_condition_mileage": score_total,
+            "score_location_proximity": score_total, "score_fit_geometry": score_total,
+            "is_deal_target": False, "breakdown": {},
+        })
+        if ai_analysis:
+            db.save_ai_analysis(listing_id, ai_analysis, score_total)
+        return listing_id
+
+    # High score but rejected (manually, or by a spec correction) — must be
+    # explained, not silently invisible.
+    rejected_id = _make("20", "High score but rejected", "REJECTED", 82.0,
+                         rejection_reason="Taglia esclusa dopo correzione manuale")
+
+    # High score, ACTIVE, but already analyzed — must be explained too
+    # (needs --force to redo).
+    analyzed_id = _make("21", "High score, already analyzed", "ACTIVE", 75.0, ai_analysis="Verdetto.")
+
+    # High score, ACTIVE, never analyzed — genuinely eligible, must NOT
+    # appear in the exclusions list.
+    eligible_id = _make("22", "High score, still pending", "ACTIVE", 80.0)
+
+    # Low score, ACTIVE, never analyzed — below the threshold, irrelevant.
+    _make("23", "Low score", "ACTIVE", 40.0)
+
+    exclusions = {row["id"]: row for row in db.get_high_score_ai_exclusions(min_score=70.0)}
+
+    assert rejected_id in exclusions
+    assert "REJECTED" in exclusions[rejected_id]["reason"]
+    assert analyzed_id in exclusions
+    assert "già analizzata" in exclusions[analyzed_id]["reason"]
+    assert eligible_id not in exclusions
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ get_high_score_ai_exclusions test passed")
+
+
 def test_price_drop_after_ai_analysis_is_eligible_again():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name
@@ -577,6 +631,7 @@ if __name__ == "__main__":
     test_get_listings_needing_ai_analysis_force_ignores_already_analyzed()
     test_get_listings_needing_ai_analysis_by_listing_id()
     test_resolve_listing_id_accepts_numeric_rowid_or_real_id()
+    test_get_high_score_ai_exclusions()
     test_price_drop_after_ai_analysis_is_eligible_again()
     test_set_manual_status_reject_and_restore()
     test_get_listing_with_specs()

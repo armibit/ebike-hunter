@@ -323,6 +323,45 @@ class Database:
         row = cursor.fetchone()
         return row["id"] if row else None
 
+    def get_high_score_ai_exclusions(self, min_score: float = 70.0) -> List[Dict[str, Any]]:
+        """Diagnostic for "why didn't analyze.py touch this listing" — every
+        listing scoring >= min_score that get_listings_needing_ai_analysis()
+        is NOT currently returning, with the reason: its status isn't
+        ACTIVE/PRICE_DROP (most often REJECTED — either the original scan's
+        hard filters, a manual "Scarta" click, or a spec correction that
+        pushed it outside your own criteria — all of which keep whatever
+        score_total it had before, so a rejected listing can still show a
+        good score), or it was already analyzed and isn't due for a re-check
+        (needs --force to redo)."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+        SELECT l.id, l.rowid AS numeric_id, l.title, l.status,
+               l.ai_analysis, l.ai_analyzed_at, l.last_seen_at,
+               sc.score_total
+        FROM listings l
+        LEFT JOIN scores sc ON l.id = sc.listing_id
+        WHERE COALESCE(sc.score_total, 0) >= ?
+        ORDER BY sc.score_total DESC
+        """, (min_score,))
+
+        excluded = []
+        for row in cursor.fetchall():
+            row = dict(row)
+            if row["status"] not in ("ACTIVE", "PRICE_DROP"):
+                row["reason"] = f"stato {row['status']} (non ACTIVE/PRICE_DROP — vedi rejection_reason)"
+            elif row["ai_analysis"] is not None:
+                due_for_recheck = (
+                    row["status"] == "PRICE_DROP"
+                    and (row["ai_analyzed_at"] is None or row["ai_analyzed_at"] < row["last_seen_at"])
+                )
+                if due_for_recheck:
+                    continue
+                row["reason"] = "già analizzata in precedenza — usa --force per ripeterla"
+            else:
+                continue  # genuinely eligible right now, nothing to explain
+            excluded.append(row)
+        return excluded
+
     def save_ai_analysis(self, listing_id: str, ai_analysis: str, ai_score: float):
         """Save Claude's verdict for a listing. Additive only — never touches
         scores.score_total, so get_top_deals()'s filtering is unaffected."""
