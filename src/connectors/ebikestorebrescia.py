@@ -28,7 +28,7 @@ class EbikestorebresciaConnector(BaseConnector):
         try:
             response = self.get(url)
         except Exception as e:
-            logger.error("Error fetching Ebikestore Brescia category page: %s", e)
+            logger.exception("Error fetching Ebikestore Brescia category page: %s", e)
             return results
 
         listings = self._parse_listings(response.text)
@@ -87,7 +87,7 @@ class EbikestorebresciaConnector(BaseConnector):
             response = self.get(url)
             return {"description_raw": self._extract_description(response.text)}
         except Exception as e:
-            logger.error("Error fetching Ebikestore Brescia details %s: %s", listing_id, e)
+            logger.exception("Error fetching Ebikestore Brescia details %s: %s", listing_id, e)
             return {}
 
     def _extract_description(self, html: str) -> str:

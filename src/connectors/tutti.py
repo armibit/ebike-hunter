@@ -77,7 +77,7 @@ class TuttiConnector(BaseConnector):
             try:
                 response = self.get(url, params={"page": page}, label=label)
             except Exception as e:
-                logger.error("Error searching Tutti.ch: %s", e)
+                logger.exception("Error searching Tutti.ch: %s", e)
                 break
 
             listings = self._parse_search_results(response.text, response.url)
@@ -160,7 +160,7 @@ class TuttiConnector(BaseConnector):
                     if listing:
                         listings.append(listing)
         except Exception as e:
-            logger.error("Error parsing Next data: %s", e)
+            logger.exception("Error parsing Next data: %s", e)
 
         return listings
 
@@ -227,7 +227,7 @@ class TuttiConnector(BaseConnector):
                         return {"description_raw": localization.get("body", "") or ""}
             return {}
         except Exception as e:
-            logger.error("Error fetching details for %s: %s", listing_id, e)
+            logger.exception("Error fetching details for %s: %s", listing_id, e)
             return {}
 
     def search_all(self) -> List[Dict[str, Any]]:

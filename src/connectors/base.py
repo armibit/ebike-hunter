@@ -74,10 +74,10 @@ class BaseConnector(ABC):
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
-            logger.error("HTTP error fetching %s: %s", url, e)
+            logger.exception("HTTP error fetching %s: %s", url, e)
             raise
         except requests.exceptions.RequestException as e:
-            logger.error("Request failed for %s: %s", url, e)
+            logger.exception("Request failed for %s: %s", url, e)
             raise
 
     def post(self, url: str, data: Optional[Dict] = None, headers: Optional[Dict] = None) -> requests.Response:
@@ -99,10 +99,10 @@ class BaseConnector(ABC):
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
-            logger.error("HTTP error posting to %s: %s", url, e)
+            logger.exception("HTTP error posting to %s: %s", url, e)
             raise
         except requests.exceptions.RequestException as e:
-            logger.error("Request failed for %s: %s", url, e)
+            logger.exception("Request failed for %s: %s", url, e)
             raise
 
     @abstractmethod

@@ -38,7 +38,7 @@ class RidewillConnector(BaseConnector):
                 response = self.post(url, data=payload, headers={"X-Requested-With": "XMLHttpRequest"})
                 data = response.json()
             except Exception as e:
-                logger.error("Error fetching Ridewill page %d: %s", page, e)
+                logger.exception("Error fetching Ridewill page %d: %s", page, e)
                 break
 
             listings = self._parse_products(data.get("products", ""))
@@ -127,7 +127,7 @@ class RidewillConnector(BaseConnector):
             description = desc_tag.get_text(" ", strip=True) if desc_tag else ""
             return {"description_raw": description}
         except Exception as e:
-            logger.error("Error fetching Ridewill details %s: %s", listing_id, e)
+            logger.exception("Error fetching Ridewill details %s: %s", listing_id, e)
             return {}
 
     def search_all(self) -> List[Dict[str, Any]]:

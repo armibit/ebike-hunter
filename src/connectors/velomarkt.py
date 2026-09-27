@@ -32,7 +32,7 @@ class VelomarktConnector(BaseConnector):
             try:
                 response = self.get(url, params={"page": page})
             except Exception as e:
-                logger.error("Error searching Velomarkt: %s", e)
+                logger.exception("Error searching Velomarkt: %s", e)
                 break
 
             listings = self._parse_listings(response.text)
@@ -168,7 +168,7 @@ class VelomarktConnector(BaseConnector):
 
             return {"description_raw": description}
         except Exception as e:
-            logger.error("Error fetching Velomarkt details %s: %s", listing_id, e)
+            logger.exception("Error fetching Velomarkt details %s: %s", listing_id, e)
             return {}
 
     @staticmethod

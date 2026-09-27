@@ -128,7 +128,7 @@ class AIAnalyzer:
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as e:
-            logger.error("AI batch analysis call failed: %s", e)
+            logger.exception("AI batch analysis call failed: %s", e)
             return []
 
         valid_ids = {listing["id"] for listing in listings}

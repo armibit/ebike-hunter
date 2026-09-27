@@ -41,7 +41,7 @@ class SubitoConnector(BaseConnector):
             try:
                 response = self.get(search_url, params=params, headers={"Referer": f"{self.base_url}/"})
             except Exception as e:
-                logger.error("Error searching Subito.it: %s", e)
+                logger.exception("Error searching Subito.it: %s", e)
                 break
 
             listings = self._parse_search_results(response.text, response.url)
@@ -227,7 +227,7 @@ class SubitoConnector(BaseConnector):
                 "description_raw": description
             }
         except Exception as e:
-            logger.error("Error fetching details for %s: %s", listing_id, e)
+            logger.exception("Error fetching details for %s: %s", listing_id, e)
             return {}
 
     def _extract_json_ld_description(self, soup: BeautifulSoup) -> str:

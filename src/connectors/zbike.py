@@ -34,7 +34,7 @@ class ZbikeConnector(BaseConnector):
                 response = self.get(url, params={"category": self.category_id, "per_page": 50, "page": page})
                 products = response.json()
             except Exception as e:
-                logger.error("Error fetching Z-Bike products (page %d): %s", page, e)
+                logger.exception("Error fetching Z-Bike products (page %d): %s", page, e)
                 break
 
             if not products:

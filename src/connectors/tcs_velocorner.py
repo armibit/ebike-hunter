@@ -38,7 +38,7 @@ class TcsVelocornerConnector(BaseConnector):
             try:
                 response = self.get(url, params={"page": page})
             except Exception as e:
-                logger.error("Error searching TCS Velocorner: %s", e)
+                logger.exception("Error searching TCS Velocorner: %s", e)
                 break
 
             listings = self._parse_listings(response.text)
@@ -170,7 +170,7 @@ class TcsVelocornerConnector(BaseConnector):
 
             return {"description_raw": description}
         except Exception as e:
-            logger.error("Error fetching TCS Velocorner details %s: %s", listing_id, e)
+            logger.exception("Error fetching TCS Velocorner details %s: %s", listing_id, e)
             return {}
 
     def _extract_json_ld_description(self, soup: BeautifulSoup) -> str:

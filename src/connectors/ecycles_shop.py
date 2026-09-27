@@ -27,7 +27,7 @@ class EcyclesShopConnector(BaseConnector):
             response = self.get(url, params={"limit": limit})
             data = response.json()
         except Exception as e:
-            logger.error("Error fetching Ecycles-shop products: %s", e)
+            logger.exception("Error fetching Ecycles-shop products: %s", e)
             return results
 
         for product in data.get("products", []):

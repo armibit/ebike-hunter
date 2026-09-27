@@ -6,7 +6,6 @@ Scans Tutti.ch and Subito.it for e-bike listings, filters, scores, and stores in
 
 import logging
 import sys
-import traceback
 import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -37,10 +36,31 @@ from connectors.buybestgear import BuybestgearConnector
 from utils.console import status, StatusAwareStreamHandler
 import requests
 
-_handler = StatusAwareStreamHandler()
-_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.basicConfig(level=logging.INFO, handlers=[_handler])
 logger = logging.getLogger(__name__)
+
+
+def setup_logging(config: Dict[str, Any]) -> None:
+    """Console stays at config's log_level and spinner-aware (live view).
+    The file always gets DEBUG — every retry, parse failure, and swallowed
+    exception with its traceback — because connector breakage (a selector
+    going stale, a portal changing its API) only ever shows up here, after
+    the fact, never in the console scrollback."""
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    console_level_name = str(config.get("app", {}).get("log_level", "INFO")).upper()
+    console_level = getattr(logging, console_level_name, logging.INFO)
+
+    console_handler = StatusAwareStreamHandler()
+    console_handler.setLevel(console_level)
+    console_handler.setFormatter(formatter)
+
+    logs_dir = BASE_DIR / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    file_handler = logging.FileHandler(logs_dir / "run.log", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
+    logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler], force=True)
 
 
 def load_config() -> Dict[str, Any]:
@@ -56,6 +76,7 @@ def check_listing_validity(url: str, timeout: int = 5) -> bool:
         response = requests.head(url, timeout=timeout, allow_redirects=True)
         return response.status_code != 404
     except Exception:
+        logger.debug("Validity check failed for %s — assuming still valid", url, exc_info=True)
         return True  # Assume valid if unreachable (network error, etc.)
 
 
@@ -80,7 +101,7 @@ def process_listing(
             if details.get("description_raw"):
                 listing_raw["description_raw"] = details["description_raw"]
         except Exception as e:
-            logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e)
+            logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e, exc_info=True)
 
     # Normalize currency
     price_chf, price_eur = normalizer.normalize_currency(
@@ -177,13 +198,15 @@ def process_listing(
 
 
 def main():
+    # Load config and wire up logging before anything else runs, so every
+    # subsequent line — including the banners below — is on the record.
+    config = load_config()
+    setup_logging(config)
+
     print("=" * 80)
     print("E-BIKE HUNTER - Live Scraper")
     print("=" * 80)
     print()
-
-    # Load config
-    config = load_config()
 
     # Initialize components
     db = Database(config["app"]["db_path"])
@@ -273,8 +296,7 @@ def main():
                     listings = future.result()
                 except Exception as e:
                     status.clear()
-                    logger.error("[%s] Error during scan: %s", portal_name, e)
-                    logger.debug(traceback.format_exc())
+                    logger.exception("[%s] Error during scan: %s", portal_name, e)
                     continue
 
                 logger.info("✓ [%s] scan done — %d listing(s) found, processing...", portal_name, len(listings))

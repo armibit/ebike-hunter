@@ -41,7 +41,7 @@ class UpwayConnector(BaseConnector):
                 response = self.get(url, params={"limit": 250, "page": page})
                 data = response.json()
             except Exception as e:
-                logger.error("Error searching Upway brand %s: %s", brand, e)
+                logger.exception("Error searching Upway brand %s: %s", brand, e)
                 break
 
             products = data.get("products", [])
@@ -137,7 +137,7 @@ class UpwayConnector(BaseConnector):
             description_raw = " ".join(p for p in parts if p)
             return {"description_raw": description_raw} if description_raw else {}
         except Exception as e:
-            logger.error("Error fetching Upway details %s: %s", listing_id, e)
+            logger.exception("Error fetching Upway details %s: %s", listing_id, e)
             return {}
 
     def search_all(self) -> List[Dict[str, Any]]:
@@ -150,6 +150,6 @@ class UpwayConnector(BaseConnector):
                 all_results.extend(results)
                 logger.info("[Upway] Brand '%s': %d results", brand, len(results))
             except Exception as e:
-                logger.error("[Upway] Error searching brand %s: %s", brand, e)
+                logger.exception("[Upway] Error searching brand %s: %s", brand, e)
 
         return all_results

@@ -25,7 +25,7 @@ class EbikelabConnector(BaseConnector):
             try:
                 response = self.get(url, params={"p": page})
             except Exception as e:
-                logger.error("Error fetching Ebikelab page %d: %s", page, e)
+                logger.exception("Error fetching Ebikelab page %d: %s", page, e)
                 break
 
             listings = self._parse_listings(response.text)
@@ -93,7 +93,7 @@ class EbikelabConnector(BaseConnector):
             response = self.get(url)
             return {"description_raw": self._extract_description(response.text)}
         except Exception as e:
-            logger.error("Error fetching Ebikelab details %s: %s", listing_id, e)
+            logger.exception("Error fetching Ebikelab details %s: %s", listing_id, e)
             return {}
 
     def _extract_description(self, html: str) -> str:

@@ -41,7 +41,7 @@ class BuybestgearConnector(BaseConnector):
                 response = self.get(url, params={"limit": 250, "page": page})
                 data = response.json()
             except Exception as e:
-                logger.error("Error searching Buybestgear: %s", e)
+                logger.exception("Error searching Buybestgear: %s", e)
                 break
 
             products = data.get("products", [])
