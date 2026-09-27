@@ -284,13 +284,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         s.travel_front_mm, s.brakes_tier, s.suspension_type,
         s.has_red_flag, s.red_flag_details,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
-        sc.score_condition_mileage, sc.score_location_proximity, sc.score_fit_geometry
+        sc.score_condition_mileage, sc.score_location_proximity, sc.score_fit_geometry,
+        CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
+             ELSE sc.score_total END AS ranking_score
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
     ORDER BY l.is_favorite DESC,
              CASE WHEN l.status IN ('SOLD', 'REJECTED', 'DELISTED') THEN 1 ELSE 0 END,
-             COALESCE(sc.score_total, 0) DESC, l.price_chf ASC
+             COALESCE(ranking_score, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
@@ -686,7 +688,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         else:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td class="numeric-id">#{bike['numeric_id']}</td>
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>{price_text}</td>
