@@ -29,7 +29,7 @@
       "tier": "top",
       "patterns": [
         "shimano ep8", "ep801", "ep800", "du-ep800", "du-ep801",
-        "shimano ep-8", "ep8 85nm"
+        "shimano ep-8", "ep8 85nm", "\\bep[\\s-]?8\\b"
       ]
     },
     "yamaha_pwx": {
@@ -112,7 +112,7 @@
       "tier": "disallowed",
       "patterns": [
         "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosch active line",
-        "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40"
+        "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40", "\\btq\\b"
       ]
     }
   },
@@ -163,7 +163,9 @@
   "suspension_types": {
     "full_keywords": [
       "full", "fully", "biammortizzata", "bi-ammortizzata", "full suspension",
-      "full-suspension", "doppia sospensione", "all-mountain", "enduro"
+      "full-suspension", "doppia sospensione", "all-mountain", "enduro",
+      "escursione posteriore", "ammortizzatore posteriore", "rear travel",
+      "rear shock", "federweg hinten", "hinterbau"
     ],
     "hardtail_disallowed": [
       "hardtail", "monoammortizzata", "front suspended", "hard tail",

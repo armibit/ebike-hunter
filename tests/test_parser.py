@@ -26,11 +26,15 @@ def test_motor_detection():
     assert specs2["motor_brand"] == "Specialized / Brose"
     assert specs2["motor_torque_nm"] == 90
 
-    # Test weak motor rejection
+    # Test weak motor rejection — brand/torque are still reported (not None)
+    # so the reject reason reads "Weak motor (50nm < 60nm)" instead of the
+    # misleading "No motor detected"; torque stays below min_motor_torque_nm
+    # either way, so the reject verdict itself is unchanged.
     title3 = "Specialized Levo SL con Fazua"
     desc3 = "Motore leggero Fazua 50nm"
     specs3 = parser.parse(title3, desc3)
-    assert specs3["motor_brand"] is None
+    assert specs3["motor_brand"] == "Weak/Light Motor"
+    assert specs3["motor_torque_nm"] == 50
 
     print("✅ Motor detection tests passed")
 

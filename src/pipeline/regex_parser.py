@@ -48,6 +48,17 @@ class RegexParser:
             specs["motor_model"] = motor_data["model"]
             specs["motor_torque_nm"] = motor_data["torque_nm"]
             specs["motor_verified"] = motor_data["verified"]
+        elif specs["battery_capacity_wh"] is not None:
+            # No motor brand/keyword named anywhere in the text, but a
+            # battery Wh figure was extracted — no muscular bike specs a
+            # battery capacity, so this is unambiguous e-bike evidence even
+            # without the word "motor". Common in structured spec-sheet
+            # listings (e.g. tcs_velocorner) that print "Battery capacity:
+            # 950Wh" but never name the motor.
+            specs["motor_brand"] = "Unknown Motor"
+            specs["motor_model"] = "Not specified"
+            specs["motor_torque_nm"] = 60
+            specs["motor_verified"] = False
 
         # Travel detection
         travel_front, travel_rear = self._extract_travel(text)
@@ -68,11 +79,19 @@ class RegexParser:
         return specs
 
     def _detect_motor(self, text: str) -> Optional[Dict[str, Any]]:
-        # Check disallowed motors first
+        # Check disallowed motors first. Return the actual (low) torque_nm
+        # instead of None so run.py's reject reason reads "Weak motor (50nm
+        # < 60nm)" rather than the misleading "No motor detected" — a Fazua/
+        # TQ/etc. motor was found, it's just below the buyer's power floor.
         weak_motor = self.motors.get("weak_motors_disallowed", {})
         for pattern in weak_motor.get("patterns", []):
             if re.search(pattern, text, re.IGNORECASE):
-                return None  # Weak motor detected, reject
+                return {
+                    "brand": weak_motor["brand"],
+                    "model": weak_motor["model"],
+                    "torque_nm": weak_motor["torque_nm"],
+                    "verified": True
+                }
 
         # Check top-tier motors
         for motor_key, motor_data in self.motors.items():
@@ -113,7 +132,12 @@ class RegexParser:
         ebike_keywords = [
             r"\bturbo\b", r"\bhybrid\b", r"\be-bike\b", r"\bebike\b",
             r"\be mtb\b", r"\be-mtb\b", r"\bemtb\b",
-            r"electric bike", r"elektrisch", r"elektrisches bike"
+            r"electric bike", r"elektrisch", r"elektrisches bike",
+            r"e-mountainbike", r"e-mountain-bike", r"elektrofahrrad", r"pedelec",
+            # Scott appends "eRIDE" only to its electric model variants
+            # (Spark eRIDE, Lumen eRIDE, Genius eRIDE, ...) — never used on
+            # an analog bike, so it's unambiguous e-bike evidence on its own.
+            r"\beride\b", r"\belettric[ao]\b"
         ]
         for keyword in ebike_keywords:
             if re.search(keyword, text, re.IGNORECASE):
@@ -129,7 +153,7 @@ class RegexParser:
     def _extract_battery_wh(self, text: str) -> Optional[int]:
         patterns = [
             r"(\d{3,4})\s*wh",
-            r"batteria\s*(\d{3,4})",
+            r"batteria\s*(?:da|di)?\s*(\d{3,4})",
             r"akku\s*(\d{3,4})",
             r"battery\s*(\d{3,4})"
         ]
