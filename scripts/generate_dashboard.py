@@ -624,6 +624,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <th>Status</th>
                     <th>Motore</th>
                     <th>Batteria</th>
+                    <th>Sospensioni</th>
                     <th>Anno</th>
                     <th>Taglia</th>
                     <th>Distanza</th>
@@ -667,6 +668,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         anno_text = bike.get("model_year") or "N/A"
         km_text = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
         added_text = _format_date(bike.get("first_seen_at"))
+        suspension_text = _SUSPENSION_LABELS.get(bike.get("suspension_type"), "N/A") if bike.get("suspension_type") else "N/A"
         meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
         ai_icon = '<span class="ai-icon" title="Analisi AI disponibile">🤖</span> ' if bike.get("ai_analysis") else ''
 
@@ -690,7 +692,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         else:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
@@ -700,6 +702,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td><span class="status {status_class}">{status}</span></td>
                     <td><span class="motor">{motor_text}</span></td>
                     <td>{battery_text}</td>
+                    <td>{suspension_text}</td>
                     <td>{anno_text}</td>
                     <td>{frame_text}</td>
                     <td>{bike['distance_km']:.1f} km</td>
@@ -980,6 +983,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             { text: row => row.dataset.statusGroup || '' },
             row => parseFloat(row.dataset.motorTorque),
             row => parseFloat(row.dataset.battery),
+            { text: row => row.dataset.suspension || 'N/A' },
             row => parseInt(row.dataset.year, 10),
             { text: row => row.dataset.frame || 'N/A' },
             row => parseFloat(row.dataset.distance),
