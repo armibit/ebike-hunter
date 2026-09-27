@@ -41,6 +41,16 @@ class ScoringEngine:
             self.weights["fit_geometry"] * score_fit
         )
 
+        # Suspension preference: confirmed full suspension is preferred over
+        # a hardtail (or an unconfirmed/ambiguous listing) — never excluded,
+        # just ranked lower, so a hardtail that slips past the keyword filter
+        # doesn't tie or beat a genuine full-suspension listing on score alone.
+        suspension_type = specs.get("suspension_type")
+        if suspension_type == "full_suspension":
+            score_total = min(100.0, score_total + 5.0)
+        elif suspension_type == "hardtail":
+            score_total = max(0.0, score_total - 15.0)
+
         is_deal_target = score_total >= 75.0 and price_chf <= self.hard_max_price
 
         return {
