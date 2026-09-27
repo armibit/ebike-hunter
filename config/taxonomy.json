@@ -151,8 +151,8 @@
     "target_m": [
       "\\bm\\b", "\\bmedium\\b", "\\btaglia m\\b", "\\bgrösse m\\b", "\\bgroesse m\\b",
       "\\btaille m\\b", "\\bs2\\b", "\\bs3\\b", "\\b17\\s*(?:\"|inch|pollici)\\b",
-      "\\b18\\s*(?:\"|inch|pollici)\\b",
-      "\\b4[3-7]\\s*cm\\b",
+      "\\b18\\s*(?:\"|inch|pollici)\\b", "\\b43\\s*cm\\b", "\\b44\\s*cm\\b",
+      "\\b45\\s*cm\\b", "\\b46\\s*cm\\b",
       "\\(m\\)", "\\(s2\\)", "\\(s3\\)"
     ],
     "disallowed_sizes": [
@@ -161,8 +161,7 @@
       "\\bgroesse l\\b", "\\btaille l\\b",
       "\\b1[3-6]\\s*(?:\"|inch|pollici)\\b",
       "\\b(?:19|2[0-4])\\s*(?:\"|inch|pollici)\\b",
-      "\\b3[3-9]\\s*cm\\b", "\\b4[0-2]\\s*cm\\b",
-      "\\b4[89]\\s*cm\\b", "\\b5[0-9]\\s*cm\\b", "\\b6[01]\\s*cm\\b",
+      "\\b50\\s*cm\\b", "\\b52\\s*cm\\b", "\\b54\\s*cm\\b",
       "\\(s\\)", "\\(xs\\)", "\\(l\\)", "\\(xl\\)", "\\(xxl\\)"
     ]
   },

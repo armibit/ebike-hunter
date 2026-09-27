@@ -354,19 +354,23 @@ def test_frame_size_bare_number_requires_unit():
 def test_frame_size_cm_ranges():
     parser = RegexParser(TAXONOMY_PATH)
 
-    # MTB/e-MTB cm sizing (icancycling.com chart): 43-47cm = M (17"-18"),
-    # 33-42cm = XS/S, 48-61cm = L/XL/XXL — only the 43-47 band is accepted.
-    for cm in (43, 45, 47):
+    # cm-only sizing is not classified past the seller-observed anchors
+    # (43-46cm=M, 50/52/54cm=disallowed): the same cm number maps to a
+    # different letter on MTB vs. trekking/city geometry (e.g. 54cm is
+    # "too big" on an MTB but a genuine M on many trekking bikes), so
+    # cm ranges outside those exact validated values stay "unknown"
+    # rather than risk hard-rejecting a real M bike.
+    for cm in (43, 44, 45, 46):
         specs = parser.parse("Canyon Neuron", f"Taglia {cm} cm")
         assert specs["frame_size"] == "M", f"{cm}cm should be M, got {specs['frame_size']}"
 
-    for cm in (38, 42, 48, 53, 61):
+    for cm in (50, 52, 54):
         specs = parser.parse("Canyon Neuron", f"Taglia {cm} cm")
         assert specs["frame_size"] == "disallowed", f"{cm}cm should be disallowed, got {specs['frame_size']}"
 
-    # Outside the known MTB frame range entirely.
-    specs = parser.parse("Canyon Neuron", "Taglia 30 cm")
-    assert specs["frame_size"] == "unknown"
+    for cm in (38, 42, 47, 48, 53, 58, 61):
+        specs = parser.parse("Canyon Neuron", f"Taglia {cm} cm")
+        assert specs["frame_size"] == "unknown", f"{cm}cm should stay unknown, got {specs['frame_size']}"
 
     print("✅ Frame size cm range test passed")
 
