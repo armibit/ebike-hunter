@@ -135,6 +135,45 @@ def test_apply_spec_correction_keeps_active_for_in_target_frame_size():
     print("✅ apply_spec_correction keeps in-target frame size active")
 
 
+def test_apply_spec_correction_rejects_hardtail_on_active_listing():
+    db_path, db = _fresh_db_with_unverified_motor()
+    scorer = ScoringEngine(CONFIG)
+
+    result = apply_spec_correction(db, scorer, "x_1", {"suspension_type": "hardtail"}, config=CONFIG)
+
+    assert result is not None, "score must still be saved even though the listing gets rejected"
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    row = cursor.fetchone()
+    assert row["status"] == "REJECTED"
+    assert "Hardtail" in row["rejection_reason"]
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ apply_spec_correction rejects hardtail correction on active listing")
+
+
+def test_apply_spec_correction_restores_auto_rejected_listing_stays_rejected_if_hardtail():
+    db_path, db = _fresh_db_with_auto_rejected_no_motor()
+    scorer = ScoringEngine(CONFIG)
+
+    apply_spec_correction(
+        db, scorer, "x_1",
+        {"motor_brand": "Bosch", "motor_torque_nm": 85, "suspension_type": "hardtail"},
+        config=CONFIG,
+    )
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    row = cursor.fetchone()
+    assert row["status"] == "REJECTED", "a real motor alone must not resurrect a hardtail"
+    assert "Hardtail" in row["rejection_reason"]
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ apply_spec_correction keeps auto-rejected hardtail listing rejected even with a good motor")
+
+
 def test_apply_spec_correction_rejects_weak_motor_below_minimum():
     db_path, db = _fresh_db_with_unverified_motor()
     scorer = ScoringEngine(CONFIG)
@@ -284,6 +323,8 @@ if __name__ == "__main__":
     test_apply_spec_correction_regenerates_user_analysis_text()
     test_apply_spec_correction_rejects_out_of_target_frame_size()
     test_apply_spec_correction_keeps_active_for_in_target_frame_size()
+    test_apply_spec_correction_rejects_hardtail_on_active_listing()
+    test_apply_spec_correction_restores_auto_rejected_listing_stays_rejected_if_hardtail()
     test_apply_spec_correction_rejects_weak_motor_below_minimum()
     test_apply_spec_correction_without_config_skips_reject_check()
     test_apply_spec_correction_ignores_unknown_fields()

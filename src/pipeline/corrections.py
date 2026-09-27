@@ -13,7 +13,7 @@ from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
 from pipeline.scoring import ScoringEngine
 
-EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size"]
+EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size", "suspension_type"]
 
 
 def _normalize_size(value: str) -> str:
@@ -32,6 +32,9 @@ def _corrected_reject_reason(current: Dict[str, Any], applied_fields: list, conf
         value = str(current["frame_size"])
         if _normalize_size(value) not in target_sizes:
             return f"Taglia esclusa dopo correzione manuale ({value} non tra le taglie target)"
+
+    if "suspension_type" in applied_fields and current.get("suspension_type") == "hardtail":
+        return "Hardtail dopo correzione manuale (serve full suspension)"
 
     hw = config.get("hardware_requirements", {})
     min_motor_nm = hw.get("min_motor_torque_nm")
@@ -60,6 +63,9 @@ def _meets_original_hard_filters(current: Dict[str, Any], config: Dict[str, Any]
     been about a completely different field."""
     if current.get("frame_size") == "disallowed":
         return f"Taglia non ammessa ({current.get('frame_size')})"
+
+    if current.get("suspension_type") == "hardtail":
+        return "Hardtail (need full suspension)"
 
     hw = config.get("hardware_requirements", {})
     motor_nm = current.get("motor_torque_nm")

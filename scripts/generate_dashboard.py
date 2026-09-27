@@ -482,7 +482,16 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .edit-specs h3 {{ font-size: 13px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--primary); }}
         .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }}
         .edit-specs label {{ display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }}
-        .edit-specs input {{ padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }}
+        .edit-specs input, .edit-specs select {{ padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }}
+
+        .editable-cell {{ cursor: pointer; }}
+        .editable-cell:hover {{ background: var(--bg); outline: 1px dashed var(--border); }}
+        .cell-edit {{ display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }}
+        .cell-edit-input {{ padding: 4px 6px; border: 1px solid var(--primary); border-radius: 4px; font-size: 12px; width: 90px; }}
+        .cell-edit-actions {{ display: inline-flex; gap: 3px; }}
+        .cell-edit-btn {{ width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1; }}
+        .cell-edit-save {{ background: var(--success); color: white; }}
+        .cell-edit-cancel {{ background: var(--danger); color: white; }}
     </style>
 </head>
 <body>
@@ -600,6 +609,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                         <label>Modello motore <input type="text" id="editMotorModel" placeholder="es. Performance CX Gen4"></label>
                         <label>Coppia motore (Nm) <input type="number" id="editMotorTorque"></label>
                         <label>Batteria Wh <input type="number" id="editBattery"></label>
+                        <label>Sospensioni <select id="editSuspension">
+                            <option value="">— non specificato —</option>
+                            <option value="full_suspension">Full suspension</option>
+                            <option value="hardtail">Hardtail</option>
+                            <option value="unknown">Non specificata</option>
+                        </select></label>
                         <label>Taglia <input type="text" id="editFrame"></label>
                     </div>
                     <button class="btn-save" onclick="saveSpecs()">💾 Salva correzioni</button>
@@ -689,10 +704,18 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 '<button class="icon-btn icon-success" onclick="soldRow(this)" title="Segna come venduta">✓</button>'
                 '</div>'
             )
+            # Double-click-to-edit on the 4 columns that map to a correctable
+            # spec field (see corrections.py::EDITABLE_SPEC_FIELDS) — quicker
+            # than opening the full "Dettagli" modal for a single-field fix.
+            motor_cell_attrs = ' class="editable-cell" ondblclick="editCell(this, \'motor\')" title="Doppio click per modificare"'
+            battery_cell_attrs = ' class="editable-cell" ondblclick="editCell(this, \'battery\')" title="Doppio click per modificare"'
+            suspension_cell_attrs = ' class="editable-cell" ondblclick="editCell(this, \'suspension\')" title="Doppio click per modificare"'
+            frame_cell_attrs = ' class="editable-cell" ondblclick="editCell(this, \'frame\')" title="Doppio click per modificare"'
         else:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
+            motor_cell_attrs = battery_cell_attrs = suspension_cell_attrs = frame_cell_attrs = ''
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
@@ -700,11 +723,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>
-                    <td><span class="motor">{motor_text}</span></td>
-                    <td>{battery_text}</td>
-                    <td>{suspension_text}</td>
+                    <td{motor_cell_attrs}><span class="motor">{motor_text}</span></td>
+                    <td{battery_cell_attrs}>{battery_text}</td>
+                    <td{suspension_cell_attrs}>{suspension_text}</td>
                     <td>{anno_text}</td>
-                    <td>{frame_text}</td>
+                    <td{frame_cell_attrs}>{frame_text}</td>
                     <td>{bike['distance_km']:.1f} km</td>
                     <td>{added_text}</td>
                     <td class="numeric-id">#{bike['numeric_id']}</td>
@@ -742,6 +765,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 document.getElementById('editMotorModel').value = row.getAttribute('data-edit-motor-model') || '';
                 document.getElementById('editMotorTorque').value = row.getAttribute('data-edit-motor-torque') || '';
                 document.getElementById('editBattery').value = row.getAttribute('data-edit-battery') || '';
+                document.getElementById('editSuspension').value = row.getAttribute('data-edit-suspension') || '';
                 document.getElementById('editFrame').value = row.getAttribute('data-edit-frame') || '';
             }
 
@@ -852,8 +876,96 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 motor_model: document.getElementById('editMotorModel').value || null,
                 motor_torque_nm: torque !== '' ? parseFloat(torque) : null,
                 battery_capacity_wh: battery !== '' ? parseFloat(battery) : null,
+                suspension_type: document.getElementById('editSuspension').value || null,
                 frame_size: document.getElementById('editFrame').value || null
             });
+        }
+
+        // Inline cell editing — double-click a Motore/Batteria/Sospensioni/
+        // Taglia cell to edit it in place, without opening the full
+        // "Dettagli" modal. ✓ saves (POSTs just that field to the same
+        // /specs endpoint saveSpecs() uses) and reloads; ✕ restores the
+        // cell's original content with no request.
+        const SUSPENSION_OPTIONS = [
+            ['unknown', 'Non specificata'],
+            ['full_suspension', 'Full suspension'],
+            ['hardtail', 'Hardtail']
+        ];
+
+        function editCell(td, field) {
+            if (td.classList.contains('editing')) return;
+            const row = td.closest('tr');
+            td.dataset.original = td.innerHTML;
+            td.classList.add('editing');
+
+            let inputHtml = '';
+            if (field === 'battery') {
+                const val = row.getAttribute('data-edit-battery') || '';
+                inputHtml = `<input type="number" class="cell-edit-input" id="cellEdit_battery" value="${val}">`;
+            } else if (field === 'suspension') {
+                const val = row.getAttribute('data-edit-suspension') || '';
+                inputHtml = '<select class="cell-edit-input" id="cellEdit_suspension">' +
+                    SUSPENSION_OPTIONS.map(([v, l]) => `<option value="${v}"${v === val ? ' selected' : ''}>${l}</option>`).join('') +
+                    '</select>';
+            } else if (field === 'frame') {
+                const val = row.getAttribute('data-edit-frame') || '';
+                inputHtml = `<input type="text" class="cell-edit-input" id="cellEdit_frame" value="${val}">`;
+            } else if (field === 'motor') {
+                const brand = row.getAttribute('data-edit-motor-brand') || '';
+                const model = row.getAttribute('data-edit-motor-model') || '';
+                const torque = row.getAttribute('data-edit-motor-torque') || '';
+                inputHtml =
+                    `<input type="text" class="cell-edit-input" id="cellEdit_motor_brand" placeholder="Marca" value="${brand}">` +
+                    `<input type="text" class="cell-edit-input" id="cellEdit_motor_model" placeholder="Modello" value="${model}">` +
+                    `<input type="number" class="cell-edit-input" id="cellEdit_motor_torque" placeholder="Nm" value="${torque}">`;
+            }
+
+            td.innerHTML = `<div class="cell-edit">${inputHtml}<span class="cell-edit-actions">` +
+                `<button class="cell-edit-btn cell-edit-save" onclick="saveCell(this, '${field}')" title="Salva">✓</button>` +
+                `<button class="cell-edit-btn cell-edit-cancel" onclick="cancelCell(this)" title="Annulla">✕</button>` +
+                '</span></div>';
+
+            const firstInput = td.querySelector('input, select');
+            if (firstInput) firstInput.focus();
+        }
+
+        function cancelCell(button) {
+            const td = button.closest('td');
+            td.innerHTML = td.dataset.original;
+            td.classList.remove('editing');
+        }
+
+        async function saveCell(button, field) {
+            const td = button.closest('td');
+            const row = td.closest('tr');
+            const listingId = row.getAttribute('data-id');
+
+            const payload = {};
+            if (field === 'battery') {
+                const v = document.getElementById('cellEdit_battery').value;
+                payload.battery_capacity_wh = v !== '' ? parseFloat(v) : null;
+            } else if (field === 'suspension') {
+                payload.suspension_type = document.getElementById('cellEdit_suspension').value || null;
+            } else if (field === 'frame') {
+                payload.frame_size = document.getElementById('cellEdit_frame').value || null;
+            } else if (field === 'motor') {
+                const torque = document.getElementById('cellEdit_motor_torque').value;
+                payload.motor_brand = document.getElementById('cellEdit_motor_brand').value || null;
+                payload.motor_model = document.getElementById('cellEdit_motor_model').value || null;
+                payload.motor_torque_nm = torque !== '' ? parseFloat(torque) : null;
+            }
+
+            try {
+                const resp = await fetch(`/api/listings/${listingId}/specs`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+                location.reload();
+            } catch (e) {
+                alert('Salvataggio non riuscito. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
+            }
         }
 
         // ESC closes, arrow keys navigate — only while the modal is open
