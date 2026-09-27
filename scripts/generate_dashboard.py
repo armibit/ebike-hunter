@@ -27,20 +27,31 @@ def _attr(value) -> str:
     )
 
 
-def _format_price(bike: dict) -> str:
-    """Show the price in the currency the listing was actually posted in —
-    not silently converted to CHF. Scoring/filtering still use price_chf
-    internally; this only changes what's displayed. A small "(~X CHF)" hint
-    is appended for non-CHF listings since the budget filters are CHF-based."""
+def _format_price(bike: dict, previous_price: str = None) -> str:
+    """Show the price in the currency the listing was actually posted in,
+    without conversions. Scoring/filtering still use price_chf internally."""
     price_raw = bike.get("price_raw")
     currency = (bike.get("currency") or "").upper()
     price_chf = bike.get("price_chf")
     if price_raw is None:
-        return f"{price_chf:.0f} CHF" if price_chf is not None else "N/A"
-    text = f"{price_raw:.0f} {currency}".strip()
-    if currency and currency != "CHF" and price_chf is not None:
-        text += f" (~{price_chf:.0f} CHF)"
+        text = f"{price_chf:.0f} CHF" if price_chf is not None else "N/A"
+    else:
+        text = f"{price_raw:.0f} {currency}".strip()
+    if previous_price:
+        text += f"<br><small style='color: var(--text-muted);'>era: {previous_price}</small>"
     return text
+
+
+def _get_previous_price(history: list) -> str:
+    """Get previous price from history. If 2+ snapshots, return the second-to-last."""
+    if len(history) < 2:
+        return None
+    prev = history[-2]
+    price_raw = prev.get("price_raw")
+    currency = (prev.get("currency") or "").upper()
+    if price_raw is None:
+        return None
+    return f"{price_raw:.0f} {currency}".strip()
 
 
 def _format_date(iso_str) -> str:
@@ -549,6 +560,21 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     </select>
                 </div>
                 <div class="filter-group">
+                    <label>Anno</label>
+                    <select id="yearFilter">
+                        <option value="">Tutti</option>
+                        <option value="2026">2026</option>
+                        <option value="2025">2025</option>
+                        <option value="2024">2024</option>
+                        <option value="2023">2023</option>
+                        <option value="2022">2022</option>
+                        <option value="2021">2021</option>
+                        <option value="2020">2020</option>
+                        <option value="2019">2019</option>
+                        <option value="2018">2018</option>
+                    </select>
+                </div>
+                <div class="filter-group">
                     <label>Score min</label>
                     <input type="number" id="scoreMin" value="60" min="0" max="100">
                 </div>
@@ -679,7 +705,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = bike["frame_size"] or "N/A"
-        price_text = _format_price(bike)
+        history = history_by_id.get(bike["id"], [])
+        previous_price = _get_previous_price(history) if status == "PRICE_DROP" else None
+        price_text = _format_price(bike, previous_price)
         anno_text = bike.get("model_year") or "N/A"
         km_text = f"{bike['odometer_km']:.0f} km" if bike.get("odometer_km") else "N/A"
         added_text = _format_date(bike.get("first_seen_at"))
@@ -687,7 +715,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
         ai_icon = '<span class="ai-icon" title="Analisi AI disponibile">🤖</span> ' if bike.get("ai_analysis") else ''
 
-        detail_html = _build_detail_html(bike, history_by_id.get(bike["id"], []))
+        detail_html = _build_detail_html(bike, history)
         row_templates.append(f'<template data-listing-id="{_attr(bike["id"])}">{detail_html}</template>')
         is_favorite = bool(bike.get("is_favorite"))
         fav_prefix = "⭐ " if is_favorite else ""
@@ -715,7 +743,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
             motor_cell_attrs = battery_cell_attrs = suspension_cell_attrs = frame_cell_attrs = ''
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
@@ -1003,6 +1031,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         document.getElementById('motorFilter').addEventListener('change', filterTable);
         document.getElementById('batteryMin').addEventListener('input', filterTable);
         document.getElementById('frameFilter').addEventListener('change', filterTable);
+        document.getElementById('yearFilter').addEventListener('change', filterTable);
         document.getElementById('scoreMin').addEventListener('input', filterTable);
         document.getElementById('favOnly').addEventListener('change', filterTable);
         document.getElementById('aiOnly').addEventListener('change', filterTable);
@@ -1015,6 +1044,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const motorFilter = document.getElementById('motorFilter').value;
             const batteryMin = parseFloat(document.getElementById('batteryMin').value);
             const frameFilter = document.getElementById('frameFilter').value;
+            const yearFilter = document.getElementById('yearFilter').value;
             const scoreMin = parseFloat(document.getElementById('scoreMin').value);
             const favOnly = document.getElementById('favOnly').checked;
             const aiOnly = document.getElementById('aiOnly').checked;
@@ -1029,6 +1059,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 const motor = row.dataset.motor;
                 const battery = parseFloat(row.dataset.battery);
                 const frame = row.dataset.frame;
+                const year = row.dataset.year;
                 const score = parseFloat(row.dataset.score);
                 const favorite = row.dataset.favorite === '1';
                 const hasAi = row.dataset.hasAi === '1';
@@ -1040,6 +1071,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 if (motorFilter && !motor.includes(motorFilter)) show = false;
                 if (battery < batteryMin) show = false;
                 if (frameFilter && frame !== frameFilter) show = false;
+                if (yearFilter && year !== yearFilter) show = false;
                 if (score < scoreMin) show = false;
                 if (favOnly && !favorite) show = false;
                 if (aiOnly && !hasAi) show = false;
@@ -1047,6 +1079,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
+                saveFilters();
             });
 
             const tbody = document.getElementById('tbody');
@@ -1056,7 +1089,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (visibleCount === 0) {
                 const noResult = document.createElement('tr');
                 noResult.className = 'filter-info';
-                noResult.innerHTML = '<td colspan="11" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
+                noResult.innerHTML = '<td colspan="13" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
         }
@@ -1076,12 +1109,58 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('motorFilter').value = '';
             document.getElementById('batteryMin').value = 0;
             document.getElementById('frameFilter').value = '';
+            document.getElementById('yearFilter').value = '';
             document.getElementById('scoreMin').value = 0;
             document.getElementById('favOnly').checked = false;
             document.getElementById('aiOnly').checked = false;
             document.getElementById('statusFilter').value = '';
+            saveFilters();
             filterTable();
         }
+
+        function saveFilters() {
+            const filters = {
+                priceMin: priceMinInput.value,
+                priceMax: priceMaxInput.value,
+                distMax: document.getElementById('distMax').value,
+                motorFilter: document.getElementById('motorFilter').value,
+                batteryMin: document.getElementById('batteryMin').value,
+                frameFilter: document.getElementById('frameFilter').value,
+                yearFilter: document.getElementById('yearFilter').value,
+                scoreMin: document.getElementById('scoreMin').value,
+                favOnly: document.getElementById('favOnly').checked,
+                aiOnly: document.getElementById('aiOnly').checked,
+                statusFilter: document.getElementById('statusFilter').value
+            };
+            localStorage.setItem('ebike-filters', JSON.stringify(filters));
+        }
+
+        function restoreFilters() {
+            const saved = localStorage.getItem('ebike-filters');
+            if (!saved) return;
+            try {
+                const filters = JSON.parse(saved);
+                priceMinInput.value = filters.priceMin;
+                priceMaxInput.value = filters.priceMax;
+                priceMinVal.textContent = filters.priceMin;
+                priceMaxVal.textContent = filters.priceMax;
+                document.getElementById('distMax').value = filters.distMax;
+                document.getElementById('motorFilter').value = filters.motorFilter;
+                document.getElementById('batteryMin').value = filters.batteryMin;
+                document.getElementById('frameFilter').value = filters.frameFilter;
+                document.getElementById('yearFilter').value = filters.yearFilter;
+                document.getElementById('scoreMin').value = filters.scoreMin;
+                document.getElementById('favOnly').checked = filters.favOnly;
+                document.getElementById('aiOnly').checked = filters.aiOnly;
+                document.getElementById('statusFilter').value = filters.statusFilter;
+                filterTable();
+            } catch (e) {
+                console.error('Errore ripristino filtri:', e);
+            }
+        }
+
+        // Ripristina filtri al caricamento pagina
+        window.addEventListener('DOMContentLoaded', restoreFilters);
 
         // Click-to-sort columns. One accessor per <th>, in the same order
         // as the header row — null marks a non-sortable column (Azioni).

@@ -117,6 +117,8 @@ class RidewillConnector(BaseConnector):
         always wrong. The real description tab also has the actual spec
         table (Motore, Batteria (Wh), Escursione (mm)...), which the
         carousel cards never carried at all.
+
+        Also extracts availability info to detect when products are no longer in stock.
         """
         try:
             response = self.get(url)
@@ -125,7 +127,18 @@ class RidewillConnector(BaseConnector):
             if not desc_tag:
                 desc_tag = soup.find(class_=re.compile("description|scheda|caratteristiche"))
             description = desc_tag.get_text(" ", strip=True) if desc_tag else ""
-            return {"description_raw": description}
+
+            # Check availability: look for "non disponibile", "non in stock", etc.
+            page_text = soup.get_text(" ", strip=True).lower()
+            is_available = not any(phrase in page_text for phrase in [
+                "non disponibile", "esaurito", "out of stock", "non in stock",
+                "non più disponibile", "fuori stock"
+            ])
+
+            return {
+                "description_raw": description,
+                "is_available": is_available
+            }
         except Exception as e:
             logger.exception("Error fetching Ridewill details %s: %s", listing_id, e)
             return {}

@@ -95,11 +95,15 @@ def process_listing(
     """
     # Enrich with full listing-detail description when the search card gave none —
     # spec regex (motor/battery) often only appears in the full ad body, not the card.
+    # Also check availability: if product is marked unavailable (out of stock),
+    # reject it as the item is no longer for sale.
     if connector is not None and not listing_raw.get("description_raw"):
         try:
             details = connector.get_listing_details(listing_raw["portal_id"], listing_raw["url"])
             if details.get("description_raw"):
                 listing_raw["description_raw"] = details["description_raw"]
+            if details.get("is_available") is False:
+                return False  # Item no longer available, skip processing
         except Exception as e:
             logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e, exc_info=True)
 

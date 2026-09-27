@@ -130,6 +130,7 @@
   },
   "suspensions": {
     "travel_patterns": [
+      "(\\d{3})(?=-\\d{3}\\s*mm)",
       "(\\d{3})\\s*mm",
       "escursione\\s*(\\d{3})",
       "federweg\\s*(\\d{3})",

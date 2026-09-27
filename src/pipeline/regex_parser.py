@@ -19,18 +19,21 @@ class RegexParser:
     def parse(self, title: str, description: str) -> Dict[str, Any]:
         text = f"{title} {description}".lower()
 
+        # Travel detection early, needed to infer suspension type
+        travel_front, travel_rear = self._extract_travel(text)
+
         specs = {
             "brand": None,
             "model": None,
-            "suspension_type": self._detect_suspension_type(text),
+            "suspension_type": self._detect_suspension_type(text, travel_rear),
             "frame_size": self._detect_frame_size(text),
             "motor_brand": None,
             "motor_model": None,
             "motor_torque_nm": None,
             "motor_verified": None,
             "battery_capacity_wh": self._extract_battery_wh(text),
-            "travel_front_mm": None,
-            "travel_rear_mm": None,
+            "travel_front_mm": travel_front,
+            "travel_rear_mm": travel_rear,
             "brakes_model": None,
             "brakes_tier": self._detect_brakes_tier(text),
             "fork_tier": self._detect_fork_tier(text),
@@ -59,11 +62,6 @@ class RegexParser:
             specs["motor_model"] = "Not specified"
             specs["motor_torque_nm"] = 60
             specs["motor_verified"] = False
-
-        # Travel detection
-        travel_front, travel_rear = self._extract_travel(text)
-        specs["travel_front_mm"] = travel_front
-        specs["travel_rear_mm"] = travel_rear
 
         # Brand & Model extraction (basic heuristics)
         brand_model = self._extract_brand_model(title)
@@ -165,8 +163,12 @@ class RegexParser:
                     return wh
         return None
 
-    def _detect_suspension_type(self, text: str) -> str:
-        # Check hardtail disallowed first
+    def _detect_suspension_type(self, text: str, travel_rear: Optional[int] = None) -> str:
+        # If rear travel >= 50mm, it's definitively a full suspension
+        if travel_rear is not None and travel_rear >= 50:
+            return "full_suspension"
+
+        # Check hardtail keywords
         for kw in self.suspension_types["hardtail_disallowed"]:
             if re.search(rf"\b{kw}\b", text, re.IGNORECASE):
                 return "hardtail"
@@ -209,7 +211,7 @@ class RegexParser:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 val = int(match)
-                if 100 <= val <= 200:
+                if 80 <= val <= 300:
                     travel_values.append(val)
 
         if len(travel_values) >= 2:
