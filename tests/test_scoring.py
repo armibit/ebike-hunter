@@ -35,6 +35,11 @@ def test_price_scoring():
     # Test over budget
     assert engine._score_price(3500) == 0.0
 
+    # Test invalid price (0 or negative = failed price parse, never a real
+    # deal — must score 0, not fall into the "<= 1800 = 100" bucket)
+    assert engine._score_price(0) == 0.0
+    assert engine._score_price(-50) == 0.0
+
     print("✅ Price scoring tests passed")
 
 

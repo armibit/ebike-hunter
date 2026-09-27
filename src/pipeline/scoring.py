@@ -78,11 +78,14 @@ class ScoringEngine:
     def _score_price(self, price_chf: float) -> float:
         """
         Score based on price vs target budget.
+        <= 0 CHF = 0 (invalid/failed price parse, never a real deal)
         <= 1800 CHF = 100
         1800-3000 CHF = decay curve
         > 3000 CHF = 0
         """
-        if price_chf <= 1800:
+        if price_chf <= 0:
+            return 0.0
+        elif price_chf <= 1800:
             return 100.0
         elif price_chf > self.hard_max_price:
             return 0.0
