@@ -1362,7 +1362,16 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (!SORT_COLUMNS[i]) return;
             th.addEventListener('click', () => sortTable(i));
         });
+
+        const backToTopBtn = document.getElementById('backToTop');
+        window.addEventListener('scroll', () => {
+            backToTopBtn.classList.toggle('visible', window.scrollY > 400);
+        });
+        backToTopBtn.addEventListener('click', () => {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
     </script>
+    <button id="backToTop" class="back-to-top" title="Torna in cima">↑</button>
 </body>
 </html>
 """
