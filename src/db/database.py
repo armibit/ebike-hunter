@@ -279,7 +279,8 @@ class Database:
         self.conn.commit()
 
     def get_listings_needing_ai_analysis(
-        self, limit: int = 200, force: bool = False, listing_id: Optional[str] = None
+        self, limit: int = 200, force: bool = False, listing_id: Optional[str] = None,
+        listing_ids: Optional[List[str]] = None, id_range: Optional[Tuple[int, int]] = None,
     ) -> List[Dict[str, Any]]:
         """Listings due for an AI read: never analyzed yet, or analyzed
         before their most recent price drop.
@@ -297,16 +298,21 @@ class Database:
         eyes too, not silence. Its corrected_specs can then restore it to
         ACTIVE — see pipeline/corrections.py.
 
-        listing_id: skip all of the above and return just this one listing
-        (any status) — for testing the AI pass against a single annuncio
-        without touching the rest. force: re-send every in-scope listing
-        regardless of whether it was already analyzed — for deliberately
-        re-running the AI after a prompt change, at the cost of one API
-        call per listing it processes."""
+        listing_id / listing_ids / id_range: skip all of the above and
+        return just those listings (any status) — for testing the AI pass
+        against a hand-picked set without touching the rest. listing_id is
+        a single already-resolved id; listing_ids is a list of already-
+        resolved ids; id_range is an inclusive (min, max) rowid range (the
+        numeric id shown in the dashboard) — the three are mutually
+        exclusive, listing_id taking priority if more than one is passed.
+        force: re-send every in-scope listing regardless of whether it was
+        already analyzed — for deliberately re-running the AI after a
+        prompt change, at the cost of one API call per listing it
+        processes."""
         cursor = self.conn.cursor()
         base_select = """
-        SELECT l.id, l.title, l.description_raw, l.price_chf, l.distance_km, l.status,
-               l.rejection_reason,
+        SELECT l.id, l.portal, l.portal_id, l.url, l.title, l.description_raw,
+               l.price_chf, l.distance_km, l.status, l.rejection_reason,
                s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
                s.brakes_tier, s.odometer_km, s.red_flag_details,
@@ -318,6 +324,18 @@ class Database:
 
         if listing_id is not None:
             cursor.execute(base_select + " WHERE l.id = ?", (listing_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+        if listing_ids is not None:
+            if not listing_ids:
+                return []
+            placeholders = ",".join("?" for _ in listing_ids)
+            cursor.execute(base_select + f" WHERE l.id IN ({placeholders})", listing_ids)
+            return [dict(row) for row in cursor.fetchall()]
+
+        if id_range is not None:
+            lo, hi = id_range
+            cursor.execute(base_select + " WHERE l.rowid BETWEEN ? AND ?", (lo, hi))
             return [dict(row) for row in cursor.fetchall()]
 
         scope_filter = (
@@ -390,6 +408,17 @@ class Database:
                 continue  # genuinely eligible right now, nothing to explain
             excluded.append(row)
         return excluded
+
+    def update_description_raw(self, listing_id: str, description_raw: str):
+        """Persist a description fetched live during the AI pass (analyze.py)
+        when the stored one was missing or too thin — so the enrichment
+        survives beyond this one run instead of being re-fetched every time."""
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE listings SET description_raw = ? WHERE id = ?",
+            (description_raw, listing_id),
+        )
+        self.conn.commit()
 
     def save_ai_analysis(self, listing_id: str, ai_analysis: str, ai_score: float):
         """Save Claude's verdict for a listing. Additive only — never touches
@@ -473,16 +502,23 @@ class Database:
         return dict(row) if row else None
 
     def get_top_deals(self, min_score: float = 65.0, limit: int = 50) -> List[Dict[str, Any]]:
+        """Entry into the list stays fully deterministic (score_total >= min_score)
+        — the AI never rescues a listing that failed the heuristic bar. Order
+        within it blends in Claude's read: ranking_score = 0.6*score_total +
+        0.4*ai_score once a listing has been AI-analyzed, else score_total alone
+        (a listing not yet analyzed isn't penalized for having no ai_score)."""
         cursor = self.conn.cursor()
         cursor.execute("""
         SELECT l.*, s.motor_model, s.motor_torque_nm, s.battery_capacity_wh, s.frame_size,
                s.travel_front_mm, s.brakes_tier, sc.score_total, sc.score_price_value,
-               sc.score_component_quality, sc.is_deal_target
+               sc.score_component_quality, sc.is_deal_target,
+               CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
+                    ELSE sc.score_total END AS ranking_score
         FROM listings l
         JOIN scores sc ON l.id = sc.listing_id
         LEFT JOIN specifications s ON l.id = s.listing_id
         WHERE l.status IN ('ACTIVE', 'PRICE_DROP') AND sc.score_total >= ?
-        ORDER BY sc.score_total DESC, l.price_chf ASC
+        ORDER BY ranking_score DESC, l.price_chf ASC
         LIMIT ?
         """, (min_score, limit))
         return [dict(row) for row in cursor.fetchall()]

@@ -24,9 +24,115 @@ from db.database import Database
 from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE
 from pipeline.corrections import apply_spec_correction
 from pipeline.scoring import ScoringEngine
+from connectors.tutti import TuttiConnector
+from connectors.subito import SubitoConnector
+from connectors.buycycle import BuycycleConnector
+from connectors.upway import UpwayConnector
+from connectors.decathlon import DecathlonConnector
+from connectors.velomarkt import VelomarktConnector
+from connectors.tcs_velocorner import TcsVelocornerConnector
+from connectors.ridewill import RidewillConnector
+from connectors.zbike import ZbikeConnector
+from connectors.godspeed import GodspeedConnector
+from connectors.ebikelab import EbikelabConnector
+from connectors.ecycles_shop import EcyclesShopConnector
+from connectors.ebikestorebrescia import EbikestorebresciaConnector
+from connectors.buybestgear import BuybestgearConnector
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def setup_logging() -> Path:
+    """Console stays at INFO; the file gets DEBUG so every per-listing
+    check and every AI skip/discard reason (analyzer's own WARNING logs
+    included) ends up somewhere reviewable after the run, not just
+    scrolled past in the terminal. Mirrors run.py's logs/run.log setup."""
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+
+    logs_dir = BASE_DIR / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    log_path = logs_dir / "analyze.log"
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
+    logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler], force=True)
+    return log_path
+
+# Every listing due for AI analysis, regardless of score — get_listings_needing_
+# ai_analysis() defaults to limit=200 ordered by score_total DESC for other
+# callers, but that silently truncated this pass: SQLite sorts NULL score_total
+# (every REJECTED-by-hard-filter listing) last, so with >200 scored listings in
+# the DB the ~1300 unscored ones were never reached, by --force or otherwise —
+# the same top-200 got reanalyzed every run instead. This pass's whole point is
+# to clear the backlog, so it must not cap it.
+NO_BACKLOG_CAP = 100_000
+
+# Below this, treat description_raw as "not enough for the AI to judge the bike
+# on" rather than merely present — a one-line title-only blurb (or nothing)
+# tells Claude nothing about condition, seller trustworthiness or excluded flaws.
+MIN_DESCRIPTION_CHARS = 40
+
+CONNECTOR_CLASSES = {
+    "tutti": TuttiConnector,
+    "subito": SubitoConnector,
+    "buycycle": BuycycleConnector,
+    "upway": UpwayConnector,
+    "decathlon": DecathlonConnector,
+    "velomarkt": VelomarktConnector,
+    "tcs_velocorner": TcsVelocornerConnector,
+    "ridewill": RidewillConnector,
+    "zbike": ZbikeConnector,
+    "godspeed": GodspeedConnector,
+    "ebikelab": EbikelabConnector,
+    "ecycles_shop": EcyclesShopConnector,
+    "ebikestorebrescia": EbikestorebresciaConnector,
+    "buybestgear": BuybestgearConnector,
+}
+
+
+def enrich_thin_descriptions(listings: List[Dict[str, Any]], db: Database, config: Dict[str, Any]) -> int:
+    """Before handing listings to Claude, backfill any description_raw that's
+    missing or too thin with a live fetch of the connector's detail page.
+
+    run.py only ever does this at scan time, for listings the connector's
+    search actually returned that run — a listing that fell off the search
+    results (paginated out, re-sorted) keeps a stale/empty description
+    forever even after a connector's selector bug gets fixed. This pass
+    reads straight from the DB, so it's the only place that can catch and
+    fix that for every listing in scope, not just freshly-scanned ones."""
+    connector_cache: Dict[str, Any] = {}
+    enriched = 0
+    for listing in listings:
+        description = (listing.get("description_raw") or "").strip()
+        if len(description) >= MIN_DESCRIPTION_CHARS:
+            continue
+        logger.debug(
+            "Descrizione corta per %s (%d caratteri) — provo a recuperarla dalla pagina dettaglio.",
+            listing["id"], len(description),
+        )
+        connector_cls = CONNECTOR_CLASSES.get(listing.get("portal"))
+        if connector_cls is None:
+            continue
+        connector = connector_cache.get(listing["portal"])
+        if connector is None:
+            connector = connector_cls(config)
+            connector_cache[listing["portal"]] = connector
+        try:
+            details = connector.get_listing_details(listing["portal_id"], listing["url"])
+        except Exception as e:
+            logger.debug("Live description fetch failed for %s: %s", listing["id"], e, exc_info=True)
+            continue
+        new_description = (details.get("description_raw") or "").strip()
+        if len(new_description) > len(description):
+            listing["description_raw"] = new_description
+            db.update_description_raw(listing["id"], new_description)
+            enriched += 1
+    return enriched
 
 
 def load_config() -> Dict[str, Any]:
@@ -47,17 +153,31 @@ def parse_args():
              "analizzati in precedenza (es. dopo aver cambiato il prompt AI). "
              "Costa una chiamata API per ogni annuncio riprocessato.",
     )
-    parser.add_argument(
+    id_group = parser.add_mutually_exclusive_group()
+    id_group.add_argument(
         "--id", dest="listing_id", metavar="ID",
         help="Analizza solo questo annuncio, per test — accetta sia l'id numerico "
              "mostrato nella dashboard (es. 42) sia l'id completo (es. tutti_12345). "
              "Ignora --force e lo stato dell'annuncio.",
+    )
+    id_group.add_argument(
+        "--ids", dest="listing_ids", metavar="ID1,ID2,...",
+        help="Analizza solo questi annunci — lista separata da virgole, ognuno "
+             "sia id numerico da dashboard sia id completo (es. 12,tutti_12345,44). "
+             "Ignora --force e lo stato degli annunci.",
+    )
+    id_group.add_argument(
+        "--id-range", dest="id_range", nargs=2, type=int, metavar=("MIN", "MAX"),
+        help="Analizza solo gli annunci con id numerico da dashboard compreso tra "
+             "MIN e MAX (inclusi), es. --id-range 10 50. Ignora --force e lo stato "
+             "degli annunci.",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    log_path = setup_logging()
 
     # override=True: .env is this project's explicit local config (e.g. pointing
     # ANTHROPIC_BASE_URL at a local gateway) — it should win over stray vars
@@ -74,14 +194,32 @@ def main():
     scorer = ScoringEngine(config)
 
     listing_id = None
+    listing_ids = None
+    id_range = None
     if args.listing_id is not None:
         listing_id = db.resolve_listing_id(args.listing_id)
         if listing_id is None:
             logger.error("Nessun annuncio trovato con id %r.", args.listing_id)
             db.close()
             sys.exit(1)
+    elif args.listing_ids is not None:
+        listing_ids = []
+        for raw in (v.strip() for v in args.listing_ids.split(",")):
+            if not raw:
+                continue
+            resolved = db.resolve_listing_id(raw)
+            if resolved is None:
+                logger.error("Nessun annuncio trovato con id %r.", raw)
+                db.close()
+                sys.exit(1)
+            listing_ids.append(resolved)
+    elif args.id_range is not None:
+        id_range = (args.id_range[0], args.id_range[1])
 
-    listings = db.get_listings_needing_ai_analysis(force=args.force, listing_id=listing_id)
+    listings = db.get_listings_needing_ai_analysis(
+        limit=NO_BACKLOG_CAP, force=args.force,
+        listing_id=listing_id, listing_ids=listing_ids, id_range=id_range,
+    )
 
     # Diagnostic: a scored listing is always in scope for the AI pass
     # regardless of status — REJECTED (manual "Scarta", or a spec
@@ -90,7 +228,7 @@ def main():
     # that it was already analyzed (skipped on purpose unless you pass
     # --force). Print it explicitly instead of leaving "why wasn't this
     # processed" to be reverse-engineered from silence.
-    if listing_id is None and not args.force:
+    if listing_id is None and listing_ids is None and id_range is None and not args.force:
         exclusions = db.get_high_score_ai_exclusions(min_score=70.0)
         if exclusions:
             print(f"\n⚠️  {len(exclusions)} annunci con punteggio >= 70 NON verranno analizzati ora:")
@@ -103,16 +241,30 @@ def main():
         db.close()
         return
 
+    enriched = enrich_thin_descriptions(listings, db, config)
+    if enriched:
+        print(f"✓ Fetched a live detail page for {enriched} listing(s) with a missing/thin description.")
+
     batches = chunked(listings, MAX_BATCH_SIZE)
     print(f"Analyzing {len(listings)} listing(s) with Claude Haiku, in {len(batches)} batch(es)...")
 
     analyzed = 0
     corrected = 0
+    discarded: List[Dict[str, str]] = []
     for i, batch in enumerate(batches, 1):
+        for listing in batch:
+            logger.info(
+                "[batch %d/%d] Controllo annuncio %s: \"%s\" (%s CHF)",
+                i, len(batches), listing["id"], (listing.get("title") or "")[:60], listing.get("price_chf"),
+            )
+
         results = analyzer.analyze_batch(batch)
+        result_ids = {result["listing_id"] for result in results}
+
         for result in results:
             db.save_ai_analysis(result["listing_id"], result["ai_analysis"], result["ai_score"])
             analyzed += 1
+            logger.info("  -> %s analizzato, ai_score=%.1f", result["listing_id"], result["ai_score"])
 
             # If Claude read a spec directly off the seller's text that the
             # regex parser missed (e.g. an unverified/guessed motor, or an
@@ -129,11 +281,33 @@ def main():
                         result["listing_id"], corrected_specs, score_result["score_total"],
                     )
 
+        # A listing sent in this batch but absent from result_ids never got a
+        # valid verdict back — either the whole API call failed (analyzer logs
+        # and returns [] for the batch) or the model skipped/malformed just
+        # this item (analyzer already logs the specific reason as a WARNING
+        # right above this). Track it here too so the end-of-run report has a
+        # per-listing count, not just a log line to go dig for.
+        for listing in batch:
+            if listing["id"] not in result_ids:
+                reason = "nessun risultato valido dall'AI per questo annuncio (vedi log WARNING sopra per il motivo esatto)"
+                discarded.append({"id": listing["id"], "title": listing.get("title") or "", "reason": reason})
+                logger.warning("  -> %s SCARTATO — %s", listing["id"], reason)
+
         print(f"  batch {i}/{len(batches)}: {len(results)}/{len(batch)} analyzed")
 
     db.close()
     print(f"Done — {analyzed}/{len(listings)} listing(s) analyzed"
           + (f", {corrected} rescored from AI-read spec corrections." if corrected else "."))
+
+    logger.info("=== REPORT ANALISI ===")
+    logger.info("Controllati: %d", len(listings))
+    logger.info("Analizzati con successo: %d", analyzed)
+    logger.info("Rescored da correzioni AI: %d", corrected)
+    logger.info("Scartati: %d", len(discarded))
+    for item in discarded:
+        logger.info("  - %s \"%s\" — %s", item["id"], item["title"][:60], item["reason"])
+    logger.info("=== FINE REPORT ===")
+    print(f"✓ Report completo in {log_path}")
 
     from scripts.generate_dashboard import generate_dashboard
     dashboard_path = BASE_DIR / "index.html"
