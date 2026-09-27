@@ -1018,24 +1018,91 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         const priceMinVal = document.getElementById('priceMinVal');
         const priceMaxVal = document.getElementById('priceMaxVal');
 
+        async function updateTop10() {
+            const params = new URLSearchParams({
+                price_min: priceMinInput.value,
+                price_max: priceMaxInput.value,
+                dist_max: document.getElementById('distMax').value || undefined,
+                motor_brand: document.getElementById('motorFilter').value || undefined,
+                battery_min: document.getElementById('batteryMin').value || undefined,
+                frame_size: document.getElementById('frameFilter').value || undefined,
+                year: document.getElementById('yearFilter').value || undefined,
+                score_min: document.getElementById('scoreMin').value,
+                status: document.getElementById('statusFilter').value || undefined,
+                fav_only: document.getElementById('favOnly').checked,
+                ai_only: document.getElementById('aiOnly').checked,
+                limit: 10
+            });
+
+            try {
+                const response = await fetch(`/api/top-deals?${params}`);
+                if (!response.ok) throw new Error('Network response not ok');
+                const deals = await response.json();
+                renderTop10(deals);
+            } catch (error) {
+                console.error('Errore caricamento top 10:', error);
+            }
+        }
+
+        function renderTop10(deals) {
+            const topContainer = document.querySelector('.top-10');
+            if (!topContainer) return;
+
+            topContainer.innerHTML = '';
+
+            if (deals.length === 0) {
+                topContainer.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #999;">Nessun annuncio corrisponde ai filtri selezionati</div>';
+                return;
+            }
+
+            deals.forEach((deal, idx) => {
+                const item = document.createElement('div');
+                item.className = 'top-item';
+                const rankBadge = idx + 1;
+                const link = deal.url || '#';
+                const title = deal.title || 'Unknown';
+                const portal = deal.portal || 'unknown';
+                const score = deal.ranking_score ? deal.ranking_score.toFixed(1) : deal.score_total?.toFixed(1) || 'N/A';
+                const price = deal.price_raw ? `${deal.price_raw.toFixed(0)} ${deal.currency || 'CHF'}` : `${deal.price_chf?.toFixed(0) || 'N/A'} CHF`;
+                const distance = deal.distance_km ? deal.distance_km.toFixed(1) : 'N/A';
+
+                item.innerHTML = `
+                    <div>
+                        <span class="top-rank">${rankBadge}</span>
+                        <a href="${link}" target="_blank">${title}</a>
+                        <span class="top-portal">(${portal})</span>
+                    </div>
+                    <div class="top-analysis">${deal.user_analysis || 'Nessuna analisi disponibile'}</div>
+                    <div class="top-meta">${score} · ${price} · ${distance} km</div>
+                `;
+
+                topContainer.appendChild(item);
+            });
+        }
+
+        function applyFilters() {
+            filterTable();
+            updateTop10();
+        }
+
         priceMinInput.addEventListener('input', () => {
             priceMinVal.textContent = priceMinInput.value;
-            filterTable();
+            applyFilters();
         });
         priceMaxInput.addEventListener('input', () => {
             priceMaxVal.textContent = priceMaxInput.value;
-            filterTable();
+            applyFilters();
         });
 
-        document.getElementById('distMax').addEventListener('input', filterTable);
-        document.getElementById('motorFilter').addEventListener('change', filterTable);
-        document.getElementById('batteryMin').addEventListener('input', filterTable);
-        document.getElementById('frameFilter').addEventListener('change', filterTable);
-        document.getElementById('yearFilter').addEventListener('change', filterTable);
-        document.getElementById('scoreMin').addEventListener('input', filterTable);
-        document.getElementById('favOnly').addEventListener('change', filterTable);
-        document.getElementById('aiOnly').addEventListener('change', filterTable);
-        document.getElementById('statusFilter').addEventListener('change', filterTable);
+        document.getElementById('distMax').addEventListener('input', applyFilters);
+        document.getElementById('motorFilter').addEventListener('change', applyFilters);
+        document.getElementById('batteryMin').addEventListener('input', applyFilters);
+        document.getElementById('frameFilter').addEventListener('change', applyFilters);
+        document.getElementById('yearFilter').addEventListener('change', applyFilters);
+        document.getElementById('scoreMin').addEventListener('input', applyFilters);
+        document.getElementById('favOnly').addEventListener('change', applyFilters);
+        document.getElementById('aiOnly').addEventListener('change', applyFilters);
+        document.getElementById('statusFilter').addEventListener('change', applyFilters);
 
         function filterTable() {
             const priceMin = parseFloat(priceMinInput.value);
@@ -1115,7 +1182,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('aiOnly').checked = false;
             document.getElementById('statusFilter').value = '';
             saveFilters();
-            filterTable();
+            applyFilters();
         }
 
         function saveFilters() {

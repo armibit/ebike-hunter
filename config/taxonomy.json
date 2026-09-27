@@ -151,14 +151,16 @@
       "\\bm\\b", "\\bmedium\\b", "\\btaglia m\\b", "\\bgrösse m\\b", "\\bgroesse m\\b",
       "\\btaille m\\b", "\\bs2\\b", "\\bs3\\b", "\\b17\\s*(?:\"|inch|pollici)?\\b",
       "\\b18\\s*(?:\"|inch|pollici)?\\b", "\\b43\\s*cm\\b", "\\b44\\s*cm\\b",
-      "\\b45\\s*cm\\b", "\\b46\\s*cm\\b"
+      "\\b45\\s*cm\\b", "\\b46\\s*cm\\b",
+      "\\(m\\)", "\\(s2\\)", "\\(s3\\)"
     ],
     "disallowed_sizes": [
       "\\bxs\\b", "\\bxl\\b", "\\bxxl\\b", "\\bs1\\b", "\\bs5\\b", "\\bs6\\b",
-      "\\bl\\b(?!['’ʼ]|&apos;|&#0?39;)", "\\bl50\\b", "\\blarge\\b", "\\btaglia l\\b", "\\bgrösse l\\b",
+      "\\bl\\b(?![‘’ʼ]|&apos;|&#0?39;)", "\\bl50\\b", "\\blarge\\b", "\\btaglia l\\b", "\\bgrösse l\\b",
       "\\bgroesse l\\b", "\\btaille l\\b",
       "\\b20\\s*(?:\"|inch|pollici)\\b", "\\b21\\s*(?:\"|inch|pollici)\\b",
-      "\\b50\\s*cm\\b", "\\b52\\s*cm\\b", "\\b54\\s*cm\\b"
+      "\\b50\\s*cm\\b", "\\b52\\s*cm\\b", "\\b54\\s*cm\\b",
+      "\\(s\\)", "\\(xs\\)", "\\(l\\)", "\\(xl\\)", "\\(xxl\\)"
     ]
   },
   "suspension_types": {

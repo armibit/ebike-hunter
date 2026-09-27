@@ -125,6 +125,8 @@ def get_top_deals_dynamic():
         'limit': request.args.get('limit', default=10, type=int),
     }
 
+    filters = {k: (v if v != 'undefined' else None) for k, v in filters.items()}
+
     deals = db.get_filtered_top_deals(**filters)
     db.close()
 
