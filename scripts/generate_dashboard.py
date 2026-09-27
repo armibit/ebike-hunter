@@ -378,7 +378,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .top-analysis {{ font-size: 12px; color: var(--text-muted); margin: 8px 0; line-height: 1.5; max-height: 4.5em; overflow: hidden; }}
         .top-meta {{ font-size: 12px; color: var(--text); font-weight: 600; padding-top: 8px; border-top: 1px solid var(--border); }}
 
-        table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
+        table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: visible; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
+        thead {{ position: sticky; top: 0; z-index: 20; }}
         thead th {{ background: #fafbfc; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; font-weight: 700; padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }}
         thead th:not(.no-sort) {{ cursor: pointer; user-select: none; }}
         thead th:not(.no-sort):hover {{ color: var(--primary); }}
@@ -617,15 +618,17 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         <table id="table">
             <thead>
                 <tr>
-                    <th>#</th>
                     <th>Score</th>
+                    <th>Annuncio</th>
                     <th>Prezzo</th>
-                    <th>Distanza</th>
+                    <th>Status</th>
                     <th>Motore</th>
                     <th>Batteria</th>
                     <th>Anno</th>
+                    <th>Taglia</th>
+                    <th>Distanza</th>
                     <th>Aggiunto</th>
-                    <th>Annuncio</th>
+                    <th>#</th>
                     <th class="no-sort">Azioni</th>
                     <th>Status</th>
                 </tr>
@@ -689,18 +692,20 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
 
         html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
-                    <td class="numeric-id">#{bike['numeric_id']}</td>
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
-                    <td>{price_text}</td>
-                    <td>{bike['distance_km']:.1f} km</td>
-                    <td><span class="motor">{motor_text}</span></td>
-                    <td>{battery_text}</td>
-                    <td>{anno_text}</td>
-                    <td>{added_text}</td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
                         <div class="title-meta">{ai_icon}{bike['portal']} · {meta_text}</div>
                     </td>
+                    <td>{price_text}</td>
+                    <td><span class="status {status_class}">{status}</span></td>
+                    <td><span class="motor">{motor_text}</span></td>
+                    <td>{battery_text}</td>
+                    <td>{anno_text}</td>
+                    <td>{frame_text}</td>
+                    <td>{bike['distance_km']:.1f} km</td>
+                    <td>{added_text}</td>
+                    <td class="numeric-id">#{bike['numeric_id']}</td>
                     <td>{actions_cell}</td>
                     <td><span class="status {status_class}">{status}</span></td>
                 </tr>
@@ -971,15 +976,17 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         // bottom regardless of direction, instead of landing at whichever
         // end NaN/undefined happens to compare to.
         const SORT_COLUMNS = [
-            row => parseInt(row.dataset.numericId, 10),
             row => parseFloat(row.dataset.score),
+            { text: row => (row.querySelector('a.title-link')?.textContent || '').toLowerCase() },
             row => parseFloat(row.dataset.price),
-            row => parseFloat(row.dataset.distance),
+            { text: row => row.dataset.statusGroup || '' },
             row => parseFloat(row.dataset.motorTorque),
             row => parseFloat(row.dataset.battery),
             row => parseInt(row.dataset.year, 10),
+            { text: row => row.dataset.frame || 'N/A' },
+            row => parseFloat(row.dataset.distance),
             row => row.dataset.firstSeen ? new Date(row.dataset.firstSeen).getTime() : NaN,
-            { text: row => (row.querySelector('a.title-link')?.textContent || '').toLowerCase() },
+            row => parseInt(row.dataset.numericId, 10),
             null,
             { text: row => row.dataset.statusGroup || '' },
         ];
