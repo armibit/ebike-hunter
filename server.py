@@ -106,6 +106,31 @@ def update_specs(listing_id):
     return jsonify({"ok": True, "score_total": score_result["score_total"]})
 
 
+@app.route("/api/top-deals", methods=["GET"])
+def get_top_deals_dynamic():
+    db = Database(DB_PATH)
+
+    filters = {
+        'price_min': request.args.get('price_min', type=float),
+        'price_max': request.args.get('price_max', type=float),
+        'dist_max': request.args.get('dist_max', type=float),
+        'motor_brand': request.args.get('motor_brand'),
+        'battery_min': request.args.get('battery_min', type=float),
+        'frame_size': request.args.get('frame_size'),
+        'year': request.args.get('year'),
+        'score_min': request.args.get('score_min', default=60.0, type=float),
+        'status': request.args.get('status'),
+        'fav_only': request.args.get('fav_only', default=False, type=lambda x: x.lower() == 'true'),
+        'ai_only': request.args.get('ai_only', default=False, type=lambda x: x.lower() == 'true'),
+        'limit': request.args.get('limit', default=10, type=int),
+    }
+
+    deals = db.get_filtered_top_deals(**filters)
+    db.close()
+
+    return jsonify([dict(deal) for deal in deals])
+
+
 def _find_app_mode_browser() -> Optional[str]:
     """Find a Chromium-based browser that supports --app= (a borderless
     window with no tabs/address bar — the closest a plain web page gets to

@@ -167,6 +167,14 @@ def process_listing(
     if specs["has_red_flag"]:
         reject_reasons.append(f"Red flags: {', '.join(specs['red_flag_details'][:2])}")
 
+    # Calculate dedupe_signature for duplicate detection
+    # Use normalized title (lowercase, spaces removed, trimmed to first 3 words)
+    # to group similar products (e.g., same model in different colors/sizes)
+    import hashlib
+    title_words = listing_raw["title"].lower().split()[:3]
+    title_norm = "_".join(title_words).strip()
+    dedupe_sig = hashlib.md5(title_norm.encode()).hexdigest()[:16]
+
     # Prepare listing data
     listing_data = {
         **listing_raw,
@@ -175,7 +183,8 @@ def process_listing(
         "latitude": lat,
         "longitude": lon,
         "distance_km": distance_km,
-        "region": region
+        "region": region,
+        "dedupe_signature": dedupe_sig
     }
 
     if reject_reasons:

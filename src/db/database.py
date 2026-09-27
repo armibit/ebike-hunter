@@ -523,6 +523,81 @@ class Database:
         """, (min_score, limit))
         return [dict(row) for row in cursor.fetchall()]
 
+    def get_filtered_top_deals(self, **filters) -> List[Dict[str, Any]]:
+        """Get top deals with dynamic filtering. Filters: price_min, price_max, dist_max,
+        motor_brand, battery_min, frame_size, year, score_min, status, fav_only, ai_only."""
+        cursor = self.conn.cursor()
+
+        price_min = filters.get('price_min')
+        price_max = filters.get('price_max')
+        dist_max = filters.get('dist_max')
+        motor_brand = filters.get('motor_brand')
+        battery_min = filters.get('battery_min')
+        frame_size = filters.get('frame_size')
+        year = filters.get('year')
+        score_min = filters.get('score_min', 60.0)
+        status = filters.get('status')
+        fav_only = filters.get('fav_only', False)
+        ai_only = filters.get('ai_only', False)
+        limit = filters.get('limit', 10)
+
+        where_parts = ["sc.score_total >= ?"]
+        params = [score_min]
+
+        if price_min is not None:
+            where_parts.append("l.price_chf >= ?")
+            params.append(price_min)
+        if price_max is not None:
+            where_parts.append("l.price_chf <= ?")
+            params.append(price_max)
+        if dist_max is not None:
+            where_parts.append("l.distance_km <= ?")
+            params.append(dist_max)
+        if motor_brand:
+            where_parts.append("s.motor_brand = ?")
+            params.append(motor_brand)
+        if battery_min is not None:
+            where_parts.append("s.battery_capacity_wh >= ?")
+            params.append(battery_min)
+        if frame_size:
+            where_parts.append("s.frame_size = ?")
+            params.append(frame_size)
+        if year:
+            where_parts.append("s.model_year = ?")
+            params.append(year)
+        if status == 'active':
+            where_parts.append("l.status IN ('ACTIVE', 'PRICE_DROP')")
+        elif status == 'rejected':
+            where_parts.append("l.status = 'REJECTED'")
+        elif status == 'sold':
+            where_parts.append("l.status = 'SOLD'")
+        else:
+            where_parts.append("l.status IN ('ACTIVE', 'PRICE_DROP', 'REJECTED', 'SOLD', 'DELISTED')")
+
+        if fav_only:
+            where_parts.append("l.is_favorite = 1")
+        if ai_only:
+            where_parts.append("l.ai_analysis IS NOT NULL")
+
+        where_clause = " AND ".join(where_parts)
+
+        query = f"""
+        SELECT l.*, s.motor_model, s.motor_brand, s.motor_torque_nm, s.battery_capacity_wh, s.frame_size,
+               s.travel_front_mm, s.brakes_tier, s.model_year, sc.score_total, sc.score_price_value,
+               sc.score_component_quality, sc.is_deal_target,
+               CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
+                    ELSE sc.score_total END AS ranking_score
+        FROM listings l
+        LEFT JOIN scores sc ON l.id = sc.listing_id
+        LEFT JOIN specifications s ON l.id = s.listing_id
+        WHERE {where_clause}
+        ORDER BY ranking_score DESC NULLS LAST, l.price_chf ASC
+        LIMIT ?
+        """
+        params.append(limit)
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
     def get_price_drops(self, limit: int = 20) -> List[Dict[str, Any]]:
         cursor = self.conn.cursor()
         cursor.execute("""
