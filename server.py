@@ -127,11 +127,22 @@ def _find_app_mode_browser() -> Optional[str]:
     return None
 
 
+APP_PROFILE_DIR = Path.home() / "Library" / "Application Support" / "EbikeHunterAppMode"
+
+
 def _open_app_window():
     time.sleep(0.8)  # give the Flask server a moment to start listening
     browser = _find_app_mode_browser()
     if browser:
-        subprocess.Popen([browser, f"--app={URL}", "--window-size=1400,900"])
+        # A dedicated profile dir — never the user's real Chrome profile —
+        # so this doesn't touch (or fight over) that profile's SingletonLock
+        # when the user's own Chrome isn't already running.
+        subprocess.Popen([
+            browser,
+            f"--app={URL}",
+            "--window-size=1400,900",
+            f"--user-data-dir={APP_PROFILE_DIR}",
+        ])
     else:
         print("Nessun browser Chromium-based trovato per la modalità app — apro nel browser predefinito.")
         webbrowser.open(URL)
