@@ -511,6 +511,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     </style>
 </head>
 <body>
+    <button id="backToTop" class="back-to-top" title="Torna in cima">↑</button>
     <div class="container">
         <h1>🚲 E-Bike Hunter Dashboard</h1>
         <div class="meta">Aggiornato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(listings)} annunci trovati | 🤖 {ai_analyzed_count} con analisi AI</div>
@@ -1371,7 +1372,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
     </script>
-    <button id="backToTop" class="back-to-top" title="Torna in cima">↑</button>
 </body>
 </html>
 """
