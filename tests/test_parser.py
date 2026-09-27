@@ -182,6 +182,16 @@ def test_suspension_type():
     specs3 = parser.parse(title3, "150mm front travel 130mm rear travel, full suspension")
     assert specs3["suspension_type"] == "full_suspension"
 
+    # Bug #380: Italian listings often call the rear shock "ammortizzatore
+    # centrale" (central shock) rather than "posteriore" (rear) — both mean
+    # the bike has a rear shock in addition to the front fork.
+    title4 = "Moustache Samedi Trail 5 bosch CX"
+    specs4 = parser.parse(
+        title4,
+        "Forcella: ammortizza e ammortizzatore centrale regolabili ad aria",
+    )
+    assert specs4["suspension_type"] == "full_suspension"
+
     print("✅ Suspension type tests passed")
 
 
