@@ -351,6 +351,26 @@ def test_frame_size_bare_number_requires_unit():
     print("✅ Frame size bare-number unit requirement test passed")
 
 
+def test_frame_size_cm_ranges():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # MTB/e-MTB cm sizing (icancycling.com chart): 43-47cm = M (17"-18"),
+    # 33-42cm = XS/S, 48-61cm = L/XL/XXL — only the 43-47 band is accepted.
+    for cm in (43, 45, 47):
+        specs = parser.parse("Canyon Neuron", f"Taglia {cm} cm")
+        assert specs["frame_size"] == "M", f"{cm}cm should be M, got {specs['frame_size']}"
+
+    for cm in (38, 42, 48, 53, 61):
+        specs = parser.parse("Canyon Neuron", f"Taglia {cm} cm")
+        assert specs["frame_size"] == "disallowed", f"{cm}cm should be disallowed, got {specs['frame_size']}"
+
+    # Outside the known MTB frame range entirely.
+    specs = parser.parse("Canyon Neuron", "Taglia 30 cm")
+    assert specs["frame_size"] == "unknown"
+
+    print("✅ Frame size cm range test passed")
+
+
 if __name__ == "__main__":
     test_motor_detection()
     test_motor_detection_handles_real_world_phrasing_and_typos()
@@ -370,4 +390,5 @@ if __name__ == "__main__":
     test_travel_jolly_ignores_dropper_post_measurement()
     test_odometer_ignores_battery_range()
     test_frame_size_bare_number_requires_unit()
+    test_frame_size_cm_ranges()
     print("\n✅ All parser tests passed!")
