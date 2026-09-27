@@ -87,7 +87,7 @@ def test_analyze_batch_happy_path_parses_results():
 
         call_kwargs = client.messages.create.call_args.kwargs
         assert call_kwargs["model"] == DEFAULT_MODEL
-        assert call_kwargs["tool_choice"] == {"type": "tool", "name": "submit_analysis"}
+        assert call_kwargs["tool_choice"] == {"type": "auto"}
         assert call_kwargs["tools"][0]["name"] == "submit_analysis"
         prompt = call_kwargs["messages"][0]["content"]
         assert "tutti_1" in prompt
