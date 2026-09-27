@@ -14,6 +14,7 @@ class RegexParser:
         self.frame_sizes = self.taxonomy["frame_sizes"]
         self.suspension_types = self.taxonomy["suspension_types"]
         self.red_flags = self.taxonomy["red_flags"]
+        self.excluded_categories = self.taxonomy["excluded_categories"]
 
     def parse(self, title: str, description: str) -> Dict[str, Any]:
         text = f"{title} {description}".lower()
@@ -36,7 +37,8 @@ class RegexParser:
             "odometer_km": self._extract_odometer(text),
             "model_year": self._extract_year(text),
             "has_red_flag": False,
-            "red_flag_details": []
+            "red_flag_details": [],
+            "excluded_category": self._detect_excluded_category(text)
         }
 
         # Motor detection
@@ -151,6 +153,12 @@ class RegexParser:
                 return "full_suspension"
 
         return "unknown"
+
+    def _detect_excluded_category(self, text: str) -> Optional[str]:
+        for kw in self.excluded_categories:
+            if re.search(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE):
+                return kw
+        return None
 
     def _detect_frame_size(self, text: str) -> str:
         # Check target sizes

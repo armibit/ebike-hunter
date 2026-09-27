@@ -138,6 +138,10 @@ def process_listing(
         # Allow unknown suspension type for now (may be full)
         pass
 
+    # Filter: Excluded category (not an eMTB, e.g. fat bike)
+    if specs.get("excluded_category"):
+        reject_reasons.append(f"Wrong category ({specs['excluded_category']})")
+
     # Filter: Motor
     min_motor_nm = config["hardware_requirements"]["min_motor_torque_nm"]
     if specs["motor_torque_nm"] is None:

@@ -154,6 +154,8 @@
     ],
     "disallowed_sizes": [
       "\\bxs\\b", "\\bxl\\b", "\\bxxl\\b", "\\bs1\\b", "\\bs5\\b", "\\bs6\\b",
+      "\\bl\\b(?!['’ʼ]|&apos;|&#0?39;)", "\\bl50\\b", "\\blarge\\b", "\\btaglia l\\b", "\\bgrösse l\\b",
+      "\\bgroesse l\\b", "\\btaille l\\b",
       "\\b20\\s*(?:\"|inch|pollici)\\b", "\\b21\\s*(?:\"|inch|pollici)\\b",
       "\\b50\\s*cm\\b", "\\b52\\s*cm\\b", "\\b54\\s*cm\\b"
     ]
@@ -172,5 +174,8 @@
     "senza caricatore", "senza chiave", "chiave persa", "caricatore non disponibile",
     "no charger", "ohne ladegerät", "ohne schlüssel", "da riparare", "motore rotto",
     "batteria non funzionante", "display rotto", "pezzi di ricambio", "solo telaio"
+  ],
+  "excluded_categories": [
+    "fat bike", "fatbike", "fat-bike"
   ]
 }
