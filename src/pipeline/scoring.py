@@ -14,6 +14,9 @@ class ScoringEngine:
             self.budget = config["buyer_profile"]["budget"]
             self.target_price = self.budget["target_price"]
             self.hard_max_price = self.budget["hard_max_price"]
+            hw_reqs = config.get("hardware_requirements", {})
+            self.travel_front_range = hw_reqs.get("travel_front_range", [130, 160])
+            self.travel_rear_range = hw_reqs.get("travel_rear_range", [130, 160])
         except KeyError as e:
             raise ValueError(f"Config missing required key: {e}") from e
 
@@ -218,11 +221,15 @@ class ScoringEngine:
         # Travel range (max 40 points)
         travel_mm = specs.get("travel_front_mm")
         if travel_mm:
-            if 140 <= travel_mm <= 150:
+            travel_min, travel_max = self.travel_front_range
+            ideal_min = (travel_min + travel_max) // 2 - 5
+            ideal_max = (travel_min + travel_max) // 2 + 5
+
+            if ideal_min <= travel_mm <= ideal_max:
                 score += 40
-            elif 130 <= travel_mm < 140 or 150 < travel_mm <= 160:
+            elif travel_min <= travel_mm <= travel_max:
                 score += 35
-            elif travel_mm < 130 or travel_mm > 160:
+            else:
                 score += 20
 
         return min(100.0, score)
