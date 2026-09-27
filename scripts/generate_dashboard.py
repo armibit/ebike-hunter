@@ -404,6 +404,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .title-link {{ font-weight: 600; color: var(--text); }}
         .title-meta {{ color: var(--text-muted); font-size: 12px; margin-top: 3px; }}
         .ai-icon {{ font-size: 11px; cursor: default; }}
+        .new-icon {{ font-size: 11px; cursor: default; }}
         .numeric-id {{ color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }}
 
         .score {{ display: inline-flex; align-items: center; justify-content: center; min-width: 42px; padding: 5px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; }}
@@ -724,6 +725,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         suspension_text = _SUSPENSION_LABELS.get(bike.get("suspension_type"), "N/A") if bike.get("suspension_type") else "N/A"
         meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
         ai_icon = '<span class="ai-icon" title="Analisi AI disponibile">🤖</span> ' if bike.get("ai_analysis") else ''
+        new_icon = '<span class="new-icon" title="Annuncio nuovo">🆕</span> ' if status == "NEW" else ''
 
         detail_html = _build_detail_html(bike, history)
         row_templates.append(f'<template data-listing-id="{_attr(bike["id"])}">{detail_html}</template>')
@@ -758,7 +760,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
                         <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
-                        <div class="title-meta">{ai_icon}{bike['portal']} · {meta_text}</div>
+                        <div class="title-meta">{new_icon}{ai_icon}{bike['portal']} · {meta_text}</div>
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>

@@ -186,14 +186,31 @@ class RegexParser:
                 return kw
         return None
 
+    # Yamaha's motor series is literally named "PW-S2"/"PW-S3" (see
+    # taxonomy.json's yamaha_pwx patterns), e.g. Upway's spec table prints
+    # "Modell: PW-Series S2". A bare `\bs2\b` scan over the whole text
+    # mistakes that motor name for Specialized's S1-S6 frame-size token,
+    # so a match near this motor-naming context is excluded.
+    _FRAME_S23_EXCLUSION_CONTEXT = re.compile(
+        r"pw[-\s]|yamaha|series|motor|antrieb", re.IGNORECASE
+    )
+
+    def _frame_size_token_present(self, text: str, token: str) -> bool:
+        for match in re.finditer(rf"\b{token}\b", text, re.IGNORECASE):
+            context = text[max(0, match.start() - 20):match.start()]
+            if self._FRAME_S23_EXCLUSION_CONTEXT.search(context):
+                continue
+            return True
+        return False
+
     def _detect_frame_size(self, text: str) -> str:
         # Check target sizes
         for pattern in self.frame_sizes["target_m"]:
             if re.search(pattern, text, re.IGNORECASE):
                 # Normalize to M
-                if re.search(r"\bs2\b", text, re.IGNORECASE):
+                if self._frame_size_token_present(text, "s2"):
                     return "S2"
-                if re.search(r"\bs3\b", text, re.IGNORECASE):
+                if self._frame_size_token_present(text, "s3"):
                     return "S3"
                 return "M"
 

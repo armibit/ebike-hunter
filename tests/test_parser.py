@@ -159,6 +159,14 @@ def test_frame_size_detection():
     specs2 = parser.parse(title2, "")
     assert specs2["frame_size"] == "disallowed"
 
+    # Yamaha's motor series is literally named "PW-S2"/"PW-Series S2" —
+    # must not be mistaken for a Specialized S2 frame size when the real
+    # size (M) is stated separately (upway.ch/products/haibike-trekking-4-rk5fe8).
+    title3 = "Haibike Trekking 4"
+    desc3 = "Herstellergröße: M (45 cm) Motor Modell: PW-Series S2 Drehmoment: 75 Nm"
+    specs3 = parser.parse(title3, desc3)
+    assert specs3["frame_size"] == "M", f"Yamaha PW-S2 motor name misread as frame size: {specs3['frame_size']}"
+
     print("✅ Frame size detection tests passed")
 
 
