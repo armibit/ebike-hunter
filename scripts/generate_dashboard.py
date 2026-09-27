@@ -630,7 +630,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <th>Aggiunto</th>
                     <th>#</th>
                     <th class="no-sort">Azioni</th>
-                    <th>Status</th>
                 </tr>
             </thead>
             <tbody id="tbody">
@@ -707,7 +706,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td>{added_text}</td>
                     <td class="numeric-id">#{bike['numeric_id']}</td>
                     <td>{actions_cell}</td>
-                    <td><span class="status {status_class}">{status}</span></td>
                 </tr>
 """
 
@@ -988,7 +986,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             row => row.dataset.firstSeen ? new Date(row.dataset.firstSeen).getTime() : NaN,
             row => parseInt(row.dataset.numericId, 10),
             null,
-            { text: row => row.dataset.statusGroup || '' },
         ];
 
         let sortState = { index: null, dir: 1 };
