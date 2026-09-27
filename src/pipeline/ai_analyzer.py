@@ -57,18 +57,24 @@ _RESULT_TOOL = {
                         "ai_analysis": {
                             "type": "string",
                             "description": (
-                                "2-4 sentence verdict for a human buyer, written in ITALIAN "
-                                "(the buyer is Italian-speaking; the listing description may be "
-                                "in Italian, German, French or English — always answer in Italian "
-                                "regardless of the source language). Reference specific details "
-                                "from the description (condition notes, wear, seller remarks, "
-                                "brand/model reputation, known issues) — don't just restate the "
-                                "specs table."
+                                "2-4 sentence professional verdict for a human buyer, written in ITALIAN. "
+                                "Be honest and critical. Ground your verdict in specific details from the "
+                                "description (condition, wear, seller credibility, brand reputation, known "
+                                "issues, value assessment). Reference what you found, not just specs. If you "
+                                "see major issues, flag them directly — don't soften the message. "
+                                "The listing description may be in Italian, German, French or English; "
+                                "always write the verdict in Italian regardless of source language."
                             ),
                         },
                         "ai_score": {
                             "type": "number",
-                            "description": "Independent 0-100 quality/value judgment.",
+                            "description": (
+                                "Independent 0-100 professional judgment: brand reliability, component quality, "
+                                "condition, and value for money. Not a restatement of heuristic score_total. "
+                                "Deduct 10-20+ points for unreliable brands, poor components, heavy wear, "
+                                "accident history, or unfair pricing. This score directly influences ranking; "
+                                "give your honest, critical assessment — do not inflate."
+                            ),
                         },
                         "corrected_specs": {
                             "type": "object",
@@ -137,7 +143,7 @@ class AIAnalyzer:
     def _build_prompt(self, listings: List[Dict[str, Any]]) -> str:
         profile = self.buyer_profile
         lines = [
-            "You are helping a buyer evaluate used e-mountain-bike listings.",
+            "You are a professional e-mountain-bike consultant evaluating used listings for a buyer.",
             "",
             "Write ai_analysis in ITALIAN, always — the buyer is Italian-speaking. "
             "The listing description you're reading may be in Italian, German, French "
@@ -150,13 +156,30 @@ class AIAnalyzer:
             f"- Rider height: {profile.get('rider_specs', {}).get('height_cm')} cm, "
             f"target frame sizes: {', '.join(profile.get('rider_specs', {}).get('target_sizes', []))}",
             "",
+            "SCORING MANDATE:",
+            "Your ai_score (0-100) is a professional judgment, not a restatement of specs. "
+            "It directly influences the ranking the buyer sees: higher scores surface first. "
+            "Give a sincere, expert verdict. Do not inflate scores. If you recognize serious issues — "
+            "unreliable brand, poor component tier, heavy wear, accident history, unfair pricing — "
+            "deduct meaningfully. ai_score should diverge from score_total when your expertise "
+            "identifies problems the heuristic (price/specs/fit alone) cannot see.",
+            "",
+            "Evaluate on these dimensions:",
+            "1. BRAND & MOTOR REPUTATION: Known reliability, warranty coverage, support ecosystem, "
+            "   common failure modes, parts availability.",
+            "2. COMPONENT QUALITY: Tier and longevity of drivetrain, brakes, suspension, "
+            "   battery lifespan. Economy parts warrant lower scores; premium geometry/engineering warrant higher.",
+            "3. CONDITION: Read the seller's description carefully for wear, damage, repairs, "
+            "   corrosion, maintenance gaps. Minor cosmetic issues ≠ heavy wear or hidden problems.",
+            "4. VALUE FOR MONEY: Is the price fair for condition + specs + market position? "
+            "   Overpriced bikes with good specs, or cheap bikes with hidden issues, both merit penalty.",
+            "5. SELLER CREDIBILITY: Does the description sound honest? Are warnings transparent? "
+            "   Does the seller know their bike, or are they hiding/minimizing known issues?",
+            "",
             "Most listings below already passed automated spec filters and have a "
             "deterministic heuristic score_total (0-100, based on price/specs/mileage/"
-            "distance/fit only — it cannot read prose). Your job: read the raw seller "
-            "description and give an independent verdict that surfaces anything the "
-            "heuristic can't see — condition issues mentioned in the text (scratches, "
-            "worn parts, accident history), seller trustworthiness cues, and your own "
-            "knowledge of brand reliability or known problems for this motor/frame.",
+            "distance/fit only — it cannot read prose or judge brand reputation). Your job: "
+            "read the raw seller description and deliver a professional, independent verdict.",
             "",
             "Some specs were extracted by regex and can be wrong or missing — a listing "
             "marked '[unverified]' means the parser only guessed there's a motor from "
