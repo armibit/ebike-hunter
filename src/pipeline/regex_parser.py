@@ -214,10 +214,19 @@ class RegexParser:
                 if 80 <= val <= 300:
                     travel_values.append(val)
 
+        # De-duplicate: if we extracted identical values, it's likely the same spec
+        # mentioned twice (e.g., "fork 100mm" in title and description).
+        # Treat as single fork (hardtail), not dual suspension.
+        if len(travel_values) >= 2 and len(set(travel_values)) == 1:
+            return travel_values[0], None
+
         if len(travel_values) >= 2:
             return travel_values[0], travel_values[1]
         elif len(travel_values) == 1:
-            return travel_values[0], travel_values[0]
+            # Single travel value likely means only front fork (hardtail).
+            # Don't assume it's both front and rear — return None for rear
+            # to avoid misclassifying hardtails as full suspension.
+            return travel_values[0], None
         return None, None
 
     def _detect_brakes_tier(self, text: str) -> str:
