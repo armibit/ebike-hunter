@@ -213,24 +213,33 @@ class RegexParser:
         return "unknown"
 
     def _extract_odometer(self, text: str) -> Optional[int]:
-        # More specific patterns: require odometer-related context words
+        # Number capture that also accepts a European thousands-separator
+        # dot (e.g. "1.443" meaning 1443), so it isn't truncated at the dot
+        # like plain \d+ would ("1.443" -> "1"). Requires full 3-digit
+        # groups after each dot, so it won't misfire on a decimal point.
+        NUM = r"\d{1,3}(?:\.\d{3})+|\d+"
+        # More specific patterns: require odometer-related context words.
+        # The gap after/before the keyword is capped at 30 non-digit,
+        # non-newline characters so it can't jump across sentences or
+        # paragraphs to grab an unrelated number (e.g. a frame material
+        # code like "C:62" mentioned much later in the text).
         patterns = [
-            r"(?:percorsi|percorso|chilometri|kilometers?|odometer|km\s+percors)[^\d]*(\d+)",
-            r"(\d+)\s*km\s+percors",
-            r"chilometri\s*[:\-]?\s*(\d+)",
-            r"chilometraggio\s*[:\-]?\s*(\d+)",
+            rf"(?:percorsi|percorso|chilometri|kilometers?|odometer|km\s+percors)[^\d\n]{{0,30}}({NUM})",
+            rf"({NUM})\s*km[^\d\n]{{0,30}}percors",
+            rf"chilometri\s*[:\-]?\s*({NUM})",
+            rf"chilometraggio\s*[:\-]?\s*({NUM})",
             # "Km totali: 1241" / "Km totale: 1241" — a field-label phrasing
             # ("<unit> totali: <value>") distinct from the generic km-value
             # fallback below, which the word "totali" between "km" and the
             # number would otherwise defeat.
-            r"km\s*total[ei]\s*[:\-]?\s*(\d+)",
-            r"total[ei]\s*km\s*[:\-]?\s*(\d+)",
-            r"km\s*[:\-]?\s*(\d+)(?!\s*(?:wh|mm|nm|travel))",
+            rf"km\s*total[ei]\s*[:\-]?\s*({NUM})",
+            rf"total[ei]\s*km\s*[:\-]?\s*({NUM})",
+            rf"km\s*[:\-]?\s*({NUM})(?!\s*(?:wh|mm|nm|travel))",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                km = int(match.group(1))
+                km = int(match.group(1).replace(".", ""))
                 if 0 <= km <= 20000:
                     return km
         return None

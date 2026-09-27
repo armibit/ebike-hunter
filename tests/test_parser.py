@@ -231,6 +231,37 @@ def test_odometer_no_false_positives():
     print("✅ Odometer false positive tests passed")
 
 
+def test_odometer_handles_thousands_separator_dot():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # German/Swiss listings use "." as a thousands separator, not a decimal
+    # point (e.g. Upway.ch: "Kilometerstand : 1.443 km" means 1443 km, not
+    # 1.443 km). A plain \d+ capture would truncate at the dot and read 1.
+    specs = parser.parse("Some e-bike", "Kilometerstand : 1.443 km")
+    assert specs["odometer_km"] == 1443, f"Thousands separator mishandled: {specs['odometer_km']}"
+
+    print("✅ Odometer thousands-separator test passed")
+
+
+def test_odometer_percorso_does_not_jump_to_unrelated_number():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # Real Subito.it listing (id 659597935): the real odometer figure
+    # (7000) appears BEFORE "percorso", which here describes terrain
+    # ("avendo percorso tracciati facili" = "having ridden easy trails"),
+    # not an odometer reading. The old unbounded `[^\d]*` after
+    # "percorso" would skip past this whole phrasing and grab the "62" in
+    # the unrelated "C:62" frame material code several sentences later.
+    desc = (
+        "ebike con 7000 km ma in ottimo stato avendo percorso tracciati facili "
+        "e mai enduro\n\nSpecifiche:\n\nTelaio principale C:62® Monocoque in carbonio"
+    )
+    specs = parser.parse("CUBE Stereo Hybrid", desc)
+    assert specs["odometer_km"] == 7000, f"Expected real odometer 7000, got {specs['odometer_km']}"
+
+    print("✅ Odometer 'percorso' non-jumping test passed")
+
+
 if __name__ == "__main__":
     test_motor_detection()
     test_motor_detection_handles_real_world_phrasing_and_typos()
@@ -243,4 +274,6 @@ if __name__ == "__main__":
     test_travel_extraction()
     test_red_flags()
     test_odometer_no_false_positives()
+    test_odometer_handles_thousands_separator_dot()
+    test_odometer_percorso_does_not_jump_to_unrelated_number()
     print("\n✅ All parser tests passed!")
