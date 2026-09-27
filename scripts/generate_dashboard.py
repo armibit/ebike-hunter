@@ -1133,7 +1133,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 const statusGroup = row.dataset.statusGroup;
 
                 let show = true;
-                if (price < priceMin || price > priceMax) show = false;
+                if (priceMin > 0 && price < priceMin) show = false;
+                if (price > priceMax) show = false;
                 if (distance > distMax) show = false;
                 if (motorFilter && !motor.includes(motorFilter)) show = false;
                 if (battery < batteryMin) show = false;
