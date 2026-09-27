@@ -204,10 +204,27 @@ class RegexParser:
 
         return "unknown"
 
+    # Bare-number travel pattern (no "mm"/"escursione"/"federweg" anchor) — needs
+    # its own handling below since it also matches dropper-post/seatpost travel
+    # (e.g. "dropper post 150mm") which isn't suspension travel at all.
+    _JOLLY_TRAVEL_PATTERN = r"\b(1[23456]\d)\b"
+    _TRAVEL_EXCLUSION_CONTEXT = re.compile(
+        r"dropper|reggisella|seatpost|sella telescopica|vario", re.IGNORECASE
+    )
+
     def _extract_travel(self, text: str) -> Tuple[Optional[int], Optional[int]]:
         # Extract all travel mentions
         travel_values = []
         for pattern in self.suspensions["travel_patterns"]:
+            if pattern == self._JOLLY_TRAVEL_PATTERN:
+                for match in re.finditer(pattern, text, re.IGNORECASE):
+                    context = text[max(0, match.start() - 25):match.end() + 15]
+                    if self._TRAVEL_EXCLUSION_CONTEXT.search(context):
+                        continue
+                    val = int(match.group(1))
+                    if 80 <= val <= 300:
+                        travel_values.append(val)
+                continue
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 val = int(match)
@@ -277,7 +294,6 @@ class RegexParser:
             # number would otherwise defeat.
             rf"km\s*total[ei]\s*[:\-]?\s*({NUM})",
             rf"total[ei]\s*km\s*[:\-]?\s*({NUM})",
-            rf"km\s*[:\-]?\s*({NUM})(?!\s*(?:wh|mm|nm|travel))",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -285,6 +301,22 @@ class RegexParser:
                 km = int(match.group(1).replace(".", ""))
                 if 0 <= km <= 20000:
                     return km
+
+        # Generic "km: 120" fallback — most permissive pattern, so it's the one
+        # most likely to misfire on "autonomia fino a 120 km" (battery range,
+        # not distance ridden). Reject a match whose nearby context names
+        # range/battery instead of distance.
+        range_context = re.compile(
+            r"autonomia|range|batteria|akku|battery|autonomy", re.IGNORECASE
+        )
+        generic_pattern = rf"km\s*[:\-]?\s*({NUM})(?!\s*(?:wh|mm|nm|travel))"
+        for match in re.finditer(generic_pattern, text, re.IGNORECASE):
+            context = text[max(0, match.start() - 30):match.end() + 10]
+            if range_context.search(context):
+                continue
+            km = int(match.group(1).replace(".", ""))
+            if 0 <= km <= 20000:
+                return km
         return None
 
     def _extract_year(self, text: str) -> Optional[int]:

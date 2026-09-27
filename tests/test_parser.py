@@ -276,6 +276,81 @@ def test_odometer_percorso_does_not_jump_to_unrelated_number():
     print("✅ Odometer 'percorso' non-jumping test passed")
 
 
+def test_bosch_smart_system_does_not_default_to_cx():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # "Smart System" alone names the Bosch platform, not a specific motor —
+    # it must NOT be read as the 85Nm CX. With no torque figure or other
+    # motor keyword in the text, it falls to the generic unverified e-bike
+    # fallback (60Nm placeholder) instead of a confirmed CX match.
+    specs = parser.parse("Haibike AllMtn 2023", "Bosch Smart System, e-bike full suspension")
+    assert specs["motor_brand"] != "Bosch" or specs["motor_torque_nm"] != 85
+    assert specs["motor_verified"] is False
+
+    # Explicit CX still matches CX.
+    specs_cx = parser.parse("Trek Rail", "Bosch CX Smart System 85Nm")
+    assert specs_cx["motor_brand"] == "Bosch"
+    assert specs_cx["motor_torque_nm"] == 85
+
+    print("✅ Bosch Smart System CX-ambiguity test passed")
+
+
+def test_bosch_sx_detected_as_weak_motor():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    specs = parser.parse("Cube Reaction Hybrid SX", "Motore Bosch SX 55Nm, Smart System")
+    assert specs["motor_brand"] == "Weak/Light Motor"
+    assert specs["motor_torque_nm"] == 50
+
+    print("✅ Bosch SX weak-motor detection test passed")
+
+
+def test_travel_jolly_ignores_dropper_post_measurement():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # A hardtail with only a dropper post size in the 120-169mm jolly range
+    # must NOT be read as having rear travel (which would misclassify it as
+    # full suspension).
+    specs = parser.parse("Trek Marlin hardtail", "Dropper post 150mm, reggisella telescopico")
+    assert specs["travel_rear_mm"] is None, f"Dropper post read as rear travel: {specs['travel_rear_mm']}"
+    assert specs["suspension_type"] == "hardtail"
+
+    # A genuine bare travel number (no dropper/seatpost context) still counts.
+    specs2 = parser.parse("Some e-bike", "140")
+    assert specs2["travel_front_mm"] == 140
+
+    print("✅ Travel jolly dropper-post exclusion test passed")
+
+
+def test_odometer_ignores_battery_range():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # "Autonomia fino a 120 km" is battery range, not distance ridden.
+    specs = parser.parse("Specialized Levo", "Autonomia fino a 120 km, batteria 700Wh")
+    assert specs["odometer_km"] is None, f"Battery range read as odometer: {specs['odometer_km']}"
+
+    # A real odometer reading using the generic "km: N" fallback still matches.
+    specs2 = parser.parse("Specialized Levo", "km: 850, ottime condizioni")
+    assert specs2["odometer_km"] == 850
+
+    print("✅ Odometer battery-range exclusion test passed")
+
+
+def test_frame_size_bare_number_requires_unit():
+    parser = RegexParser(TAXONOMY_PATH)
+
+    # A bare "17" with no inch/pollici marker must not match size M — could
+    # be a price, date, or weight instead.
+    specs = parser.parse("Trek Rail", "Prezzo 17.-, peso 18kg")
+    assert specs["frame_size"] == "unknown", f"Bare number misread as frame size: {specs['frame_size']}"
+
+    # With an explicit unit it still matches.
+    specs2 = parser.parse("Trek Rail", "Taglia 17 pollici")
+    assert specs2["frame_size"] == "M"
+
+    print("✅ Frame size bare-number unit requirement test passed")
+
+
 if __name__ == "__main__":
     test_motor_detection()
     test_motor_detection_handles_real_world_phrasing_and_typos()
@@ -290,4 +365,9 @@ if __name__ == "__main__":
     test_odometer_no_false_positives()
     test_odometer_handles_thousands_separator_dot()
     test_odometer_percorso_does_not_jump_to_unrelated_number()
+    test_bosch_smart_system_does_not_default_to_cx()
+    test_bosch_sx_detected_as_weak_motor()
+    test_travel_jolly_ignores_dropper_post_measurement()
+    test_odometer_ignores_battery_range()
+    test_frame_size_bare_number_requires_unit()
     print("\n✅ All parser tests passed!")

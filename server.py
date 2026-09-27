@@ -81,6 +81,14 @@ def restore(listing_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/listings/<listing_id>/delete", methods=["POST"])
+def delete_listing(listing_id):
+    db = Database(DB_PATH)
+    db.delete_listing(listing_id)
+    db.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/listings/<listing_id>/favorite", methods=["POST"])
 def favorite(listing_id):
     db = Database(DB_PATH)

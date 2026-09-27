@@ -7,7 +7,7 @@
       "tier": "top",
       "patterns": [
         "bosch cx", "perfor?mance line cx", "perfor?mance cx", "cx gen4", "cx gen 4",
-        "cx smart system", "smart system", "smartsystem", "bosch 85nm",
+        "cx smart system", "bosch 85nm",
         "bosch 85 nm", "cx gen5"
       ]
     },
@@ -63,7 +63,7 @@
     "shimano_ep6": {
       "brand": "Shimano",
       "model": "EP6",
-      "torque_nm": 65,
+      "torque_nm": 60,
       "tier": "mid",
       "patterns": [
         "shimano ep6", "ep-6", "du-ep600"
@@ -112,7 +112,8 @@
       "tier": "disallowed",
       "patterns": [
         "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosch active line",
-        "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40", "\\btq\\b"
+        "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40", "\\btq\\b",
+        "bosch sx", "perfor?mance line sx", "performance sx", "sx 55nm", "bosch 55nm"
       ]
     }
   },
@@ -149,8 +150,8 @@
   "frame_sizes": {
     "target_m": [
       "\\bm\\b", "\\bmedium\\b", "\\btaglia m\\b", "\\bgrösse m\\b", "\\bgroesse m\\b",
-      "\\btaille m\\b", "\\bs2\\b", "\\bs3\\b", "\\b17\\s*(?:\"|inch|pollici)?\\b",
-      "\\b18\\s*(?:\"|inch|pollici)?\\b", "\\b43\\s*cm\\b", "\\b44\\s*cm\\b",
+      "\\btaille m\\b", "\\bs2\\b", "\\bs3\\b", "\\b17\\s*(?:\"|inch|pollici)\\b",
+      "\\b18\\s*(?:\"|inch|pollici)\\b", "\\b43\\s*cm\\b", "\\b44\\s*cm\\b",
       "\\b45\\s*cm\\b", "\\b46\\s*cm\\b",
       "\\(m\\)", "\\(s2\\)", "\\(s3\\)"
     ],

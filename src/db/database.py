@@ -481,6 +481,12 @@ class Database:
         self.conn.commit()
         return bool(new_value)
 
+    def delete_listing(self, listing_id: str) -> None:
+        """Physically delete a listing and all its related data from the DB."""
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM listings WHERE id = ?", (listing_id,))
+        self.conn.commit()
+
     def get_listing_with_specs(self, listing_id: str) -> Optional[Dict[str, Any]]:
         """Fetch one listing's price/distance plus its full specifications
         row, flattened into a single dict — everything the scoring engine

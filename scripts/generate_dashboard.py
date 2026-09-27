@@ -430,6 +430,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .icon-details {{ background: var(--primary-light); border-color: #bfdbfe; color: var(--primary); }}
         .icon-danger {{ background: var(--danger-bg); border-color: #fecaca; color: var(--danger); }}
         .icon-success {{ background: var(--success-bg); border-color: #bbf7d0; color: var(--success); }}
+        .icon-delete {{ background: #f5e6e8; border-color: #f5c6cc; color: #c41e3a; }}
         .btn-details {{ padding: 6px 12px; background: var(--primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }}
         .btn-details:hover {{ background: var(--primary-dark); }}
 
@@ -503,6 +504,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .cell-edit-btn {{ width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; line-height: 1; }}
         .cell-edit-save {{ background: var(--success); color: white; }}
         .cell-edit-cancel {{ background: var(--danger); color: white; }}
+
+        .back-to-top {{ display: none; position: fixed; bottom: 24px; right: 24px; z-index: 500; width: 44px; height: 44px; border: none; border-radius: 50%; background: var(--primary); color: white; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }}
+        .back-to-top.visible {{ display: block; }}
+        .back-to-top:hover {{ opacity: 0.85; }}
     </style>
 </head>
 <body>
@@ -594,6 +599,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 <div class="filter-group">
                     <label>&nbsp;</label>
                     <label class="filter-checkbox"><input type="checkbox" id="aiOnly"> 🤖 Solo con analisi AI</label>
+                </div>
+                <div class="filter-group">
+                    <label>Ricerca testo libero</label>
+                    <input type="text" id="textFilter" placeholder="Titolo, marca, modello...">
                 </div>
             </div>
         </div>
@@ -730,6 +739,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 '<button class="icon-btn icon-details" onclick="showAnalysis(this)" title="Dettagli e correzioni">📋</button>'
                 '<button class="icon-btn icon-danger" onclick="rejectRow(this)" title="Scarta — non mi interessa">✕</button>'
                 '<button class="icon-btn icon-success" onclick="soldRow(this)" title="Segna come venduta">✓</button>'
+                '<button class="icon-btn icon-delete" onclick="deleteRow(this)" title="Cancella dalla lista">🗑️</button>'
                 '</div>'
             )
             # Double-click-to-edit on the 4 columns that map to a correctable
@@ -840,10 +850,25 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('modalNextBtn').disabled = idx === -1 || idx >= rows.length - 1;
         }
 
-        // Reject / mark sold / restore / spec-correction actions — POST to
-        // server.py's API and reload so the page always reflects fresh DB
-        // state. Requires the interactive dashboard (python3 server.py);
-        // opening index.html directly has no server to answer these.
+        // Spec-correction actions — POST to server.py's API without reload,
+        // so the modal stays open and you can make more edits.
+        async function postActionNoReload(path, body) {
+            try {
+                const resp = await fetch(`/api/listings/${currentListingId}/${path}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body || {})
+                });
+                if (!resp.ok) throw new Error(await resp.text());
+                return await resp.json();
+            } catch (e) {
+                alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py) e di aver aperto http://127.0.0.1:5050 — non il file index.html.\\n\\n' + e.message);
+                return null;
+            }
+        }
+
+        // Status/state-changing actions — POST to server.py's API and reload
+        // so the page reflects the new DB state (status change, deletion, etc).
         async function postAction(path, body) {
             try {
                 const resp = await fetch(`/api/listings/${currentListingId}/${path}`, {
@@ -896,10 +921,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (confirm('Segnare questo annuncio come venduto?')) postRowAction(button, 'sold');
         }
 
-        function saveSpecs() {
+        function deleteRow(button) {
+            if (confirm('Cancellare definitivamente questo annuncio dalla lista? Azione irreversibile.')) postRowAction(button, 'delete');
+        }
+
+        async function saveSpecs() {
             const torque = document.getElementById('editMotorTorque').value;
             const battery = document.getElementById('editBattery').value;
-            postAction('specs', {
+            const result = await postActionNoReload('specs', {
                 motor_brand: document.getElementById('editMotorBrand').value || null,
                 motor_model: document.getElementById('editMotorModel').value || null,
                 motor_torque_nm: torque !== '' ? parseFloat(torque) : null,
@@ -907,6 +936,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 suspension_type: document.getElementById('editSuspension').value || null,
                 frame_size: document.getElementById('editFrame').value || null
             });
+            if (result) {
+                alert('✓ Specifiche salvate.');
+            }
         }
 
         // Inline cell editing — double-click a Motore/Batteria/Sospensioni/
@@ -969,18 +1001,26 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const listingId = row.getAttribute('data-id');
 
             const payload = {};
+            let newValue = null;
             if (field === 'battery') {
                 const v = document.getElementById('cellEdit_battery').value;
                 payload.battery_capacity_wh = v !== '' ? parseFloat(v) : null;
+                newValue = v !== '' ? `${parseFloat(v).toFixed(0)}Wh` : 'N/A';
             } else if (field === 'suspension') {
                 payload.suspension_type = document.getElementById('cellEdit_suspension').value || null;
+                const val = document.getElementById('cellEdit_suspension').value;
+                newValue = val === 'full_suspension' ? 'Full suspension' : val === 'hardtail' ? 'Hardtail' : 'Non specificata';
             } else if (field === 'frame') {
                 payload.frame_size = document.getElementById('cellEdit_frame').value || null;
+                newValue = document.getElementById('cellEdit_frame').value || 'N/A';
             } else if (field === 'motor') {
                 const torque = document.getElementById('cellEdit_motor_torque').value;
                 payload.motor_brand = document.getElementById('cellEdit_motor_brand').value || null;
                 payload.motor_model = document.getElementById('cellEdit_motor_model').value || null;
                 payload.motor_torque_nm = torque !== '' ? parseFloat(torque) : null;
+                const brand = payload.motor_brand || '';
+                const torqueStr = payload.motor_torque_nm ? ` ${payload.motor_torque_nm.toFixed(0)}Nm` : '';
+                newValue = (brand + torqueStr).trim() || 'N/A';
             }
 
             try {
@@ -990,7 +1030,27 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     body: JSON.stringify(payload)
                 });
                 if (!resp.ok) throw new Error(await resp.text());
-                location.reload();
+
+                // Update row attributes and display without full reload
+                if (field === 'battery') {
+                    row.setAttribute('data-edit-battery', payload.battery_capacity_wh || '');
+                    row.setAttribute('data-battery', payload.battery_capacity_wh || 0);
+                } else if (field === 'suspension') {
+                    row.setAttribute('data-edit-suspension', payload.suspension_type || '');
+                    row.setAttribute('data-suspension', payload.suspension_type || 'unknown');
+                } else if (field === 'frame') {
+                    row.setAttribute('data-edit-frame', payload.frame_size || '');
+                    row.setAttribute('data-frame', payload.frame_size || 'N/A');
+                } else if (field === 'motor') {
+                    row.setAttribute('data-edit-motor-brand', payload.motor_brand || '');
+                    row.setAttribute('data-edit-motor-model', payload.motor_model || '');
+                    row.setAttribute('data-edit-motor-torque', payload.motor_torque_nm || '');
+                    row.setAttribute('data-motor-torque', payload.motor_torque_nm || '');
+                    row.setAttribute('data-motor', newValue);
+                }
+
+                td.innerHTML = newValue;
+                td.classList.remove('editing');
             } catch (e) {
                 alert('Salvataggio non riuscito. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
             }
@@ -1104,6 +1164,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         document.getElementById('aiOnly').addEventListener('change', applyFilters);
         document.getElementById('statusFilter').addEventListener('change', applyFilters);
 
+        // Text filter with debounce
+        let textFilterTimeout;
+        document.getElementById('textFilter').addEventListener('input', function() {
+            clearTimeout(textFilterTimeout);
+            textFilterTimeout = setTimeout(applyFilters, 300);
+        });
+
         function filterTable() {
             const priceMin = parseFloat(priceMinInput.value);
             const priceMax = parseFloat(priceMaxInput.value);
@@ -1116,6 +1183,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const favOnly = document.getElementById('favOnly').checked;
             const aiOnly = document.getElementById('aiOnly').checked;
             const statusFilter = document.getElementById('statusFilter').value;
+            const textFilter = document.getElementById('textFilter').value.toLowerCase();
 
             const rows = document.querySelectorAll('#tbody tr');
             let visibleCount = 0;
@@ -1131,6 +1199,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 const favorite = row.dataset.favorite === '1';
                 const hasAi = row.dataset.hasAi === '1';
                 const statusGroup = row.dataset.statusGroup;
+                const titleText = row.querySelector('a.title-link').textContent.toLowerCase();
 
                 let show = true;
                 if (priceMin > 0 && price < priceMin) show = false;
@@ -1144,6 +1213,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 if (favOnly && !favorite) show = false;
                 if (aiOnly && !hasAi) show = false;
                 if (statusFilter && statusGroup !== statusFilter) show = false;
+                if (textFilter && !titleText.includes(textFilter)) show = false;
 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
@@ -1182,6 +1252,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('favOnly').checked = false;
             document.getElementById('aiOnly').checked = false;
             document.getElementById('statusFilter').value = '';
+            document.getElementById('textFilter').value = '';
             saveFilters();
             applyFilters();
         }
@@ -1198,7 +1269,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 scoreMin: document.getElementById('scoreMin').value,
                 favOnly: document.getElementById('favOnly').checked,
                 aiOnly: document.getElementById('aiOnly').checked,
-                statusFilter: document.getElementById('statusFilter').value
+                statusFilter: document.getElementById('statusFilter').value,
+                textFilter: document.getElementById('textFilter').value
             };
             localStorage.setItem('ebike-filters', JSON.stringify(filters));
         }
@@ -1221,6 +1293,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 document.getElementById('favOnly').checked = filters.favOnly;
                 document.getElementById('aiOnly').checked = filters.aiOnly;
                 document.getElementById('statusFilter').value = filters.statusFilter;
+                document.getElementById('textFilter').value = filters.textFilter || '';
                 filterTable();
             } catch (e) {
                 console.error('Errore ripristino filtri:', e);
