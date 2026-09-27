@@ -521,8 +521,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 <div class="filter-group">
                     <label>Budget min (CHF)</label>
                     <div class="range-row">
-                        <input type="range" id="priceMin" min="1000" max="3000" step="100" value="1500">
-                        <span class="range-value" id="priceMinVal">1500</span>
+                        <input type="range" id="priceMin" min="0" max="3000" step="100" value="0">
+                        <span class="range-value" id="priceMinVal">0</span>
                     </div>
                 </div>
                 <div class="filter-group">
