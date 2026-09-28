@@ -1,243 +1,89 @@
 # E-Bike Hunter - Usage Guide
 
-## Quick Start
+See `README.md` for what the tool does. This file covers day-to-day use,
+automation and troubleshooting.
 
-### 1. Install Dependencies
+## Setup
 
 ```bash
 pip3 install -r requirements.txt
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env   # only for analyze.py
 ```
 
-### 2. Test with Demo (Simulated Data)
+`app.db_path` in `config/config.yaml` is relative to the project folder
+(`data/emtb_hunter.db` by default), whatever directory you run from.
+
+## Everyday commands
 
 ```bash
-python3 demo.py
+python3 run.py                        # scan every enabled portal, then check unseen listings for "sold"
+python3 server.py                     # interactive dashboard (app window on http://127.0.0.1:5050)
+python3 analyze.py --dry-run          # what the AI pass would do, and how many API calls
+python3 analyze.py                    # AI read of new listings
+python3 analyze.py --problematic      # AI re-read of listings with spec gaps it can fix
+python3 analyze.py --force --limit 150  # full re-analysis, in resumable batches
+python3 scripts/reprocess_all.py --dry-run   # re-apply parser/filters/locations to the stored DB
+python3 scripts/reprocess_all.py
 ```
 
-### 3. Test Live Connectors (Real HTTP Requests)
+`reprocess_all.py` is the way to apply a parser, taxonomy, location or
+filter change to listings already in the database without a network scan.
+It never touches a listing you rejected or marked sold by hand.
 
-```bash
-python3 test_connectors.py
-```
+## What a scan does with sold listings
 
-This will fetch a few listings from Tutti.ch and Subito.it to verify the scraper works.
+1. Shop feeds (Upway, eCycles, Buybestgear, Z-Bike) say when a bike is
+   sold out — the stored listing becomes SOLD and a new one isn't imported.
+2. After the scan, live listings that no longer appear in any search
+   result are checked on their portal. SOLD when the page is gone
+   (404/410), redirects away from the ad, carries schema.org `OutOfStock`,
+   or shows an "annuncio non più disponibile"-type message. A blocked or
+   failed check changes nothing.
+3. At most `app.availability_checks_per_run` listings (default 300) are
+   checked per scan, least recently checked first — a big backlog is
+   worked through over a few scans.
 
-### 4. Run Full Scan
-
-```bash
-python3 run.py
-```
-
-This will:
-1. Search Tutti.ch (Ticino) for all configured queries
-2. Search Subito.it (Lombardia: Como, Varese, Milano, Lecco) for all queries
-3. Parse, filter, and score each listing
-4. Save to SQLite database
-5. Display top deals and price drops
-
-## Configuration
-
-Edit `config/config.yaml` to customize:
-
-### Buyer Profile
+## Configuration highlights
 
 ```yaml
 buyer_profile:
-  location:
-    name: "Lugano, Ticino"
-    latitude: 46.0037
-    longitude: 8.9511
   max_radius_km:
-    ticino: 45      # Max distance for Ticino listings
-    lombardia: 105  # Max distance for Lombardia listings
+    italy: 150          # Italian listings beyond this are rejected; Switzerland always accepted
+    exempt_portals: [...]   # shops that ship: never rejected for distance
   budget:
-    target_price: 2200         # Ideal price
-    hard_max_price: 3000       # Absolute maximum
-    suspicious_min_price: 900  # Flag suspiciously low prices
-  rider_specs:
-    height_cm: 170
-    target_sizes: ["M", "S2", "S3", "42cm", "43cm", "44cm", "45cm", "46cm"]
-```
-
-### Search Queries
-
-```yaml
+    full_score_price: 1800  # at or below: full price score
 portals:
-  tutti_ch:
-    enabled: true
-    search_queries:
-      - "ebike fully"
-      - "e-mtb full"
-      - "turbo levo"
-      - "stereo hybrid"
-      - "trek rail"
-      - "canyon spectral on"
-
   subito_it:
-    enabled: true
-    search_queries:
-      - "ebike full"
-      - "emtb biammortizzata"
-      - "turbo levo"
-      - "stereo hybrid"
+    search_paths:       # exactly as in Subito's URLs: a region or a single province
+      - "/annunci-lombardia/vendita/biciclette"
+      - "/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola"
 ```
 
-## Database
+Locations are resolved at province / canton level (`src/pipeline/geo_data.py`),
+so no list of towns needs maintaining.
 
-All data is stored in `data/emtb_hunter.db` (SQLite).
-
-### View Database
-
-```bash
-sqlite3 data/emtb_hunter.db
-```
-
-Useful queries:
-
-```sql
--- Top deals
-SELECT title, price_chf, score_total, distance_km, url
-FROM listings l
-JOIN scores s ON l.id = s.listing_id
-WHERE l.status = 'ACTIVE' AND s.score_total >= 75
-ORDER BY s.score_total DESC
-LIMIT 10;
-
--- Price drops
-SELECT title, price_raw, currency, url
-FROM listings
-WHERE status = 'PRICE_DROP'
-ORDER BY last_checked_at DESC
-LIMIT 10;
-
--- All specs
-SELECT l.title, l.price_chf, s.motor_model, s.battery_capacity_wh, s.frame_size
-FROM listings l
-JOIN specifications s ON l.id = s.listing_id
-WHERE l.status = 'ACTIVE';
-```
-
-## Automation
-
-### Run Every 30 Minutes (macOS/Linux)
-
-Add to crontab:
-
-```bash
-crontab -e
-```
-
-Add line:
+## Automation (macOS/Linux)
 
 ```
-*/30 * * * * cd /Users/danielearmillotta/ebike-hunter && /usr/local/bin/python3 run.py >> logs/scan.log 2>&1
+*/30 * * * * cd /path/to/ebike-hunter && /usr/bin/env python3 run.py >> logs/scan.log 2>&1
 ```
-
-Create logs directory:
-
-```bash
-mkdir -p logs
-```
-
-### Run with Notifications (Telegram Bot - Future)
-
-To be implemented:
-1. Create Telegram bot via @BotFather
-2. Add bot token to config
-3. Implement notification module
-4. Send alerts on new deal targets (score >= 75) and price drops
 
 ## Troubleshooting
 
-### No Results Found
+- **A portal returns 0 listings**: check `logs/run.log` (DEBUG level, full
+  tracebacks). Portals change their HTML/APIs; the matching connector is
+  `src/connectors/<portal>.py`, and every connector has tests with a saved
+  sample of the page it parses.
+- **Specs not extracted**: test the parser directly —
+  `python3 -c "import sys; sys.path.insert(0,'src'); from pipeline.regex_parser import RegexParser; print(RegexParser('config/taxonomy.json').parse('Turbo Levo M Bosch CX 625Wh', 'fully'))"`
+  — then adjust `config/taxonomy.json`.
+- **A listing is placed at the wrong distance**: check its `location_raw`
+  in the DB; add the missing alias to `src/pipeline/geo_data.py`.
+- **"database is locked"**: stop other running `run.py`/`server.py`
+  processes, then `sqlite3 data/emtb_hunter.db "PRAGMA wal_checkpoint(TRUNCATE);"`.
 
-If `test_connectors.py` or `run.py` returns 0 results:
-
-1. **HTML Structure Changed**: Websites frequently update their HTML. Inspect the live page:
-   - Open Tutti.ch or Subito.it in browser
-   - Search for "ebike fully"
-   - Right-click on a listing card → Inspect
-   - Update CSS selectors in `src/connectors/tutti.py` or `subito.py`
-
-2. **Anti-Bot Protection**: Site may have detected scraper:
-   - Add longer delays between requests
-   - Use different User-Agent headers
-   - Consider using `curl_cffi` library for better TLS fingerprinting
-
-3. **Rate Limiting**: Too many requests:
-   - Increase `min_delay` in `base.py`
-   - Reduce number of search queries in config
-
-### Parser Not Extracting Specs
-
-If listings are accepted but specs are empty:
-
-1. Check actual listing text in database:
-   ```bash
-   sqlite3 data/emtb_hunter.db "SELECT title, description_raw FROM listings LIMIT 5;"
-   ```
-
-2. Test parser directly:
-   ```bash
-   python3 -c "
-   import sys
-   sys.path.insert(0, 'src')
-   from pipeline.regex_parser import RegexParser
-   parser = RegexParser('config/taxonomy.json')
-   specs = parser.parse('Specialized Turbo Levo Comp M Bosch CX 625Wh', 'fully biammortizzata')
-   print(specs)
-   "
-   ```
-
-3. Update patterns in `config/taxonomy.json`
-
-### Database Locked
-
-If you see `database is locked` error:
+## Tests
 
 ```bash
-# Close all connections
-pkill -f run.py
-
-# Reset WAL checkpoint
-sqlite3 data/emtb_hunter.db "PRAGMA wal_checkpoint(TRUNCATE);"
+python3 -m pytest -q
 ```
-
-## Advanced
-
-### Custom Filters
-
-Edit `run.py` function `process_listing()` to add custom filters:
-
-```python
-# Example: Only bikes from 2023 or newer
-if specs["model_year"] and specs["model_year"] < 2023:
-    reject_reasons.append("Too old (< 2023)")
-```
-
-### Custom Scoring Weights
-
-Edit `config/config.yaml`:
-
-```yaml
-scoring_weights:
-  price_value: 0.40          # Increase if price is most important
-  component_quality: 0.25
-  condition_mileage: 0.15
-  location_proximity: 0.10   # Decrease if willing to travel far
-  fit_geometry: 0.10
-```
-
-### Export to CSV
-
-```bash
-sqlite3 -header -csv data/emtb_hunter.db "SELECT * FROM listings WHERE status='ACTIVE';" > listings.csv
-```
-
-## Next Steps
-
-1. **Implement Buycycle Connector**: Reverse-engineer their Algolia search
-2. **Facebook Marketplace**: Chrome CDP with local browser
-3. **Deduplication**: Image hashing (`imagehash`) for cross-portal duplicates
-4. **Telegram Bot**: Real-time notifications
-5. **Web Dashboard**: Flask/Streamlit UI for browsing deals

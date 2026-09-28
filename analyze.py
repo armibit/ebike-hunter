@@ -11,10 +11,10 @@ import argparse
 import logging
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
 
-import yaml
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).parent
@@ -23,21 +23,10 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 from db.database import Database
 from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE
 from pipeline.corrections import apply_spec_correction
+from pipeline.filters import spec_problems
 from pipeline.scoring import ScoringEngine
-from connectors.tutti import TuttiConnector
-from connectors.subito import SubitoConnector
-from connectors.buycycle import BuycycleConnector
-from connectors.upway import UpwayConnector
-from connectors.decathlon import DecathlonConnector
-from connectors.velomarkt import VelomarktConnector
-from connectors.tcs_velocorner import TcsVelocornerConnector
-from connectors.ridewill import RidewillConnector
-from connectors.zbike import ZbikeConnector
-from connectors.godspeed import GodspeedConnector
-from connectors.ebikelab import EbikelabConnector
-from connectors.ecycles_shop import EcyclesShopConnector
-from connectors.ebikestorebrescia import EbikestorebresciaConnector
-from connectors.buybestgear import BuybestgearConnector
+from connectors.registry import CONNECTOR_CLASSES
+from utils.config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -76,23 +65,6 @@ NO_BACKLOG_CAP = 100_000
 # on" rather than merely present — a one-line title-only blurb (or nothing)
 # tells Claude nothing about condition, seller trustworthiness or excluded flaws.
 MIN_DESCRIPTION_CHARS = 40
-
-CONNECTOR_CLASSES = {
-    "tutti": TuttiConnector,
-    "subito": SubitoConnector,
-    "buycycle": BuycycleConnector,
-    "upway": UpwayConnector,
-    "decathlon": DecathlonConnector,
-    "velomarkt": VelomarktConnector,
-    "tcs_velocorner": TcsVelocornerConnector,
-    "ridewill": RidewillConnector,
-    "zbike": ZbikeConnector,
-    "godspeed": GodspeedConnector,
-    "ebikelab": EbikelabConnector,
-    "ecycles_shop": EcyclesShopConnector,
-    "ebikestorebrescia": EbikestorebresciaConnector,
-    "buybestgear": BuybestgearConnector,
-}
 
 
 def enrich_thin_descriptions(listings: List[Dict[str, Any]], db: Database, config: Dict[str, Any]) -> int:
@@ -135,23 +107,67 @@ def enrich_thin_descriptions(listings: List[Dict[str, Any]], db: Database, confi
     return enriched
 
 
-def load_config() -> Dict[str, Any]:
-    config_path = BASE_DIR / "config" / "config.yaml"
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
-
-
 def chunked(items: List[Any], size: int) -> List[List[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+def dry_run_summary(listings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What a run would send to the AI, without sending anything: how many
+    listings, in how many API calls, and why they're in the batch."""
+    reasons: Counter = Counter()
+    for listing in listings:
+        problems = spec_problems(listing)
+        if listing.get("status") == "REJECTED" and not problems:
+            reasons["scartato (motivo non correggibile)"] += 1
+        for problem in problems:
+            reasons[problem] += 1
+        if not problems and listing.get("status") != "REJECTED":
+            reasons["specifiche complete"] += 1
+    return {
+        "listings": len(listings),
+        "api_calls": -(-len(listings) // MAX_BATCH_SIZE),
+        "already_analyzed": sum(1 for l in listings if l.get("ai_analyzed_at")),
+        "reasons": dict(reasons.most_common()),
+    }
+
+
+def print_dry_run(listings: List[Dict[str, Any]], args) -> None:
+    summary = dry_run_summary(listings)
+    mode = "--force" if args.force else "--problematic" if args.problematic else "normale"
+    print(f"[DRY RUN — modalità {mode}] {summary['listings']} annunci verrebbero analizzati "
+          f"in {summary['api_calls']} chiamate API ({MAX_BATCH_SIZE} per chiamata); "
+          f"{summary['already_analyzed']} già analizzati in passato.")
+    for reason, count in summary["reasons"].items():
+        print(f"   {count:5d}  {reason}")
+    if args.limit:
+        print(f"   (limitato a --limit {args.limit}: il prossimo run riparte dai successivi)")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--force", action="store_true",
-        help="Rianalizza TUTTI gli annunci attivi/price-drop, anche quelli già "
-             "analizzati in precedenza (es. dopo aver cambiato il prompt AI). "
-             "Costa una chiamata API per ogni annuncio riprocessato.",
+        help="Rianalizza TUTTI gli annunci in lista (attivi, price-drop e scartati "
+             "automaticamente, di qualunque motivo), anche quelli già analizzati — es. "
+             "dopo aver cambiato il prompt AI. Prima quelli mai analizzati, poi i più "
+             "vecchi: con --limit puoi procedere a blocchi, run dopo run.",
+    )
+    mode_group.add_argument(
+        "--problematic", action="store_true",
+        help="Rianalizza solo gli annunci con specifiche problematiche che l'AI può "
+             "correggere: scartati per motore/batteria/taglia, oppure attivi con motore "
+             "da verificare o motore/batteria/taglia mancanti — anche se già analizzati.",
+    )
+    parser.add_argument(
+        "--limit", type=int, metavar="N",
+        help="Analizza al massimo N annunci in questo run (i successivi al prossimo "
+             "run: l'ordine riparte da quelli mai o meno recentemente analizzati).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Mostra quanti annunci verrebbero analizzati e perché, senza chiamare "
+             "l'API (non serve la API key).",
     )
     id_group = parser.add_mutually_exclusive_group()
     id_group.add_argument(
@@ -184,13 +200,12 @@ def main():
     # already exported in the shell, not the other way around.
     load_dotenv(BASE_DIR / ".env", override=True)
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not args.dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         logger.error("ANTHROPIC_API_KEY not set — add it to .env in the project root. Aborting.")
         sys.exit(1)
 
     config = load_config()
     db = Database(config["app"]["db_path"])
-    analyzer = AIAnalyzer(config["buyer_profile"])
     scorer = ScoringEngine(config)
 
     listing_id = None
@@ -217,9 +232,15 @@ def main():
         id_range = (args.id_range[0], args.id_range[1])
 
     listings = db.get_listings_needing_ai_analysis(
-        limit=NO_BACKLOG_CAP, force=args.force,
+        limit=args.limit if args.limit else NO_BACKLOG_CAP, force=args.force,
         listing_id=listing_id, listing_ids=listing_ids, id_range=id_range,
+        problematic_only=args.problematic,
     )
+
+    if args.dry_run:
+        print_dry_run(listings, args)
+        db.close()
+        return
 
     # Diagnostic: a scored listing is always in scope for the AI pass
     # regardless of status — REJECTED (manual "Scarta", or a spec
@@ -228,7 +249,7 @@ def main():
     # that it was already analyzed (skipped on purpose unless you pass
     # --force). Print it explicitly instead of leaving "why wasn't this
     # processed" to be reverse-engineered from silence.
-    if listing_id is None and listing_ids is None and id_range is None and not args.force:
+    if listing_id is None and listing_ids is None and id_range is None and not (args.force or args.problematic):
         exclusions = db.get_high_score_ai_exclusions(min_score=70.0)
         if exclusions:
             print(f"\n⚠️  {len(exclusions)} annunci con punteggio >= 70 NON verranno analizzati ora:")
@@ -245,6 +266,7 @@ def main():
     if enriched:
         print(f"✓ Fetched a live detail page for {enriched} listing(s) with a missing/thin description.")
 
+    analyzer = AIAnalyzer(config["buyer_profile"])
     batches = chunked(listings, MAX_BATCH_SIZE)
     print(f"Analyzing {len(listings)} listing(s) with Claude Haiku, in {len(batches)} batch(es)...")
 

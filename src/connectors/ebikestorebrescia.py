@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector
+from .base import SHOP_SOLD_MARKERS, BaseConnector
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,8 @@ class EbikestorebresciaConnector(BaseConnector):
     on a separate PrestaShop domain (ebikestore.shop) — that's where real
     inventory and prices live, so this connector talks to that domain directly.
     """
+
+    SOLD_MARKERS = SHOP_SOLD_MARKERS
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__("ebikestorebrescia", config)

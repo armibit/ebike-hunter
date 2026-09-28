@@ -836,6 +836,185 @@ def test_migration_locks_legacy_manual_rejects():
     print("✅ Legacy manual-reject migration test passed")
 
 
+def test_ai_scope_skips_rejections_no_correction_can_fix():
+    # Sending an over-budget or too-far listing to the AI is wasted money:
+    # no corrected_specs field can change price or distance.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+
+    fixable_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="1", status="REJECTED", rejection_reason="No motor detected (likely not an e-bike)",
+    ))
+    over_budget_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="2", status="REJECTED",
+        rejection_reason="Over budget (3500 > 3000 CHF); No motor detected (likely not an e-bike)",
+    ))
+    too_far_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="3", status="REJECTED", rejection_reason="Too far (130 km > 105 km)",
+    ))
+    active_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="4"))
+
+    eligible = {row["id"] for row in db.get_listings_needing_ai_analysis()}
+    assert eligible == {fixable_id, active_id}
+
+    # --force really processes everything in scope, hopeless rejections included.
+    assert {row["id"] for row in db.get_listings_needing_ai_analysis(force=True)} == {
+        fixable_id, over_budget_id, too_far_id, active_id,
+    }
+    # An explicit --id still analyzes whatever you point it at.
+    assert [row["id"] for row in db.get_listings_needing_ai_analysis(listing_id=too_far_id)] == [too_far_id]
+    # limit still applies after the filtering.
+    assert len(db.get_listings_needing_ai_analysis(limit=1)) == 1
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI scope skips uncorrectable rejections test passed")
+
+
+def _fresh_db():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    return db_path, Database(db_path)
+
+
+def test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed():
+    db_path, db = _fresh_db()
+    ok_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
+    db.save_specifications(ok_id, {"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True,
+                                   "battery_capacity_wh": 625, "frame_size": "M"})
+    guessed_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
+    db.save_specifications(guessed_id, {"motor_brand": "Unknown Motor", "motor_torque_nm": 60, "motor_verified": False,
+                                        "battery_capacity_wh": 625, "frame_size": "M"})
+    no_size_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="3"))
+    db.save_specifications(no_size_id, {"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True,
+                                        "battery_capacity_wh": 625, "frame_size": "unknown"})
+    fixable_reject_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="4", status="REJECTED", rejection_reason="No motor detected (likely not an e-bike)"))
+    hopeless_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="5", status="REJECTED", rejection_reason="Over budget (3500 > 3000 CHF)"))
+    # Already analyzed: the problematic mode re-runs it anyway.
+    db.save_ai_analysis(guessed_id, "Vecchia analisi", 50)
+
+    picked = [row["id"] for row in db.get_listings_needing_ai_analysis(problematic_only=True)]
+    assert set(picked) == {guessed_id, no_size_id, fixable_reject_id}
+    # Never-analyzed first, the already-analyzed one last (resumable with --limit).
+    assert picked[-1] == guessed_id
+    assert hopeless_id not in picked and ok_id not in picked
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Problematic AI mode test passed")
+
+
+def test_force_mode_walks_the_backlog_stalest_first():
+    db_path, db = _fresh_db()
+    ids = [db.upsert_listing(_rescan_listing(portal_id=str(i)))[0] for i in range(3)]
+    db.save_ai_analysis(ids[0], "a", 50)
+    db.save_ai_analysis(ids[1], "b", 50)
+
+    first = db.get_listings_needing_ai_analysis(force=True, limit=2)
+    assert [row["id"] for row in first] == [ids[2], ids[0]], "never analyzed, then oldest analysis"
+
+    for row in first:
+        db.save_ai_analysis(row["id"], "new", 60)
+    second = db.get_listings_needing_ai_analysis(force=True, limit=2)
+    assert second[0]["id"] == ids[1], "next run continues where the last one stopped"
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Force mode resumable ordering test passed")
+
+
+def test_deleted_listing_is_remembered():
+    db_path, db = _fresh_db()
+    listing_id, _, _ = db.upsert_listing(_rescan_listing())
+    assert db.is_deleted(listing_id) is False
+
+    db.delete_listing(listing_id)
+
+    assert db.is_deleted(listing_id) is True
+    assert db.get_listing_with_specs(listing_id) is None
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Deleted-listing tombstone test passed")
+
+
+def test_mark_unavailable_respects_manual_decisions():
+    db_path, db = _fresh_db()
+    live_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
+    rejected_by_hand_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
+    db.set_manual_status(rejected_by_hand_id, "REJECTED")
+
+    assert db.mark_unavailable(live_id) is True
+    assert db.mark_unavailable(rejected_by_hand_id) is False
+    assert db.mark_unavailable("tutti_does_not_exist") is False
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT id, status, delisted_at FROM listings")
+    rows = {row["id"]: row for row in cursor.fetchall()}
+    assert rows[live_id]["status"] == "SOLD" and rows[live_id]["delisted_at"]
+    assert rows[rejected_by_hand_id]["status"] == "REJECTED"
+    db.close()
+    Path(db_path).unlink()
+    print("✅ mark_unavailable test passed")
+
+
+def test_listings_to_verify_are_the_unseen_ones_least_recently_checked_first():
+    db_path, db = _fresh_db()
+    old_a, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
+    old_b, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
+    db.mark_checked(old_a)  # checked more recently than old_b
+    from datetime import datetime, timezone
+    scan_started = datetime.now(timezone.utc).isoformat()
+    seen_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="3"))  # seen by this scan
+    sold_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="4"))
+    db.conn.execute("UPDATE listings SET last_seen_at = '2000-01-01' WHERE id = ?", (sold_id,))
+    db.mark_unavailable(sold_id)
+
+    to_verify = [row["id"] for row in db.get_listings_to_verify(scan_started, limit=10)]
+    assert to_verify == [old_b, old_a]
+    assert [row["id"] for row in db.get_listings_to_verify(scan_started, limit=1)] == [old_b]
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Listings-to-verify test passed")
+
+
+def test_price_history_records_increases_and_currency_switches():
+    db_path, db = _fresh_db()
+    listing_id, _, _ = db.upsert_listing(_rescan_listing(price_raw=2000, price_chf=2000))
+    db.upsert_listing(_rescan_listing(price_raw=2000, price_chf=2000))           # unchanged: no snapshot
+    _, _, drop = db.upsert_listing(_rescan_listing(price_raw=2200, price_chf=2200))  # increase
+    assert drop is False
+
+    # Same bike re-posted in EUR: 2100 EUR ≈ 2000 CHF is a drop in real terms,
+    # even though 2100 > 2200 would say nothing and 2100 < 2200 is a
+    # meaningless cross-currency comparison.
+    _, _, drop = db.upsert_listing(_rescan_listing(price_raw=2100, currency="EUR", price_chf=2000))
+    assert drop is True
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT price_raw, currency FROM listing_snapshots WHERE listing_id = ? ORDER BY id", (listing_id,))
+    assert [(r["price_raw"], r["currency"]) for r in cursor.fetchall()] == [
+        (2000, "CHF"), (2200, "CHF"), (2100, "EUR"),
+    ]
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Price history test passed")
+
+
+def test_cross_currency_increase_is_not_a_drop():
+    db_path, db = _fresh_db()
+    db.upsert_listing(_rescan_listing(price_raw=2000, price_chf=2000))
+    # 2000 EUR ≈ 1905 CHF? No: here CHF value goes UP (2100) though the raw
+    # number is equal — compare in CHF, not raw.
+    _, _, drop = db.upsert_listing(_rescan_listing(price_raw=2000, currency="EUR", price_chf=2100))
+    assert drop is False
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Cross-currency increase test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
@@ -859,4 +1038,12 @@ if __name__ == "__main__":
     test_automatic_reject_with_reason_is_not_locked()
     test_spec_overrides_roundtrip_and_clear()
     test_migration_locks_legacy_manual_rejects()
+    test_ai_scope_skips_rejections_no_correction_can_fix()
+    test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed()
+    test_force_mode_walks_the_backlog_stalest_first()
+    test_deleted_listing_is_remembered()
+    test_mark_unavailable_respects_manual_decisions()
+    test_listings_to_verify_are_the_unseen_ones_least_recently_checked_first()
+    test_price_history_records_increases_and_currency_switches()
+    test_cross_currency_increase_is_not_a_drop()
     print("\n✅ All database tests passed!")

@@ -2,13 +2,15 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector
+from .base import SHOP_SOLD_MARKERS, BaseConnector
 
 logger = logging.getLogger(__name__)
 
 
 class EbikelabConnector(BaseConnector):
     """Connector for Ebikelab.it (Como, Magento shop — 'usato' category)."""
+
+    SOLD_MARKERS = SHOP_SOLD_MARKERS
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__("ebikelab", config)

@@ -383,6 +383,17 @@ def test_frame_size_cm_ranges():
     print("✅ Frame size cm range test passed")
 
 
+def test_disallowed_frame_size_remembers_what_was_written():
+    # The reject reason used to read "Wrong size (disallowed)" — useless for
+    # deciding whether the parser misread it. Now it keeps the size found.
+    parser = RegexParser(TAXONOMY_PATH)
+    specs = parser.parse("Trek Rail 9.7 taglia XL", "")
+    assert specs["frame_size"] == "disallowed"
+    assert specs["frame_size_detected"] == "XL"
+    assert "frame_size_detected" not in parser.parse("Trek Rail 9.7 taglia M", "")
+    print("✅ Disallowed frame size keeps the detected size")
+
+
 if __name__ == "__main__":
     test_motor_detection()
     test_motor_detection_handles_real_world_phrasing_and_typos()
@@ -403,4 +414,5 @@ if __name__ == "__main__":
     test_odometer_ignores_battery_range()
     test_frame_size_bare_number_requires_unit()
     test_frame_size_cm_ranges()
+    test_disallowed_frame_size_remembers_what_was_written()
     print("\n✅ All parser tests passed!")

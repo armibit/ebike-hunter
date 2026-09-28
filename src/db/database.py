@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from pipeline.filters import is_correctable_rejection, spec_problems
+
 logger = logging.getLogger(__name__)
 
 # Default rejection_reason set by set_manual_status(status="REJECTED") when
@@ -130,6 +132,13 @@ class Database:
             PRIMARY KEY (listing_id, field)
         );
 
+        -- Listings deleted from the dashboard (🗑️). Kept so the next scan
+        -- doesn't re-insert them as brand-new listings.
+        CREATE TABLE IF NOT EXISTS deleted_listings (
+            listing_id TEXT PRIMARY KEY,
+            deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS idx_listings_portal_status ON listings(portal, status);
         CREATE INDEX IF NOT EXISTS idx_listings_status_price ON listings(status, price_chf);
         CREATE INDEX IF NOT EXISTS idx_listings_dedupe ON listings(dedupe_signature);
@@ -224,13 +233,18 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?)
             """, (listing_id, item["price_raw"], item["currency"], item["price_chf"], item.get("status", "NEW"), now))
         else:
-            old_price = existing["price_raw"]
-            new_price = item["price_raw"]
             old_status = existing["status"]
             requested_status = item.get("status", old_status)
             new_status = requested_status
             rejection_reason = item.get("rejection_reason")
             locked = bool(existing["status_locked"])
+
+            # Compare like with like: the posted price in its own currency,
+            # or the CHF equivalents if the listing switched currency.
+            same_currency = (existing["currency"] or "").upper() == (item["currency"] or "").upper()
+            old_price = existing["price_raw"] if same_currency else existing["price_chf"]
+            new_price = item["price_raw"] if same_currency else item["price_chf"]
+            price_changed = not same_currency or item["price_raw"] != existing["price_raw"]
 
             if locked:
                 # The user decided this one by hand (Scarta / Segna venduta):
@@ -242,27 +256,31 @@ class Database:
             elif requested_status != "REJECTED" and new_price > 0 and old_price > 0 and new_price < old_price:
                 is_price_drop = True
                 new_status = "PRICE_DROP"
-                cursor.execute("""
-                INSERT INTO listing_snapshots (listing_id, price_raw, currency, price_chf, status, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, (listing_id, new_price, item["currency"], item["price_chf"], new_status, now))
             elif requested_status != "REJECTED" and old_status == "PRICE_DROP" and new_price == old_price:
                 # Keep PRICE_DROP status — price hasn't recovered
                 new_status = "PRICE_DROP"
+
+            # Every real price change goes into the history — increases and
+            # re-listings at a new price too, not just drops.
+            if price_changed and item["price_raw"] > 0:
+                cursor.execute("""
+                INSERT INTO listing_snapshots (listing_id, price_raw, currency, price_chf, status, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, (listing_id, item["price_raw"], item["currency"], item["price_chf"], new_status, now))
 
             cursor.execute("""
             UPDATE listings SET
                 title = ?, description_raw = ?, price_raw = ?, currency = ?,
                 price_chf = ?, price_eur = ?, location_raw = ?, location_normalized = ?,
                 region = ?, latitude = ?, longitude = ?, distance_km = ?,
-                status = ?, rejection_reason = ?, last_seen_at = ?, last_checked_at = ?
+                status = ?, rejection_reason = ?, dedupe_signature = ?, last_seen_at = ?, last_checked_at = ?
             WHERE id = ?
             """, (
                 item["title"], item.get("description_raw", ""), item["price_raw"], item["currency"],
                 item["price_chf"], item.get("price_eur", item["price_chf"]), item.get("location_raw", ""),
                 item.get("location_normalized", ""), item.get("region", ""), item.get("latitude"),
                 item.get("longitude"), item.get("distance_km"), new_status, rejection_reason,
-                now, now, listing_id
+                item.get("dedupe_signature", ""), now, now, listing_id
             ))
 
         self.conn.commit()
@@ -319,9 +337,19 @@ class Database:
     def get_listings_needing_ai_analysis(
         self, limit: int = 200, force: bool = False, listing_id: Optional[str] = None,
         listing_ids: Optional[List[str]] = None, id_range: Optional[Tuple[int, int]] = None,
+        problematic_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """Listings due for an AI read: never analyzed yet, or analyzed
         before their most recent price drop.
+
+        Three modes (analyze.py flags):
+          default            — due listings, minus automatic rejections no
+                               spec correction could overturn;
+          problematic_only   — listings with spec gaps the AI could fix
+                               (filters.spec_problems), analyzed or not;
+          force              — every in-scope listing, rejections included.
+        The re-run modes return never-analyzed listings first, then the
+        stalest, so a `limit` works as a resumable batch size.
 
         In scope: everything except SOLD/DELISTED (genuinely off the
         market — no decision left to make either way) and a listing you
@@ -350,7 +378,7 @@ class Database:
         cursor = self.conn.cursor()
         base_select = """
         SELECT l.id, l.portal, l.portal_id, l.url, l.title, l.description_raw,
-               l.price_chf, l.distance_km, l.status, l.rejection_reason,
+               l.price_chf, l.distance_km, l.status, l.rejection_reason, l.ai_analyzed_at,
                s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
                s.brakes_tier, s.odometer_km, s.red_flag_details,
@@ -379,18 +407,37 @@ class Database:
         scope_filter = (
             "WHERE l.status NOT IN ('SOLD', 'DELISTED')"
             " AND NOT (l.status = 'REJECTED' AND l.rejection_reason = ?)"
+            " AND l.status_locked = 0"
         )
         params: List[Any] = [MANUAL_REJECT_REASON]
-        if not force:
+        if force or problematic_only:
+            # Re-runs: never-analyzed first, then the stalest analysis — so
+            # repeated `--force --limit N` runs walk through the whole
+            # backlog instead of redoing the same N listings every time.
+            order = " ORDER BY l.ai_analyzed_at IS NOT NULL, l.ai_analyzed_at ASC, sc.score_total DESC"
+        else:
             scope_filter += (
                 " AND (l.ai_analysis IS NULL"
                 " OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))"
             )
-        params.append(limit)
-        cursor.execute(
-            base_select + scope_filter + " ORDER BY sc.score_total DESC LIMIT ?", params
-        )
-        return [dict(row) for row in cursor.fetchall()]
+            order = " ORDER BY sc.score_total DESC"
+        cursor.execute(base_select + scope_filter + order, params)
+        rows = [dict(row) for row in cursor.fetchall()]
+
+        if problematic_only:
+            # Only listings whose specs the AI could actually fix — see
+            # filters.spec_problems — even if already analyzed.
+            rows = [row for row in rows if spec_problems(row)]
+        elif not force:
+            # An automatic rejection is only worth an AI read when a spec
+            # correction could overturn it (filters.is_correctable_rejection)
+            # — over budget, too far, hardtail, wrong category or red flags
+            # stay rejected whatever the AI reads. --force still sends them.
+            rows = [
+                row for row in rows
+                if row["status"] != "REJECTED" or is_correctable_rejection(row["rejection_reason"])
+            ]
+        return rows[:limit]
 
     def resolve_listing_id(self, value: str) -> Optional[str]:
         """Accept either a listing's real id (e.g. "tutti_12345") or the
@@ -434,6 +481,8 @@ class Database:
                 row["reason"] = f"stato {row['status']} (non più sul mercato)"
             elif row["status"] == "REJECTED" and row["rejection_reason"] == MANUAL_REJECT_REASON:
                 row["reason"] = "scartata manualmente da te — lasciata invariata"
+            elif row["status"] == "REJECTED" and not is_correctable_rejection(row["rejection_reason"]):
+                row["reason"] = "scartata per un motivo che nessuna correzione delle specifiche può cambiare"
             elif row["ai_analysis"] is not None:
                 due_for_recheck = (
                     row["status"] == "PRICE_DROP"
@@ -550,10 +599,53 @@ class Database:
         return bool(new_value)
 
     def delete_listing(self, listing_id: str) -> None:
-        """Physically delete a listing and all its related data from the DB."""
+        """Physically delete a listing and all its related data from the DB,
+        and remember the id so the next scan doesn't bring it back as new."""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM listings WHERE id = ?", (listing_id,))
+        cursor.execute("INSERT OR IGNORE INTO deleted_listings (listing_id) VALUES (?)", (listing_id,))
         self.conn.commit()
+
+    def is_deleted(self, listing_id: str) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT 1 FROM deleted_listings WHERE listing_id = ?", (listing_id,))
+        return cursor.fetchone() is not None
+
+    def mark_unavailable(self, listing_id: str) -> bool:
+        """The portal says this listing is sold/expired/removed: mark it SOLD
+        unless the user already decided on it by hand. Returns True if a
+        live listing was actually switched off."""
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE listings SET status = 'SOLD', delisted_at = ?, last_checked_at = ?"
+            " WHERE id = ? AND status_locked = 0 AND status IN ('ACTIVE', 'PRICE_DROP', 'NEW', 'REJECTED')",
+            (now, now, listing_id),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def mark_checked(self, listing_id: str) -> None:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "UPDATE listings SET last_checked_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), listing_id),
+        )
+        self.conn.commit()
+
+    def get_listings_to_verify(self, not_seen_since: str, limit: int) -> List[Dict[str, Any]]:
+        """Live listings the latest scan did NOT see in any search result
+        (last_seen_at before this scan started) — the ones that may have been
+        sold or removed. Least recently checked first, so a per-run cap still
+        cycles through all of them over successive scans."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+        SELECT id, portal, portal_id, url FROM listings
+        WHERE status IN ('ACTIVE', 'PRICE_DROP', 'NEW') AND last_seen_at < ?
+        ORDER BY last_checked_at ASC
+        LIMIT ?
+        """, (not_seen_since, limit))
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_listing_with_specs(self, listing_id: str) -> Optional[Dict[str, Any]]:
         """Fetch one listing's price/distance plus its full specifications

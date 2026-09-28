@@ -11,7 +11,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from db.database import Database
-import yaml
+from pipeline.dedupe import find_duplicates
 
 
 def _attr(value) -> str:
@@ -296,6 +296,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     SELECT
         l.rowid AS numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
+        l.latitude, l.longitude,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
         l.user_analysis, l.ai_analysis, l.ai_score,
         s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
@@ -315,6 +316,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
+
+    # Same bike on another portal / re-listed (pipeline/dedupe.py).
+    duplicates_by_id = find_duplicates(listings)
 
     # Price history (listing_snapshots), grouped by listing — one query for
     # all listings rather than one per row, then sliced per-listing below.
@@ -728,6 +732,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = _attr(bike["frame_size"]) or "N/A"
         history = history_by_id.get(bike["id"], [])
+        duplicates = duplicates_by_id.get(bike["id"], [])
+        dup_icon = (
+            '<span class="dup-icon" title="Probabilmente la stessa bici: '
+            + _attr(", ".join(f"#{d['numeric_id']} ({d['portal']})" for d in duplicates))
+            + f'">🔁 anche su {_attr(", ".join(sorted({d["portal"] for d in duplicates})))}</span> '
+            if duplicates else ''
+        )
         previous_price = _get_previous_price(history) if status == "PRICE_DROP" else None
         price_text = _format_price(bike, previous_price)
         anno_text = bike.get("model_year") or "N/A"
@@ -771,7 +782,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
                         <a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
-                        <div class="title-meta">{new_icon}{ai_icon}{_attr(bike['portal'])} · {meta_text}</div>
+                        <div class="title-meta">{new_icon}{ai_icon}{dup_icon}{_attr(bike['portal'])} · {meta_text}</div>
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>
@@ -1419,10 +1430,8 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
 
 if __name__ == "__main__":
-    import os
-    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    from utils.config import load_config
+    config = load_config()
 
     db_path = config["app"]["db_path"]
     output = Path(__file__).parent.parent / "index.html"

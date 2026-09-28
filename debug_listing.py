@@ -12,14 +12,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-import yaml
 import sqlite3
 from connectors.subito import SubitoConnector
-
-
-def load_config():
-    with open(Path(__file__).parent / "config" / "config.yaml") as f:
-        return yaml.safe_load(f)
+from utils.config import load_config
 
 
 def main():

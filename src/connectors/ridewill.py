@@ -143,6 +143,12 @@ class RidewillConnector(BaseConnector):
             logger.exception("Error fetching Ridewill details %s: %s", listing_id, e)
             return {}
 
+    def check_availability(self, listing_id: str, url: str) -> Optional[bool]:
+        """Ridewill's product page states stock in words (see
+        get_listing_details); an empty dict means the page couldn't be read."""
+        details = self.get_listing_details(listing_id, url)
+        return details.get("is_available") if details else None
+
     def search_all(self) -> List[Dict[str, Any]]:
         results = self.search()
         logger.info("[Ridewill] Found: %d results", len(results))

@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from connectors.base import MAX_RETRY_AFTER_SECONDS, _retry_after_seconds
-from pipeline.filters import hard_filter_reasons
+from pipeline.filters import distance_reject_reason, hard_filter_reasons, is_correctable_rejection, spec_problems
 
 CONFIG = {
     "buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}},
@@ -50,6 +50,68 @@ def test_unknown_values_are_allowed():
     print("✅ Hard filters: unknown values allowed")
 
 
+RADIUS_CONFIG = {"buyer_profile": {"max_radius_km": {
+    "italy": 150, "exempt_portals": ["ebikestorebrescia"],
+}}}
+
+
+def test_distance_filter_rejects_only_far_italian_listings():
+    assert distance_reject_reason("subito", 45.5, 110, "IT", RADIUS_CONFIG) is None
+    assert distance_reject_reason("subito", 41.9, 520, "IT", RADIUS_CONFIG) == "Too far (520 km > 150 km)"
+    # All of Switzerland is accepted, however far — distance only weighs on the score.
+    assert distance_reject_reason("tutti", 46.2, 250, "CH", RADIUS_CONFIG) is None
+    print("✅ Distance filter: Italy radius, Switzerland always accepted")
+
+
+def test_distance_filter_reads_legacy_lombardia_setting():
+    legacy = {"buyer_profile": {"max_radius_km": {"ticino": 45, "lombardia": 105}}}
+    assert distance_reject_reason("subito", 45.5, 110, "IT", legacy) == "Too far (110 km > 105 km)"
+    print("✅ Distance filter: legacy config key")
+
+
+def test_distance_filter_skips_unknown_location_and_shipping_shops():
+    # Unknown location gets a neutral placeholder distance, not a real one.
+    assert distance_reject_reason("subito", None, 150, "IT", RADIUS_CONFIG) is None
+    # A shop that ships is never rejected for distance.
+    assert distance_reject_reason("ebikestorebrescia", 41.9, 520, "IT", RADIUS_CONFIG) is None
+    # No radius configured at all: no filter.
+    assert distance_reject_reason("subito", 41.9, 520, "IT", {}) is None
+    print("✅ Distance filter: unknown location / exempt portals")
+
+
+def test_wrong_size_reason_names_the_size_found():
+    reasons = hard_filter_reasons(2000, {**GOOD_SPECS, "frame_size": "disallowed", "frame_size_detected": "XL"}, CONFIG)
+    assert "Wrong size (XL — outside target sizes)" in reasons
+    print("✅ Wrong-size reason names the size")
+
+
+def test_spec_problems():
+    complete = {"status": "ACTIVE", "motor_torque_nm": 85, "motor_verified": 1,
+                "battery_capacity_wh": 625, "frame_size": "M"}
+    assert spec_problems(complete) == []
+    assert spec_problems({**complete, "motor_verified": 0}) == ["motore da verificare"]
+    assert spec_problems({**complete, "motor_torque_nm": None, "battery_capacity_wh": None, "frame_size": "unknown"}) == [
+        "motore mancante", "batteria mancante", "taglia mancante",
+    ]
+    assert spec_problems({"status": "REJECTED", "rejection_reason": "No motor detected (likely not an e-bike)"})
+    assert spec_problems({"status": "REJECTED", "rejection_reason": "Over budget (3500 > 3000 CHF)"}) == []
+    print("✅ spec_problems")
+
+
+def test_correctable_rejections():
+    assert is_correctable_rejection("No motor detected (likely not an e-bike)")
+    assert is_correctable_rejection("Weak motor (50nm < 60nm); Small battery (400Wh < 500Wh)")
+    assert is_correctable_rejection("Taglia esclusa dopo correzione manuale (XL non tra le taglie target)")
+    # One uncorrectable part is enough to make the whole rejection final.
+    assert not is_correctable_rejection("No motor detected (likely not an e-bike); Over budget (3500 > 3000 CHF)")
+    assert not is_correctable_rejection("Hardtail (need full suspension)")
+    assert not is_correctable_rejection("Too far (130 km > 105 km)")
+    assert not is_correctable_rejection("Red flags: senza caricatore")
+    assert not is_correctable_rejection("Wrong category (fat bike)")
+    assert not is_correctable_rejection(None)
+    print("✅ Correctable-rejection classification")
+
+
 def test_retry_after_parsing():
     assert _retry_after_seconds(None) == 60
     assert _retry_after_seconds("") == 60
@@ -69,5 +131,11 @@ if __name__ == "__main__":
     test_good_listing_passes()
     test_each_hard_filter_fires()
     test_unknown_values_are_allowed()
+    test_distance_filter_rejects_only_far_italian_listings()
+    test_distance_filter_reads_legacy_lombardia_setting()
+    test_distance_filter_skips_unknown_location_and_shipping_shops()
+    test_wrong_size_reason_names_the_size_found()
+    test_spec_problems()
+    test_correctable_rejections()
     test_retry_after_parsing()
     print("\n✅ All filter tests passed!")

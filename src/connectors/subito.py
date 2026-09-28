@@ -8,17 +8,27 @@ from .base import BaseConnector
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_SEARCH_PATHS = ["/annunci-lombardia/vendita/biciclette"]
+
+
 class SubitoConnector(BaseConnector):
-    """Connector for Subito.it (Lombardia classifieds)."""
+    """Connector for Subito.it classifieds.
+
+    Searches every path in the portal's `search_paths` config — a whole
+    region ("/annunci-lombardia/vendita/biciclette") or a single province
+    ("/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola"), exactly
+    as they appear in Subito's own URLs."""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__("subito", config)
-        self.base_url = config["portals"]["subito_it"]["base_url"]
-        self.search_queries = config["portals"]["subito_it"]["search_queries"]
-        self.provinces = config["portals"]["subito_it"].get("provinces", ["como", "varese"])
-        self.max_pages = config["portals"]["subito_it"].get("max_pages", 4)
+        portal_config = config["portals"]["subito_it"]
+        self.base_url = portal_config["base_url"]
+        self.search_queries = portal_config["search_queries"]
+        self.search_paths = portal_config.get("search_paths") or DEFAULT_SEARCH_PATHS
+        self.max_pages = portal_config.get("max_pages", 4)
 
-    def search(self, query: str, province: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def search(self, query: str, province: Optional[str] = None, limit: int = 50,
+               search_path: str = DEFAULT_SEARCH_PATHS[0]) -> List[Dict[str, Any]]:
         """
         Search Subito.it for listings, paginating via the `o` query param.
         A single page only surfaces ~30 results (plus a handful of repeated
@@ -27,8 +37,8 @@ class SubitoConnector(BaseConnector):
         Returns list of raw listing dictionaries.
         """
         # Build search URL
-        # Subito.it structure: /annunci-lombardia/vendita/biciclette?q=query
-        search_url = f"{self.base_url}/annunci-lombardia/vendita/biciclette"
+        # Subito.it structure: /annunci-<region>/vendita/biciclette[/<province>]?q=query
+        search_url = f"{self.base_url}{search_path.rstrip('/')}"
         base_params = {"q": query}
         if province:
             base_params["city"] = province
@@ -254,10 +264,13 @@ class SubitoConnector(BaseConnector):
         except Exception as e:
             logger.debug("Subito.it warm-up request failed (continuing anyway): %s", e)
 
-        for query in self.search_queries:
-            # Search without province filter first (all Lombardia)
-            results = self.search(query)
-            all_results.extend(results)
-            logger.info("[Subito.it] Query '%s': %d results", query, len(results))
+        seen_ids = set()
+        for search_path in self.search_paths:
+            for query in self.search_queries:
+                results = self.search(query, search_path=search_path)
+                fresh = [r for r in results if r["portal_id"] not in seen_ids]
+                seen_ids.update(r["portal_id"] for r in fresh)
+                all_results.extend(fresh)
+                logger.info("[Subito.it] %s query '%s': %d results", search_path, query, len(fresh))
 
         return all_results
