@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector
+from .base import BaseConnector, shopify_variants_available
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,8 @@ class UpwayConnector(BaseConnector):
                 "price_raw": price_raw,
                 "currency": "CHF",
                 "location_raw": "Switzerland",
+                # Sold-out one-off bikes stay in the collection feed.
+                "is_available": shopify_variants_available(variants),
             }
         except Exception:
             logger.debug("Failed to parse Upway product", exc_info=True)
@@ -121,6 +123,9 @@ class UpwayConnector(BaseConnector):
                     container = container.parent
                 return container.get_text(" ", strip=True)
         return ""
+
+    def check_availability(self, listing_id: str, url: str) -> Optional[bool]:
+        return self.shopify_availability(url)
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
         """Fetch the product page for the structured spec table and the

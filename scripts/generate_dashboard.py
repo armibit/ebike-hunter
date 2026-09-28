@@ -11,8 +11,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from db.database import Database
-from pipeline.dedupe import dedupe_signature, find_duplicates
-import yaml
+from pipeline.dedupe import find_duplicates
 
 
 def _attr(value) -> str:
@@ -297,6 +296,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     SELECT
         l.rowid AS numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
+        l.latitude, l.longitude,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
         l.user_analysis, l.ai_analysis, l.ai_score,
         s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
@@ -317,10 +317,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
     listings = [dict(row) for row in cursor.fetchall()]
 
-    # Computed here rather than read from listings.dedupe_signature, so rows
-    # stored before the current signature format are grouped too.
-    for bike in listings:
-        bike["dedupe_signature"] = dedupe_signature(bike["title"], bike["price_chf"])
+    # Same bike on another portal / re-listed (pipeline/dedupe.py).
     duplicates_by_id = find_duplicates(listings)
 
     # Price history (listing_snapshots), grouped by listing — one query for
@@ -1433,10 +1430,8 @@ def generate_dashboard(db_path: str, output_path: str = "index.html"):
 
 
 if __name__ == "__main__":
-    import os
-    config_path = Path(__file__).parent.parent / "config" / "config.yaml"
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    from utils.config import load_config
+    config = load_config()
 
     db_path = config["app"]["db_path"]
     output = Path(__file__).parent.parent / "index.html"

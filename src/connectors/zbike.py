@@ -1,7 +1,7 @@
 import html
 import logging
 import re
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from .base import BaseConnector
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,24 @@ class ZbikeConnector(BaseConnector):
             "price_raw": price_raw,
             "currency": prices.get("currency_code", "CHF"),
             "location_raw": "Mendrisio, Ticino",
+            # Sold used bikes stay listed as out of stock in the Store API.
+            "is_available": bool(product["is_in_stock"]) if "is_in_stock" in product else None,
         }
+
+    def check_availability(self, listing_id: str, url: str) -> Optional[bool]:
+        """Store API product endpoint: 404 once removed, is_in_stock=false once sold."""
+        response = self._raw_get(f"{self.base_url}/wp-json/wc/store/v1/products/{listing_id}")
+        if response is None:
+            return None
+        if response.status_code in (404, 410):
+            return False
+        if response.status_code >= 400:
+            return None
+        try:
+            in_stock = response.json().get("is_in_stock")
+        except ValueError:
+            return None
+        return bool(in_stock) if in_stock is not None else None
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
         return {}

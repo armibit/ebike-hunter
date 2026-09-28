@@ -2,13 +2,15 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector
+from .base import SHOP_SOLD_MARKERS, BaseConnector
 
 logger = logging.getLogger(__name__)
 
 
 class GodspeedConnector(BaseConnector):
     """Connector for Godspeed.ch (Ticino Lightspeed/webshopapp shop — 'occasioni' page)."""
+
+    SOLD_MARKERS = SHOP_SOLD_MARKERS
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__("godspeed", config)

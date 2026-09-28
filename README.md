@@ -5,8 +5,9 @@ Personal, local tool that scrapes full-suspension e-MTB classifieds — mostly u
 ## Features
 
 - **12 working portal connectors**: Tutti.ch, Subito.it (Lombardia + Verbano, configurable via `search_paths`), Upway, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia, Buybestgear.com (new bikes, not used — see below). Buycycle and Decathlon.ch are stubs (no scriptable access) and disabled by default
-- **Distance filter**: `max_radius_km` rejects private listings too far to go and see; shops that ship (`exempt_portals`) are only scored lower
-- **Duplicate flag**: the same bike on two portals (or re-listed) is marked "🔁 anche su …" in the dashboard
+- **Location by province / canton**: any town is placed through its Italian province code ("Merone (CO)"), Swiss postcode ("9524 Zuzwil"), canton or province name ("Winterthur, Zürich") — distances are indicative (±20 km), enough to tell nearby from 400 km away. All of Switzerland is accepted (distance only lowers the score); Italian private listings beyond `max_radius_km.italy` are rejected; shops that ship (`exempt_portals`) never are
+- **Sold detection**: sold-out items in shop feeds (Shopify `available`, WooCommerce `is_in_stock`) are switched to SOLD; after each scan, live listings that dropped out of the search results are checked on the portal (404/410, redirect away from the ad, schema.org `OutOfStock`, "annuncio non più disponibile"…) and marked SOLD when gone
+- **Duplicate flag**: the same bike on two portals (or re-listed) is marked "🔁 anche su …" in the dashboard — pairwise match on title words, price (±8 %) and specs, where a conflicting frame size / battery / year / motor brand vetoes the match
 - **Zero-token parsing**: regex/taxonomy-based spec extraction (motor, battery, frame size, brakes, travel, odometer, model year) — no LLM calls in the main scan
 - **Deterministic scoring**: 0–100 score from price, components, condition/mileage, distance, fit
 - **Optional AI second opinion**: `analyze.py` sends listings to Claude Haiku for an independent Italian-language verdict, red-flag/condition reading from the raw description, and — only when the seller's own text names it — spec corrections the regex parser missed
@@ -18,7 +19,7 @@ Personal, local tool that scrapes full-suspension e-MTB classifieds — mostly u
 
 Configured in `config/config.yaml` — current defaults:
 
-- **Location**: Lugano, Ticino (CH); Ticino radius 45 km, everywhere else (Lombardia, Verbano, …) 105 km — farther private listings are rejected
+- **Location**: Lugano, Ticino (CH); whole of Switzerland accepted, Italy up to 150 km (Lombardia, Verbano, Novara, Torino, Aosta, Piacenza)
 - **Category**: Full suspension e-MTB, 130–160mm travel front/rear
 - **Motor / battery hard minimums** (below these, a listing is rejected outright): ≥60Nm torque, ≥500Wh battery
 - **Frame size**: M, S2, S3, 42–46cm, 17"/18"
@@ -79,9 +80,13 @@ Opens a local Flask dashboard as a standalone app window, reading the database l
 ### 3. Optional AI second opinion
 
 ```bash
-python3 analyze.py            # analyzes listings never read by AI yet (or re-checked after a price drop)
-python3 analyze.py --force    # re-analyzes EVERY active/price-drop listing, even already-analyzed ones (costs an API call each)
-python3 analyze.py --id 42    # analyzes just one listing, for testing — accepts either its numeric # id (shown in the dashboard) or its full id
+python3 analyze.py                          # listings never read by AI yet (or re-checked after a price drop)
+python3 analyze.py --problematic            # only listings with spec gaps the AI can fix (rejected for motor/battery/size,
+                                            #   unverified or missing motor, missing battery/size) — even if already analyzed
+python3 analyze.py --force                  # EVERYTHING in scope, rejected listings included (one API call per 15 listings)
+python3 analyze.py --force --limit 150      # ...in batches: each run continues from the never/least-recently analyzed
+python3 analyze.py --problematic --dry-run  # how many listings, how many API calls, and why — no API call, no key needed
+python3 analyze.py --id 42                  # just one listing — numeric # id from the dashboard, or the full id
 ```
 
 Writes an Italian-language verdict (`ai_analysis`) and, when the seller's text explicitly names a spec the regex parser missed, a correction that's applied and rescored automatically. Also regenerates the static `index.html` snapshot.

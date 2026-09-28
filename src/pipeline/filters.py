@@ -37,22 +37,43 @@ def is_correctable_rejection(rejection_reason: Optional[str]) -> bool:
     )
 
 
+def spec_problems(listing: Dict[str, Any]) -> List[str]:
+    """Why this listing's specs deserve an AI read — what analyze.py
+    --problematic targets. An auto-rejection a spec correction could
+    overturn, or a live listing whose key specs the parser couldn't pin
+    down. Empty list = nothing the AI could fix."""
+    if listing.get("status") == "REJECTED":
+        return ["scartato per specifiche"] if is_correctable_rejection(listing.get("rejection_reason")) else []
+    problems = []
+    if listing.get("motor_torque_nm") is None:
+        problems.append("motore mancante")
+    elif listing.get("motor_verified") is not None and not listing.get("motor_verified"):
+        problems.append("motore da verificare")
+    if listing.get("battery_capacity_wh") is None:
+        problems.append("batteria mancante")
+    if listing.get("frame_size") in (None, "", "unknown"):
+        problems.append("taglia mancante")
+    return problems
+
+
 def distance_reject_reason(
-    portal: str, latitude: Optional[float], distance_km: Optional[float], region: Optional[str],
+    portal: str, latitude: Optional[float], distance_km: Optional[float], country: Optional[str],
     config: Dict[str, Any],
 ) -> Optional[str]:
-    """Enforce buyer_profile.max_radius_km: a Ticino listing beyond the
-    Ticino radius, or any other located listing beyond the wider (Italy/
-    rest-of-area) radius, is too far to go and see.
+    """Enforce buyer_profile.max_radius_km for Italian listings: one whose
+    province lies beyond `italy` km is too far to go and see.
 
-    Only listings whose place was actually resolved are checked — an
-    unknown location gets a neutral distance, not a real one. Portals in
-    max_radius_km.exempt_portals (shops that ship) are never rejected for
-    distance; it still lowers their score."""
+    Never rejected for distance: anything in Switzerland (accepted
+    everywhere, distance only lowers the score), a location that couldn't
+    be placed (neutral placeholder distance, not a real one), and portals
+    in max_radius_km.exempt_portals (shops that ship)."""
     radius = config.get("buyer_profile", {}).get("max_radius_km") or {}
     if latitude is None or distance_km is None or portal in (radius.get("exempt_portals") or []):
         return None
-    limit = radius.get("ticino") if region == "ticino" else radius.get("lombardia")
+    if country != "IT":
+        return None
+    # "lombardia" is the pre-province name of the same setting.
+    limit = radius.get("italy", radius.get("lombardia"))
     if limit is None or distance_km <= limit:
         return None
     return f"{TOO_FAR_PREFIX} ({distance_km:.0f} km > {limit} km)"
@@ -99,7 +120,8 @@ def hard_filter_reasons(price_chf: float, specs: Dict[str, Any], config: Dict[st
         reasons.append(f"Small battery ({battery_wh:g}Wh < {min_battery}Wh)")
 
     if specs.get("frame_size") == "disallowed":
-        reasons.append("Wrong size (frame size outside target sizes)")
+        detected = specs.get("frame_size_detected")
+        reasons.append(f"Wrong size ({detected} — outside target sizes)" if detected else "Wrong size (outside target sizes)")
 
     if specs.get("has_red_flag"):
         details = specs.get("red_flag_details") or []

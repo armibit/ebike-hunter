@@ -210,27 +210,135 @@ def _process_raw(db, parser, config, **raw_overrides):
     return run.process_listing(_raw_listing(**raw_overrides), parser, Normalizer(), ScoringEngine(config), db, config)
 
 
-def test_far_listing_is_rejected_unless_the_portal_ships():
-    config = {**CONFIG, "buyer_profile": {**CONFIG["buyer_profile"], "max_radius_km": {
-        "ticino": 45, "lombardia": 105, "exempt_portals": ["ebikestorebrescia"],
-    }}}
+RADIUS_CONFIG = {**CONFIG, "buyer_profile": {**CONFIG["buyer_profile"], "max_radius_km": {
+    "italy": 150, "exempt_portals": ["ebikestorebrescia"],
+}}}
+
+
+def test_far_italian_listing_is_rejected_unless_the_portal_ships():
     db_path, db = _fresh_db()
     parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
 
-    # Private seller in Brescia (~115 km): too far to go and see.
-    assert _process_raw(db, parser, config, portal="subito", portal_id="9", location_raw="Brescia (BS)") is False
-    row = db.get_listing_with_specs("subito_9")
-    assert "Too far" in row["rejection_reason"]
-
-    # A shop in Brescia that ships: kept, distance only lowers the score.
-    assert _process_raw(db, parser, config, portal="ebikestorebrescia", portal_id="9", location_raw="Brescia") is True
-
-    # Verbano (~35 km) is within reach.
-    assert _process_raw(db, parser, config, portal="subito", portal_id="10", location_raw="Gravellona Toce (VB)") is True
+    # Brescia (~110 km) is fine now: province-level distances are indicative.
+    assert _process_raw(db, parser, RADIUS_CONFIG, portal="subito", portal_id="9", location_raw="Brescia (BS)") is True
+    # Verona (~170 km): too far to go and see.
+    assert _process_raw(db, parser, RADIUS_CONFIG, portal="subito", portal_id="10", location_raw="Bussolengo (VR)") is False
+    assert "Too far" in db.get_listing_with_specs("subito_10")["rejection_reason"]
+    # A shop that ships is never rejected for distance.
+    assert _process_raw(db, parser, RADIUS_CONFIG, portal="ebikestorebrescia", portal_id="9",
+                        location_raw="Verona") is True
 
     db.close()
     Path(db_path).unlink()
     print("✅ Distance filter in process_listing test passed")
+
+
+def test_all_of_switzerland_is_accepted_but_weighs_on_the_score():
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+
+    assert _process_raw(db, parser, RADIUS_CONFIG, portal="tutti", portal_id="1", location_raw="Lugano, Ticino") is True
+    assert _process_raw(db, parser, RADIUS_CONFIG, portal="tutti", portal_id="2", location_raw="Genève, Genève") is True
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT l.id, l.region, l.distance_km, sc.score_location_proximity FROM listings l"
+                   " JOIN scores sc ON sc.listing_id = l.id")
+    rows = {row["id"]: row for row in cursor.fetchall()}
+    assert rows["tutti_2"]["region"] == "svizzera" and rows["tutti_2"]["distance_km"] > 200
+    assert rows["tutti_2"]["score_location_proximity"] < rows["tutti_1"]["score_location_proximity"]
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Whole-Switzerland acceptance test passed")
+
+
+def test_sold_out_listing_in_feed_switches_stored_listing_off():
+    # Shops keep sold-out bikes in their feeds (Shopify available=false):
+    # the stored listing must go SOLD, not stay ACTIVE forever.
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+
+    assert _process_raw(db, parser, CONFIG) is True
+    assert db.get_listing_with_specs("tutti_42")["status"] == "ACTIVE"
+
+    assert _process_raw(db, parser, CONFIG, is_available=False) is False
+    assert db.get_listing_with_specs("tutti_42")["status"] == "SOLD"
+
+    # Sold-out and never seen before: not imported at all.
+    assert _process_raw(db, parser, CONFIG, portal_id="99", is_available=False) is False
+    assert db.get_listing_with_specs("tutti_99") is None
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Sold-out feed item test passed")
+
+
+def test_sold_flag_from_detail_page_switches_listing_off():
+    class _DetailSaysSold:
+        def get_listing_details(self, listing_id, url):
+            return {"description_raw": "Bosch CX", "is_available": False}
+
+    from pipeline.normalizer import Normalizer
+    from pipeline.scoring import ScoringEngine
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+    _process_raw(db, parser, CONFIG)
+
+    accepted = run.process_listing(_raw_listing(description_raw=""), parser, Normalizer(), ScoringEngine(CONFIG),
+                                   db, CONFIG, connector=_DetailSaysSold())
+
+    assert accepted is False
+    assert db.get_listing_with_specs("tutti_42")["status"] == "SOLD"
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Sold flag from detail page test passed")
+
+
+def test_deleted_listing_is_not_reimported():
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+    _process_raw(db, parser, CONFIG)
+    db.delete_listing("tutti_42")
+
+    assert _process_raw(db, parser, CONFIG) is False
+    assert db.get_listing_with_specs("tutti_42") is None
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Deleted listing not re-imported test passed")
+
+
+def test_verify_unseen_listings_marks_sold_and_keeps_inconclusive():
+    from datetime import datetime, timezone
+
+    class _FakeConnector:
+        portal_name = "tutti"
+
+        def __init__(self, verdicts):
+            self.verdicts = verdicts
+            self.checked = []
+
+        def check_availability(self, listing_id, url):
+            self.checked.append(listing_id)
+            return self.verdicts[listing_id]
+
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+    for pid in ("1", "2", "3"):
+        _process_raw(db, parser, CONFIG, portal_id=pid)
+    scan_started = datetime.now(timezone.utc).isoformat()
+    _process_raw(db, parser, CONFIG, portal_id="4")  # seen by this scan: never checked
+
+    connector = _FakeConnector({"1": False, "2": True, "3": None})
+    sold = run.verify_unseen_listings(db, {"tutti": connector}, CONFIG, scan_started)
+
+    assert sold == 1
+    assert sorted(connector.checked) == ["1", "2", "3"]
+    statuses = {pid: db.get_listing_with_specs(f"tutti_{pid}")["status"] for pid in ("1", "2", "3", "4")}
+    assert statuses == {"1": "SOLD", "2": "ACTIVE", "3": "ACTIVE", "4": "ACTIVE"}
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ verify_unseen_listings test passed")
 
 
 def test_process_listing_stores_dedupe_signature():
@@ -258,6 +366,11 @@ if __name__ == "__main__":
     test_rescan_rechecks_overridden_frame_size_strictly()
     test_rescan_does_not_undo_manual_reject()
     test_rejected_listing_still_gets_its_parsed_specs_saved()
-    test_far_listing_is_rejected_unless_the_portal_ships()
+    test_far_italian_listing_is_rejected_unless_the_portal_ships()
+    test_all_of_switzerland_is_accepted_but_weighs_on_the_score()
+    test_sold_out_listing_in_feed_switches_stored_listing_off()
+    test_sold_flag_from_detail_page_switches_listing_off()
+    test_deleted_listing_is_not_reimported()
+    test_verify_unseen_listings_marks_sold_and_keeps_inconclusive()
     test_process_listing_stores_dedupe_signature()
     print("\n✅ All run.py tests passed!")

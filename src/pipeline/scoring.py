@@ -14,6 +14,14 @@ class ScoringEngine:
             self.budget = config["buyer_profile"]["budget"]
             self.target_price = self.budget["target_price"]
             self.hard_max_price = self.budget["hard_max_price"]
+            # At or below this the price component is a full 100.
+            self.full_score_price = self.budget.get("full_score_price", 1800)
+            # Parser labels (M/S2/S3) plus the buyer's own target sizes, so a
+            # hand-corrected "44cm" counts as a fit when 44cm is a target.
+            self.fit_sizes = {"M", "S2", "S3"} | {
+                "".join(str(s).split()).upper()
+                for s in config["buyer_profile"].get("rider_specs", {}).get("target_sizes", [])
+            }
             hw_reqs = config.get("hardware_requirements", {})
             self.travel_front_range = hw_reqs.get("travel_front_range", [130, 160])
             self.travel_rear_range = hw_reqs.get("travel_rear_range", [130, 160])
@@ -82,19 +90,19 @@ class ScoringEngine:
         """
         Score based on price vs target budget.
         <= 0 CHF = 0 (invalid/failed price parse, never a real deal)
-        <= 1800 CHF = 100
-        1800-3000 CHF = decay curve
-        > 3000 CHF = 0
+        <= full_score_price (default 1800 CHF) = 100
+        full_score_price..hard_max_price = decay curve
+        > hard_max_price = 0
         """
         if price_chf <= 0:
             return 0.0
-        elif price_chf <= 1800:
+        elif price_chf <= self.full_score_price:
             return 100.0
         elif price_chf > self.hard_max_price:
             return 0.0
         else:
             # Decay curve
-            ratio = (price_chf - 1800) / (self.hard_max_price - 1800)
+            ratio = (price_chf - self.full_score_price) / (self.hard_max_price - self.full_score_price)
             return max(0, 100.0 * (1 - ratio ** 0.85))
 
     def _score_components(self, specs: Dict[str, Any]) -> float:
@@ -218,7 +226,7 @@ class ScoringEngine:
         # Frame size (max 60 points)
         # Normalized so a hand-typed "m" / " S2 " counts like the parser's "M".
         frame_size = "".join(str(specs.get("frame_size") or "unknown").split()).upper()
-        if frame_size in ("M", "S2", "S3"):
+        if frame_size in self.fit_sizes:
             score += 60
         elif frame_size == "UNKNOWN":
             score += 30  # Neutral

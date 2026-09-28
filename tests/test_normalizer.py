@@ -136,6 +136,74 @@ def test_verbano_and_province_codes_resolve_nearby():
     print("✅ Verbano / province code resolution test passed")
 
 
+def test_any_town_resolves_by_province_or_canton():
+    # The bug: any town not in a hand-made list fell back to a fake 150 km.
+    # Now the province code / canton / postcode places it, whatever the town.
+    norm = Normalizer()
+
+    loc = norm.resolve("Merone (CO)")          # Subito format, unknown town
+    assert (loc.country, loc.area, loc.region) == ("IT", "CO", "lombardia")
+    assert loc.distance_km < 35
+
+    loc = norm.resolve("Treviglio (BG)")
+    assert loc.area == "BG" and 60 <= loc.distance_km <= 90
+
+    loc = norm.resolve("Bergamo")               # province name alone
+    assert loc.area == "BG"
+
+    loc = norm.resolve("Winterthur, Zürich")    # Tutti "town, canton"
+    assert (loc.country, loc.area, loc.region) == ("CH", "ZH", "svizzera")
+    assert 120 <= loc.distance_km <= 170
+
+    loc = norm.resolve("9524 Zuzwil")           # Velomarkt "PLZ town"
+    assert (loc.country, loc.area) == ("CH", "SG")
+
+    loc = norm.resolve("6743 Bodio")            # Ticino postcode: district-level
+    assert (loc.area, loc.region) == ("TI", "ticino") and loc.distance_km < 50
+
+    loc = norm.resolve("Genève")                # French canton name
+    assert loc.area == "GE" and loc.distance_km > 200
+
+    print("✅ Province / canton / postcode resolution test passed")
+
+
+def test_far_italy_is_far():
+    norm = Normalizer()
+    for text in ("Roma (RM)", "Napoli, Campania", "Palermo (PA)", "Verona (VR)"):
+        loc = norm.resolve(text)
+        assert loc.country == "IT" and loc.distance_km > 150, (text, loc)
+    print("✅ Far Italy resolves far")
+
+
+def test_country_hint_settles_codes_valid_in_both_countries():
+    norm = Normalizer()
+    # "(GR)" is Grosseto on an Italian portal, Graubünden on a Swiss one.
+    assert norm.resolve("Castiglione (GR)", country_hint="IT").region == "toscana"
+    assert norm.resolve("Davos (GR)", country_hint="CH").area == "GR"
+    # A 4-digit number on an Italian portal is not a Swiss postcode.
+    assert norm.resolve("Merone 6900").area == "TI"
+    assert norm.resolve("Merone 6900", country_hint="IT").country == "IT"
+    print("✅ Country hint test passed")
+
+
+def test_country_only_and_unknown_locations_are_neutral():
+    norm = Normalizer()
+    loc = norm.resolve("Switzerland")
+    assert (loc.country, loc.latitude, loc.region) == ("CH", None, "svizzera")
+    loc = norm.resolve("Europe")
+    assert (loc.latitude, loc.region, loc.distance_km) == (None, "other", 150.0)
+    loc = norm.resolve("")
+    assert (loc.region, loc.distance_km) == ("unknown", 999.0)
+    print("✅ Neutral location test passed")
+
+
+def test_home_location_comes_from_config():
+    # Distances are from the buyer's configured home, not a hard-coded Lugano.
+    zurich_home = Normalizer(home_lat=47.3769, home_lon=8.5417)
+    assert zurich_home.resolve("Zürich").distance_km < 1
+    print("✅ Configurable home location test passed")
+
+
 if __name__ == "__main__":
     test_currency_normalization()
     test_haversine_distance()
@@ -144,4 +212,9 @@ if __name__ == "__main__":
     test_ticino_word_boundary_false_positive()
     test_city_match_is_whole_word_only()
     test_verbano_and_province_codes_resolve_nearby()
+    test_any_town_resolves_by_province_or_canton()
+    test_far_italy_is_far()
+    test_country_hint_settles_codes_valid_in_both_countries()
+    test_country_only_and_unknown_locations_are_neutral()
+    test_home_location_comes_from_config()
     print("\n✅ All normalizer tests passed!")

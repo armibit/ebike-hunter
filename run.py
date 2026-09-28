@@ -6,8 +6,9 @@ Scans every enabled portal for e-bike listings, filters, scores, and stores in d
 
 import logging
 import sys
-import yaml
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -22,24 +23,15 @@ from pipeline.filters import distance_reject_reason, hard_filter_reasons
 from pipeline.regex_parser import RegexParser
 from pipeline.normalizer import Normalizer
 from pipeline.scoring import ScoringEngine
-from connectors.tutti import TuttiConnector
-from connectors.subito import SubitoConnector
-from connectors.buycycle import BuycycleConnector
-from connectors.upway import UpwayConnector
-from connectors.decathlon import DecathlonConnector
-from connectors.velomarkt import VelomarktConnector
-from connectors.tcs_velocorner import TcsVelocornerConnector
-from connectors.ridewill import RidewillConnector
-from connectors.zbike import ZbikeConnector
-from connectors.godspeed import GodspeedConnector
-from connectors.ebikelab import EbikelabConnector
-from connectors.ecycles_shop import EcyclesShopConnector
-from connectors.ebikestorebrescia import EbikestorebresciaConnector
-from connectors.buybestgear import BuybestgearConnector
+from connectors.registry import PORTALS, is_enabled, portal_country
+from utils.config import load_config
 from utils.console import status, StatusAwareStreamHandler
-import requests
 
 logger = logging.getLogger(__name__)
+
+# Availability checks per scan for listings the scan didn't see (see
+# verify_unseen_listings); overridable with app.availability_checks_per_run.
+DEFAULT_AVAILABILITY_CHECKS_PER_RUN = 300
 
 
 def setup_logging(config: Dict[str, Any]) -> None:
@@ -66,26 +58,50 @@ def setup_logging(config: Dict[str, Any]) -> None:
     logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler], force=True)
 
 
-def load_config() -> Dict[str, Any]:
-    """Load configuration from YAML file."""
-    config_path = BASE_DIR / "config" / "config.yaml"
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+def verify_unseen_listings(db: Database, connectors: Dict[str, Any], config: Dict[str, Any],
+                           scan_started: str) -> int:
+    """Ask each portal whether the live listings this scan did NOT find are
+    still for sale — a listing drops out of search results when it's sold,
+    expired or removed, and portals mark that in many ways (404/410,
+    redirect to search, "annuncio non più disponibile", schema.org
+    OutOfStock, Shopify/WooCommerce stock flags — see
+    BaseConnector.check_availability). Sold ones become SOLD; an
+    inconclusive check (blocked, network error) changes nothing.
 
+    Capped per run, least recently checked first, so a big backlog is
+    worked through over successive scans. Portals run in parallel, each at
+    its own rate limit. Returns how many listings were marked SOLD."""
+    cap = config.get("app", {}).get("availability_checks_per_run", DEFAULT_AVAILABILITY_CHECKS_PER_RUN)
+    candidates = db.get_listings_to_verify(scan_started, cap)
+    by_portal: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for listing in candidates:
+        if listing["portal"] in PORTALS:
+            by_portal[listing["portal"]].append(listing)
 
-def check_listing_validity(url: str, timeout: int = 5) -> bool:
-    """Check if listing URL is still valid (not 404/410). Returns True if valid."""
-    try:
-        response = requests.head(url, timeout=timeout, allow_redirects=True)
-        if response.status_code in (405, 501):
-            # Some servers don't implement HEAD at all — ask with a GET instead
-            # of treating "method not allowed" as proof the listing is alive.
-            response = requests.get(url, timeout=timeout, allow_redirects=True, stream=True)
-            response.close()
-        return response.status_code not in (404, 410)
-    except Exception:
-        logger.debug("Validity check failed for %s — assuming still valid", url, exc_info=True)
-        return True  # Assume valid if unreachable (network error, etc.)
+    def check_portal(portal: str) -> List[tuple]:
+        connector = connectors.get(portal) or PORTALS[portal].cls(config)
+        verdicts = []
+        for listing in by_portal[portal]:
+            try:
+                available = connector.check_availability(listing["portal_id"], listing["url"])
+            except Exception:
+                logger.debug("Availability check crashed for %s", listing["id"], exc_info=True)
+                available = None
+            verdicts.append((listing["id"], available))
+        status.finish(connector.portal_name)
+        return verdicts
+
+    sold = 0
+    with ThreadPoolExecutor(max_workers=max(1, min(len(by_portal), 5))) as pool:
+        for future in as_completed([pool.submit(check_portal, p) for p in by_portal]):
+            for listing_id, available in future.result():
+                # SQLite writes stay on this thread.
+                if available is False and db.mark_unavailable(listing_id):
+                    sold += 1
+                    logger.info("Sold/removed on portal: %s", listing_id)
+                else:
+                    db.mark_checked(listing_id)
+    return sold
 
 
 def process_listing(
@@ -99,19 +115,32 @@ def process_listing(
 ) -> bool:
     """
     Process a single listing through the pipeline.
-    Returns True if accepted, False if rejected.
+    Returns True if accepted, False if rejected (or sold / deleted by hand).
     """
+    listing_id = Database.make_listing_id(listing_raw["portal"], listing_raw["portal_id"])
+
+    # Deleted by hand from the dashboard (🗑️): never bring it back.
+    if db.is_deleted(listing_id):
+        return False
+
+    # Shops keep sold-out bikes in their catalogue feeds (Shopify
+    # "available": false, WooCommerce is_in_stock=false): switch the stored
+    # listing off instead of (re)importing it as for sale.
+    if listing_raw.get("is_available") is False:
+        db.mark_unavailable(listing_id)
+        return False
+
     # Enrich with full listing-detail description when the search card gave none —
     # spec regex (motor/battery) often only appears in the full ad body, not the card.
-    # Also check availability: if product is marked unavailable (out of stock),
-    # reject it as the item is no longer for sale.
+    # The detail page can also say the item is no longer for sale.
     if connector is not None and not listing_raw.get("description_raw"):
         try:
             details = connector.get_listing_details(listing_raw["portal_id"], listing_raw["url"])
             if details.get("description_raw"):
                 listing_raw["description_raw"] = details["description_raw"]
             if details.get("is_available") is False:
-                return False  # Item no longer available, skip processing
+                db.mark_unavailable(listing_id)
+                return False
         except Exception as e:
             logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e, exc_info=True)
 
@@ -121,14 +150,15 @@ def process_listing(
         listing_raw["currency"]
     )
 
-    # Resolve location
-    lat, lon, distance_km, region = normalizer.resolve_location(listing_raw.get("location_raw", ""))
+    # Resolve location at province/canton level; the portal's country
+    # settles codes that exist on both sides of the border.
+    location = normalizer.resolve(listing_raw.get("location_raw", ""), portal_country(listing_raw["portal"]))
+    lat, lon, distance_km, region = location.as_tuple()
 
     # Parse specs, then put back anything corrected by hand or by the AI
     # pass — otherwise every rescan would silently overwrite those fixes
     # with the parser's own (wrong or missing) reading.
     specs = parser.parse(listing_raw["title"], listing_raw.get("description_raw", ""))
-    listing_id = Database.make_listing_id(listing_raw["portal"], listing_raw["portal_id"])
     overrides = db.get_spec_overrides(listing_id)
     specs = apply_spec_overrides(specs, overrides)
 
@@ -140,7 +170,7 @@ def process_listing(
         if override_reason:
             reject_reasons.append(override_reason)
 
-    distance_reason = distance_reject_reason(listing_raw["portal"], lat, distance_km, region, config)
+    distance_reason = distance_reject_reason(listing_raw["portal"], lat, distance_km, location.country, config)
     if distance_reason:
         reject_reasons.append(distance_reason)
 
@@ -204,9 +234,12 @@ def main():
     # Initialize components
     db = Database(config["app"]["db_path"])
     parser = RegexParser(str(BASE_DIR / "config" / "taxonomy.json"))
+    location = config["buyer_profile"]["location"]
     normalizer = Normalizer(
         chf_to_eur=config["exchange_rates"]["chf_to_eur"],
-        eur_to_chf=config["exchange_rates"]["eur_to_chf"]
+        eur_to_chf=config["exchange_rates"]["eur_to_chf"],
+        home_lat=location.get("latitude", 46.0037),
+        home_lon=location.get("longitude", 8.9511),
     )
     scorer = ScoringEngine(config)
 
@@ -215,50 +248,14 @@ def main():
     print(f"✓ Budget: {config['buyer_profile']['budget']['target_price']}-{config['buyer_profile']['budget']['hard_max_price']} CHF")
     print()
 
-    # Initialize connectors
-    connectors = []
-
-    if config["portals"]["tutti_ch"]["enabled"]:
-        connectors.append(("Tutti.ch", TuttiConnector(config)))
-
-    if config["portals"]["subito_it"]["enabled"]:
-        connectors.append(("Subito.it", SubitoConnector(config)))
-
-    if config["portals"]["buycycle"]["enabled"]:
-        connectors.append(("Buycycle", BuycycleConnector(config)))
-
-    if config["portals"]["upway"]["enabled"]:
-        connectors.append(("Upway", UpwayConnector(config)))
-
-    if config["portals"]["decathlon"]["enabled"]:
-        connectors.append(("Decathlon", DecathlonConnector(config)))
-
-    if config["portals"]["velomarkt"]["enabled"]:
-        connectors.append(("Velomarkt", VelomarktConnector(config)))
-
-    if config["portals"]["tcs_velocorner"]["enabled"]:
-        connectors.append(("TCS Velocorner", TcsVelocornerConnector(config)))
-
-    if config["portals"]["ridewill"]["enabled"]:
-        connectors.append(("Ridewill.it", RidewillConnector(config)))
-
-    if config["portals"]["zbike"]["enabled"]:
-        connectors.append(("Z-Bike.ch", ZbikeConnector(config)))
-
-    if config["portals"]["godspeed"]["enabled"]:
-        connectors.append(("Godspeed.ch", GodspeedConnector(config)))
-
-    if config["portals"]["ebikelab"]["enabled"]:
-        connectors.append(("Ebikelab.it", EbikelabConnector(config)))
-
-    if config["portals"]["ecycles_shop"]["enabled"]:
-        connectors.append(("Ecycles-shop.it", EcyclesShopConnector(config)))
-
-    if config["portals"]["ebikestorebrescia"]["enabled"]:
-        connectors.append(("Ebikestore Brescia", EbikestorebresciaConnector(config)))
-
-    if config["portals"]["buybestgear"]["enabled"]:
-        connectors.append(("Buybestgear.com", BuybestgearConnector(config)))
+    # Initialize connectors (connectors/registry.py lists every portal)
+    connectors = [
+        (spec.display_name, spec.cls(config))
+        for portal, spec in PORTALS.items()
+        if is_enabled(portal, config)
+    ]
+    # Anything whose last_seen_at is older than this wasn't in this scan's results.
+    scan_started = datetime.now(timezone.utc).isoformat()
 
     # Scan each portal. The search itself (connector.search_all()) is pure
     # network I/O rate-limited per-connector, so it's safe and effective to
@@ -318,6 +315,14 @@ def main():
                 status.finish(enrich_key)
                 status.clear()
                 print(f"[{portal_name}] Found: {len(listings)} | Accepted: {accepted} | Rejected: {rejected}")
+        # Listings this scan didn't find anymore: sold, expired or removed?
+        print("-" * 80)
+        print("Checking listings no longer in search results (sold / expired / removed)...")
+        sold_count = verify_unseen_listings(
+            db, {connector.portal_name: connector for _, connector in connectors}, config, scan_started,
+        )
+        status.clear()
+        print(f"✓ {sold_count} listing(s) marked SOLD" if sold_count else "✓ No sold listings detected")
     finally:
         status.stop()
 
@@ -366,25 +371,11 @@ def main():
             print(f"      {drop['url']}")
             print()
 
-    # Verify existing listings (mark SOLD if 404)
     print()
     print("=" * 80)
-    print("VERIFYING & ANALYZING EXISTING LISTINGS...")
+    print("REFRESHING ANALYSIS TEXT...")
     print("=" * 80)
     cursor = db.conn.cursor()
-    cursor.execute("SELECT id, url FROM listings WHERE status IN ('ACTIVE', 'PRICE_DROP', 'NEW')")
-    existing = cursor.fetchall()
-
-    sold_count = 0
-    for listing_id, url in existing:
-        if not check_listing_validity(url):
-            db.mark_sold_or_delisted(listing_id, "SOLD")
-            sold_count += 1
-
-    if sold_count > 0:
-        print(f"✓ Marked {sold_count} listings as SOLD")
-    else:
-        print("✓ All existing listings still valid")
 
     # Regenerate user_analysis for every active listing, not just ones
     # missing it — it's a pure, cheap, local recomputation from specs/score

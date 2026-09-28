@@ -252,6 +252,31 @@ def test_full_score_calculation():
     print("✅ Full score calculation tests passed")
 
 
+def test_price_and_size_thresholds_come_from_config():
+    config = {
+        "buyer_profile": {
+            "budget": {"target_price": 2200, "hard_max_price": 3000, "full_score_price": 2000},
+            "rider_specs": {"target_sizes": ["M", "44cm", "17 inch"]},
+        },
+        "scoring_weights": {"price_value": 0.35, "component_quality": 0.25, "condition_mileage": 0.15,
+                            "location_proximity": 0.15, "fit_geometry": 0.10},
+    }
+    engine = ScoringEngine(config)
+
+    assert engine._score_price(1950) == 100.0      # under the configured 2000, not the old fixed 1800
+    assert engine._score_price(2100) < 100.0
+    # A hand-corrected "44cm" is a target size here, so it's a fit, not a miss.
+    assert engine._score_fit({"frame_size": "44cm"}) == engine._score_fit({"frame_size": "M"})
+    assert engine._score_fit({"frame_size": "17inch"}) == engine._score_fit({"frame_size": "M"})
+    assert engine._score_fit({"frame_size": "XL"}) < engine._score_fit({"frame_size": "M"})
+
+    # Default stays 1800 when the config doesn't say.
+    default = ScoringEngine({"buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}},
+                             "scoring_weights": config["scoring_weights"]})
+    assert default._score_price(1800) == 100.0 and default._score_price(1850) < 100.0
+    print("✅ Config-driven thresholds test passed")
+
+
 def test_config_missing_key_raises():
     import pytest
     bad_config = {"buyer_profile": {}}
@@ -270,5 +295,6 @@ if __name__ == "__main__":
     test_location_scoring()
     test_fit_scoring()
     test_full_score_calculation()
+    test_price_and_size_thresholds_come_from_config()
     test_config_missing_key_raises()
     print("\n✅ All scoring tests passed!")

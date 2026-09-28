@@ -1,8 +1,8 @@
 import html
 import logging
 import re
-from typing import Dict, List, Any
-from .base import BaseConnector
+from typing import Dict, List, Any, Optional
+from .base import BaseConnector, shopify_variants_available
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,12 @@ class EcyclesShopConnector(BaseConnector):
             "price_raw": price_raw,
             "currency": "EUR",
             "location_raw": "Milano",
+            # Sold-out one-off bikes stay in the collection feed.
+            "is_available": shopify_variants_available(variants),
         }
+
+    def check_availability(self, listing_id: str, url: str) -> Optional[bool]:
+        return self.shopify_availability(url)
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
         return {}

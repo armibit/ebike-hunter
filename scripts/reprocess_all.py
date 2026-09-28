@@ -24,8 +24,7 @@ from typing import Any, Dict, List
 BASE_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-import yaml
-
+from connectors.registry import portal_country
 from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
 from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
@@ -34,11 +33,7 @@ from pipeline.filters import distance_reject_reason, hard_filter_reasons
 from pipeline.normalizer import Normalizer
 from pipeline.regex_parser import RegexParser
 from pipeline.scoring import ScoringEngine
-
-
-def load_config() -> Dict[str, Any]:
-    with open(BASE_DIR / "config" / "config.yaml", "r") as f:
-        return yaml.safe_load(f)
+from utils.config import load_config
 
 
 def evaluate_reject_reasons(
@@ -68,7 +63,8 @@ def main() -> None:
         WHERE status IN ('ACTIVE', 'PRICE_DROP', 'REJECTED')
     """)
     rows = cursor.fetchall()
-    normalizer = Normalizer()
+    home = config["buyer_profile"]["location"]
+    normalizer = Normalizer(home_lat=home.get("latitude", 46.0037), home_lon=home.get("longitude", 8.9511))
 
     restored = 0
     newly_rejected = 0
@@ -88,7 +84,8 @@ def main() -> None:
 
         # Re-resolve the location too, so normalizer fixes (new towns,
         # province codes) and the distance filter reach stored listings.
-        lat, lon, distance_km, region = normalizer.resolve_location(row["location_raw"] or "")
+        location = normalizer.resolve(row["location_raw"] or "", portal_country(row["portal"]))
+        lat, lon, distance_km, region = location.as_tuple()
         if not dry_run:
             db.conn.execute(
                 "UPDATE listings SET latitude = ?, longitude = ?, distance_km = ?, region = ?,"
@@ -99,7 +96,7 @@ def main() -> None:
         overrides = db.get_spec_overrides(listing_id)
         specs = apply_spec_overrides(parser.parse(row["title"], row["description_raw"] or ""), overrides)
         reasons = evaluate_reject_reasons(specs, price_chf, config, list(overrides))
-        distance_reason = distance_reject_reason(row["portal"], lat, distance_km, region, config)
+        distance_reason = distance_reject_reason(row["portal"], lat, distance_km, location.country, config)
         if distance_reason:
             reasons.append(distance_reason)
         was_active = status in ("ACTIVE", "PRICE_DROP")

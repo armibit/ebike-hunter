@@ -28,22 +28,17 @@ from urllib.parse import urlsplit
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-import yaml
 from flask import Flask, abort, jsonify, request
 
 from db.database import Database
 from pipeline.corrections import apply_spec_correction
 from pipeline.scoring import ScoringEngine
 from scripts.generate_dashboard import render_dashboard_html
+from utils.config import load_config
 
 HOST = "127.0.0.1"
 PORT = 5050
 URL = f"http://{HOST}:{PORT}"
-
-
-def load_config():
-    with open(BASE_DIR / "config" / "config.yaml") as f:
-        return yaml.safe_load(f)
 
 
 config = load_config()

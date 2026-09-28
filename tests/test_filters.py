@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from connectors.base import MAX_RETRY_AFTER_SECONDS, _retry_after_seconds
-from pipeline.filters import distance_reject_reason, hard_filter_reasons, is_correctable_rejection
+from pipeline.filters import distance_reject_reason, hard_filter_reasons, is_correctable_rejection, spec_problems
 
 CONFIG = {
     "buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}},
@@ -51,28 +51,51 @@ def test_unknown_values_are_allowed():
 
 
 RADIUS_CONFIG = {"buyer_profile": {"max_radius_km": {
-    "ticino": 45, "lombardia": 105, "exempt_portals": ["ebikestorebrescia"],
+    "italy": 150, "exempt_portals": ["ebikestorebrescia"],
 }}}
 
 
-def test_distance_filter_uses_region_radius():
-    # Ticino listing beyond the Ticino radius
-    assert distance_reject_reason("tutti", 46.5, 60, "ticino", RADIUS_CONFIG) == "Too far (60 km > 45 km)"
-    assert distance_reject_reason("tutti", 46.0, 40, "ticino", RADIUS_CONFIG) is None
-    # Everything else uses the wider radius
-    assert distance_reject_reason("subito", 45.5, 100, "lombardia", RADIUS_CONFIG) is None
-    assert distance_reject_reason("subito", 45.5, 115, "other", RADIUS_CONFIG) == "Too far (115 km > 105 km)"
-    print("✅ Distance filter: per-region radius")
+def test_distance_filter_rejects_only_far_italian_listings():
+    assert distance_reject_reason("subito", 45.5, 110, "IT", RADIUS_CONFIG) is None
+    assert distance_reject_reason("subito", 41.9, 520, "IT", RADIUS_CONFIG) == "Too far (520 km > 150 km)"
+    # All of Switzerland is accepted, however far — distance only weighs on the score.
+    assert distance_reject_reason("tutti", 46.2, 250, "CH", RADIUS_CONFIG) is None
+    print("✅ Distance filter: Italy radius, Switzerland always accepted")
+
+
+def test_distance_filter_reads_legacy_lombardia_setting():
+    legacy = {"buyer_profile": {"max_radius_km": {"ticino": 45, "lombardia": 105}}}
+    assert distance_reject_reason("subito", 45.5, 110, "IT", legacy) == "Too far (110 km > 105 km)"
+    print("✅ Distance filter: legacy config key")
 
 
 def test_distance_filter_skips_unknown_location_and_shipping_shops():
     # Unknown location gets a neutral placeholder distance, not a real one.
-    assert distance_reject_reason("subito", None, 150, "other", RADIUS_CONFIG) is None
+    assert distance_reject_reason("subito", None, 150, "IT", RADIUS_CONFIG) is None
     # A shop that ships is never rejected for distance.
-    assert distance_reject_reason("ebikestorebrescia", 45.5, 115, "other", RADIUS_CONFIG) is None
+    assert distance_reject_reason("ebikestorebrescia", 41.9, 520, "IT", RADIUS_CONFIG) is None
     # No radius configured at all: no filter.
-    assert distance_reject_reason("subito", 45.5, 500, "other", {}) is None
+    assert distance_reject_reason("subito", 41.9, 520, "IT", {}) is None
     print("✅ Distance filter: unknown location / exempt portals")
+
+
+def test_wrong_size_reason_names_the_size_found():
+    reasons = hard_filter_reasons(2000, {**GOOD_SPECS, "frame_size": "disallowed", "frame_size_detected": "XL"}, CONFIG)
+    assert "Wrong size (XL — outside target sizes)" in reasons
+    print("✅ Wrong-size reason names the size")
+
+
+def test_spec_problems():
+    complete = {"status": "ACTIVE", "motor_torque_nm": 85, "motor_verified": 1,
+                "battery_capacity_wh": 625, "frame_size": "M"}
+    assert spec_problems(complete) == []
+    assert spec_problems({**complete, "motor_verified": 0}) == ["motore da verificare"]
+    assert spec_problems({**complete, "motor_torque_nm": None, "battery_capacity_wh": None, "frame_size": "unknown"}) == [
+        "motore mancante", "batteria mancante", "taglia mancante",
+    ]
+    assert spec_problems({"status": "REJECTED", "rejection_reason": "No motor detected (likely not an e-bike)"})
+    assert spec_problems({"status": "REJECTED", "rejection_reason": "Over budget (3500 > 3000 CHF)"}) == []
+    print("✅ spec_problems")
 
 
 def test_correctable_rejections():
@@ -108,8 +131,11 @@ if __name__ == "__main__":
     test_good_listing_passes()
     test_each_hard_filter_fires()
     test_unknown_values_are_allowed()
-    test_distance_filter_uses_region_radius()
+    test_distance_filter_rejects_only_far_italian_listings()
+    test_distance_filter_reads_legacy_lombardia_setting()
     test_distance_filter_skips_unknown_location_and_shipping_shops()
+    test_wrong_size_reason_names_the_size_found()
+    test_spec_problems()
     test_correctable_rejections()
     test_retry_after_parsing()
     print("\n✅ All filter tests passed!")

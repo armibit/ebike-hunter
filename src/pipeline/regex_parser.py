@@ -43,6 +43,10 @@ class RegexParser:
             "red_flag_details": [],
             "excluded_category": self._detect_excluded_category(text)
         }
+        if specs["frame_size"] == "disallowed":
+            # The size actually written ("XL", "taglia L", "52 cm") — only
+            # for the reject reason; frame_size itself stays the marker.
+            specs["frame_size_detected"] = self._disallowed_size_text(text)
 
         # Motor detection
         motor_data = self._detect_motor(text)
@@ -215,11 +219,17 @@ class RegexParser:
                 return "M"
 
         # Check disallowed sizes
-        for pattern in self.frame_sizes["disallowed_sizes"]:
-            if re.search(pattern, text, re.IGNORECASE):
-                return "disallowed"
+        if self._disallowed_size_text(text):
+            return "disallowed"
 
         return "unknown"
+
+    def _disallowed_size_text(self, text: str) -> Optional[str]:
+        for pattern in self.frame_sizes["disallowed_sizes"]:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(0).strip("() ").upper()
+        return None
 
     # Bare-number travel pattern (no "mm"/"escursione"/"federweg" anchor) — needs
     # its own handling below since it also matches dropper-post/seatpost travel
