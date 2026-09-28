@@ -4,14 +4,15 @@ Re-run RegexParser + reject filters + scoring against every stored listing,
 using the *current* taxonomy.json/regex_parser.py — picks up any parser or
 taxonomy fix without a full network rescan.
 
-Mirrors run.py::process_listing()'s reject-filter cascade exactly (same
-order, same reasons) but reads title/description_raw already in the DB
-instead of hitting the connectors again.
+Uses run.py::process_listing()'s exact reject filters (pipeline/filters.py)
+and re-applies stored spec corrections (spec_overrides) on top of the
+parser's output, but reads title/description_raw already in the DB instead
+of hitting the connectors again.
 
 Skips listings a human explicitly decided on, so a regex fix can never
 silently overturn a manual choice:
   - status SOLD / DELISTED (listing is gone, not a filtering decision)
-  - status REJECTED with rejection_reason == MANUAL_REJECT_REASON ("Scarta")
+  - a status the user locked by hand ("Scarta" / "Segna venduta")
 
 Usage:
     python3 scripts/reprocess_all.py [--dry-run]
@@ -27,6 +28,8 @@ import yaml
 
 from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
+from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
+from pipeline.filters import hard_filter_reasons
 from pipeline.regex_parser import RegexParser
 from pipeline.scoring import ScoringEngine
 
@@ -36,40 +39,14 @@ def load_config() -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def evaluate_reject_reasons(specs: Dict[str, Any], price_chf: float, config: Dict[str, Any]) -> List[str]:
-    reasons = []
-
-    if price_chf <= 0:
-        reasons.append("Invalid price (0 or missing — likely a parsing failure)")
-
-    if price_chf > config["buyer_profile"]["budget"]["hard_max_price"]:
-        reasons.append(f"Over budget ({price_chf:.0f} > {config['buyer_profile']['budget']['hard_max_price']} CHF)")
-
-    if price_chf > 0 and price_chf < config["buyer_profile"]["budget"].get("suspicious_min_price", 900):
-        reasons.append(f"Suspicious price ({price_chf:.0f} CHF - possible scam)")
-
-    if specs["suspension_type"] == "hardtail":
-        reasons.append("Hardtail (need full suspension)")
-
-    if specs.get("excluded_category"):
-        reasons.append(f"Wrong category ({specs['excluded_category']})")
-
-    min_motor_nm = config["hardware_requirements"]["min_motor_torque_nm"]
-    if specs["motor_torque_nm"] is None:
-        reasons.append("No motor detected (likely not an e-bike)")
-    elif specs["motor_torque_nm"] < min_motor_nm:
-        reasons.append(f"Weak motor ({specs['motor_torque_nm']}nm < {min_motor_nm}nm)")
-
-    min_battery = config["hardware_requirements"]["min_battery_wh"]
-    if specs["battery_capacity_wh"] is not None and specs["battery_capacity_wh"] < min_battery:
-        reasons.append(f"Small battery ({specs['battery_capacity_wh']}Wh < {min_battery}Wh)")
-
-    if specs["frame_size"] == "disallowed":
-        reasons.append(f"Wrong size ({specs['frame_size']})")
-
-    if specs["has_red_flag"]:
-        reasons.append(f"Red flags: {', '.join(specs['red_flag_details'][:2])}")
-
+def evaluate_reject_reasons(
+    specs: Dict[str, Any], price_chf: float, config: Dict[str, Any], overridden_fields: List[str] = (),
+) -> List[str]:
+    reasons = hard_filter_reasons(price_chf, specs, config)
+    if overridden_fields:
+        override_reason = corrected_reject_reason(specs, list(overridden_fields), config)
+        if override_reason:
+            reasons.append(override_reason)
     return reasons
 
 
@@ -83,7 +60,7 @@ def main() -> None:
 
     cursor = db.conn.cursor()
     cursor.execute("""
-        SELECT id, title, description_raw, price_chf, distance_km, status, rejection_reason
+        SELECT id, title, description_raw, price_chf, distance_km, status, rejection_reason, status_locked
         FROM listings
         WHERE status IN ('ACTIVE', 'PRICE_DROP', 'REJECTED')
     """)
@@ -101,12 +78,13 @@ def main() -> None:
         old_reason = row["rejection_reason"]
         price_chf = row["price_chf"] or 0
 
-        if status == "REJECTED" and old_reason == MANUAL_REJECT_REASON:
+        if row["status_locked"] or (status == "REJECTED" and old_reason == MANUAL_REJECT_REASON):
             skipped_manual += 1
             continue
 
-        specs = parser.parse(row["title"], row["description_raw"] or "")
-        reasons = evaluate_reject_reasons(specs, price_chf, config)
+        overrides = db.get_spec_overrides(listing_id)
+        specs = apply_spec_overrides(parser.parse(row["title"], row["description_raw"] or ""), overrides)
+        reasons = evaluate_reject_reasons(specs, price_chf, config, list(overrides))
         was_active = status in ("ACTIVE", "PRICE_DROP")
 
         if reasons:

@@ -1,12 +1,33 @@
 import logging
 import time
 import random
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from curl_cffi import requests
 from typing import Dict, List, Optional, Any
 from abc import ABC, abstractmethod
 from utils.console import status
 
 logger = logging.getLogger(__name__)
+
+
+MAX_RETRY_AFTER_SECONDS = 300
+
+
+def _retry_after_seconds(value: Optional[str], default: int = 60) -> int:
+    """Retry-After may be delta-seconds or an HTTP date (RFC 9110). Capped so
+    one portal can't park its scan thread for hours."""
+    if not value:
+        return default
+    try:
+        seconds = int(value)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+            seconds = int((when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError):
+            return default
+    return max(0, min(seconds, MAX_RETRY_AFTER_SECONDS))
 
 
 class BaseConnector(ABC):
@@ -44,7 +65,7 @@ class BaseConnector(ABC):
         self.last_request_time = time.time()
 
     def get(self, url: str, params: Optional[Dict] = None, headers: Optional[Dict] = None, label: Optional[str] = None) -> requests.Response:
-        """Rate-limited GET request with retry on 429/5xx.
+        """Rate-limited GET request with one retry on 429 and on 403.
 
         `label` overrides the URL shown on the live status line — some
         portals (e.g. tutti.ch) encode search filters into an opaque path
@@ -60,7 +81,7 @@ class BaseConnector(ABC):
         try:
             response = self.session.get(url, params=params, headers=request_headers, timeout=15)
             if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 60))
+                retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
                 logger.warning("Rate limited by %s — sleeping %ds", url, retry_after)
                 time.sleep(retry_after)
                 response = self.session.get(url, params=params, headers=request_headers, timeout=15)
@@ -92,7 +113,7 @@ class BaseConnector(ABC):
         try:
             response = self.session.post(url, data=data, headers=request_headers, timeout=15)
             if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 60))
+                retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
                 logger.warning("Rate limited by %s — sleeping %ds", url, retry_after)
                 time.sleep(retry_after)
                 response = self.session.post(url, data=data, headers=request_headers, timeout=15)

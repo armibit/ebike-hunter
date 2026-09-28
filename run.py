@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 E-Bike Hunter - Main runner script.
-Scans Tutti.ch and Subito.it for e-bike listings, filters, scores, and stores in database.
+Scans every enabled portal for e-bike listings, filters, scores, and stores in database.
 """
 
+import hashlib
 import logging
 import sys
 import yaml
@@ -16,6 +17,8 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from db.database import Database
 from pipeline.analysis_text import generate_user_analysis
+from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
+from pipeline.filters import hard_filter_reasons
 from pipeline.regex_parser import RegexParser
 from pipeline.normalizer import Normalizer
 from pipeline.scoring import ScoringEngine
@@ -71,10 +74,15 @@ def load_config() -> Dict[str, Any]:
 
 
 def check_listing_validity(url: str, timeout: int = 5) -> bool:
-    """Check if listing URL is still valid (not 404). Returns True if valid."""
+    """Check if listing URL is still valid (not 404/410). Returns True if valid."""
     try:
         response = requests.head(url, timeout=timeout, allow_redirects=True)
-        return response.status_code != 404
+        if response.status_code in (405, 501):
+            # Some servers don't implement HEAD at all — ask with a GET instead
+            # of treating "method not allowed" as proof the listing is alive.
+            response = requests.get(url, timeout=timeout, allow_redirects=True, stream=True)
+            response.close()
+        return response.status_code not in (404, 410)
     except Exception:
         logger.debug("Validity check failed for %s — assuming still valid", url, exc_info=True)
         return True  # Assume valid if unreachable (network error, etc.)
@@ -116,61 +124,25 @@ def process_listing(
     # Resolve location
     lat, lon, distance_km, region = normalizer.resolve_location(listing_raw.get("location_raw", ""))
 
-    # Parse specs
+    # Parse specs, then put back anything corrected by hand or by the AI
+    # pass — otherwise every rescan would silently overwrite those fixes
+    # with the parser's own (wrong or missing) reading.
     specs = parser.parse(listing_raw["title"], listing_raw.get("description_raw", ""))
+    listing_id = Database.make_listing_id(listing_raw["portal"], listing_raw["portal_id"])
+    overrides = db.get_spec_overrides(listing_id)
+    specs = apply_spec_overrides(specs, overrides)
 
-    # Check filters
-    reject_reasons = []
-
-    # Filter: Invalid price (0 or negative means price parsing failed —
-    # never treat this as a valid/cheap listing)
-    if price_chf <= 0:
-        reject_reasons.append("Invalid price (0 or missing — likely a parsing failure)")
-
-    # Filter: Price
-    if price_chf > config["buyer_profile"]["budget"]["hard_max_price"]:
-        reject_reasons.append(f"Over budget ({price_chf:.0f} > {config['buyer_profile']['budget']['hard_max_price']} CHF)")
-
-    # Filter: Suspicious low price
-    if price_chf > 0 and price_chf < config["buyer_profile"]["budget"].get("suspicious_min_price", 900):
-        reject_reasons.append(f"Suspicious price ({price_chf:.0f} CHF - possible scam)")
-
-    # Filter: Suspension type
-    if specs["suspension_type"] == "hardtail":
-        reject_reasons.append("Hardtail (need full suspension)")
-    elif specs["suspension_type"] == "unknown":
-        # Allow unknown suspension type for now (may be full)
-        pass
-
-    # Filter: Excluded category (not an eMTB, e.g. fat bike)
-    if specs.get("excluded_category"):
-        reject_reasons.append(f"Wrong category ({specs['excluded_category']})")
-
-    # Filter: Motor
-    min_motor_nm = config["hardware_requirements"]["min_motor_torque_nm"]
-    if specs["motor_torque_nm"] is None:
-        # No motor detected - reject (likely muscular bike or incomplete listing)
-        reject_reasons.append("No motor detected (likely not an e-bike)")
-    elif specs["motor_torque_nm"] < min_motor_nm:
-        reject_reasons.append(f"Weak motor ({specs['motor_torque_nm']}nm < {min_motor_nm}nm)")
-
-    # Filter: Battery
-    min_battery = config["hardware_requirements"]["min_battery_wh"]
-    if specs["battery_capacity_wh"] is not None and specs["battery_capacity_wh"] < min_battery:
-        reject_reasons.append(f"Small battery ({specs['battery_capacity_wh']}Wh < {min_battery}Wh)")
-
-    # Filter: Frame size
-    if specs["frame_size"] == "disallowed":
-        reject_reasons.append(f"Wrong size ({specs['frame_size']})")
-
-    # Filter: Red flags
-    if specs["has_red_flag"]:
-        reject_reasons.append(f"Red flags: {', '.join(specs['red_flag_details'][:2])}")
+    reject_reasons = hard_filter_reasons(price_chf, specs, config)
+    if overrides:
+        # A corrected value is checked as strictly as when it was entered
+        # (e.g. an explicit "XL" isn't the parser's "disallowed" marker).
+        override_reason = corrected_reject_reason(specs, list(overrides), config)
+        if override_reason:
+            reject_reasons.append(override_reason)
 
     # Calculate dedupe_signature for duplicate detection
     # Use normalized title (lowercase, spaces removed, trimmed to first 3 words)
     # to group similar products (e.g., same model in different colors/sizes)
-    import hashlib
     title_words = listing_raw["title"].lower().split()[:3]
     title_norm = "_".join(title_words).strip()
     dedupe_sig = hashlib.md5(title_norm.encode()).hexdigest()[:16]
@@ -191,7 +163,11 @@ def process_listing(
         # Rejected
         listing_data["status"] = "REJECTED"
         listing_data["rejection_reason"] = "; ".join(reject_reasons)
-        db.upsert_listing(listing_data)
+        listing_id, _, _ = db.upsert_listing(listing_data)
+        # Keep the parsed specs even for a rejected listing: the AI pass
+        # reviews auto-rejected ones, and restoring one after a correction
+        # must re-check the battery/frame the parser did find, not NULLs.
+        db.save_specifications(listing_id, specs)
         return False
     else:
         # Accepted - calculate score

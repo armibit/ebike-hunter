@@ -11,16 +11,31 @@ from typing import Any, Dict, Optional
 
 from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
+from pipeline.filters import hard_filter_reasons
 from pipeline.scoring import ScoringEngine
 
 EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size", "suspension_type"]
+
+# Rejection reasons a spec correction can never fix, because the value behind
+# them isn't one of EDITABLE_SPEC_FIELDS and isn't stored in `specifications`
+# (the parser's excluded_category lives only in the scan's reject reason).
+_UNCORRECTABLE_REJECT_MARKERS = ("Wrong category",)
 
 
 def _normalize_size(value: str) -> str:
     return "".join(str(value).lower().split())
 
 
-def _corrected_reject_reason(current: Dict[str, Any], applied_fields: list, config: Dict[str, Any]) -> Optional[str]:
+def apply_spec_overrides(specs: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge stored overrides (see Database.get_spec_overrides) over freshly
+    parsed specs — used by run.py so a rescan keeps every correction."""
+    merged = {**specs, **overrides}
+    if overrides.get("motor_brand") or overrides.get("motor_torque_nm"):
+        merged["motor_verified"] = True
+    return merged
+
+
+def corrected_reject_reason(current: Dict[str, Any], applied_fields: list, config: Dict[str, Any]) -> Optional[str]:
     """A manual/AI correction can move a listing outside the buyer's actual
     criteria (e.g. you read the real frame size off a photo and it's XL,
     not the "unknown" the parser had) — it should be rejected the same as
@@ -50,37 +65,25 @@ def _corrected_reject_reason(current: Dict[str, Any], applied_fields: list, conf
     return None
 
 
-def _meets_original_hard_filters(current: Dict[str, Any], config: Dict[str, Any]) -> Optional[str]:
-    """Mirrors run.py's process_listing() hard filters exactly — used only
-    to decide whether an automatically-REJECTED listing (the scan's own
-    filters, or a previous correction — never a manual "Scarta", see
-    MANUAL_REJECT_REASON) can be restored to ACTIVE once a correction
-    supplies a spec the regex parser missed. Deliberately looser than
-    _corrected_reject_reason's strict target_sizes check, which exists for
-    a fresh, deliberate correction of that exact field — here, 'unknown'
-    or an unlisted-but-not-explicitly-disallowed frame size passes, exactly
-    as it would have at scan time, since the original rejection may have
-    been about a completely different field."""
-    if current.get("frame_size") == "disallowed":
-        return f"Taglia non ammessa ({current.get('frame_size')})"
+def _restore_blocker(current: Dict[str, Any], applied_fields: list, config: Dict[str, Any]) -> Optional[str]:
+    """Why an automatically-REJECTED listing (the scan's own filters, or a
+    previous correction — never a manual "Scarta", see MANUAL_REJECT_REASON)
+    must stay rejected after a correction, or None if it can be restored to
+    ACTIVE. Runs the scan's exact hard filters (pipeline/filters.py —
+    price and red flags included, not just the corrected fields) plus the
+    strict target-size check for a frame size the correction itself set.
+    An 'unknown' frame size still passes, as it would have at scan time."""
+    original_reason = current.get("rejection_reason") or ""
+    for marker in _UNCORRECTABLE_REJECT_MARKERS:
+        if marker in original_reason:
+            return original_reason
 
-    if current.get("suspension_type") == "hardtail":
-        return "Hardtail (need full suspension)"
+    strict_reason = corrected_reject_reason(current, applied_fields, config)
+    if strict_reason:
+        return strict_reason
 
-    hw = config.get("hardware_requirements", {})
-    motor_nm = current.get("motor_torque_nm")
-    if motor_nm is None:
-        return "Nessun motore rilevato"
-    min_motor_nm = hw.get("min_motor_torque_nm")
-    if min_motor_nm is not None and motor_nm < min_motor_nm:
-        return f"Motore troppo debole ({motor_nm:.0f}Nm < {min_motor_nm}Nm)"
-
-    battery_wh = current.get("battery_capacity_wh")
-    min_battery_wh = hw.get("min_battery_wh")
-    if battery_wh is not None and min_battery_wh is not None and battery_wh < min_battery_wh:
-        return f"Batteria troppo piccola ({battery_wh:.0f}Wh < {min_battery_wh}Wh)"
-
-    return None
+    reasons = hard_filter_reasons(current.get("price_chf"), current, config)
+    return "; ".join(reasons) if reasons else None
 
 
 def apply_spec_correction(
@@ -98,21 +101,28 @@ def apply_spec_correction(
     When config is given: for a currently ACTIVE/PRICE_DROP listing, a
     correction that pushes it outside the buyer's own criteria (wrong
     frame size, motor/battery below the hard minimums) marks it REJECTED
-    — see _corrected_reject_reason(). For a listing that's REJECTED for an
+    — see corrected_reject_reason(). For a listing that's REJECTED for an
     automatic reason (the scan's hard filters, or an earlier correction —
     never a manual "Scarta", which is left alone), the correction is
     instead checked against every hard requirement via
-    _meets_original_hard_filters(); if it now passes, the listing is
-    restored to ACTIVE — this is the whole point of sending rejected
-    listings to the AI pass: the regex parser can miss a spec the
-    description actually states. Passing config=None skips all of this
-    (score/text still update normally, status untouched)."""
+    _restore_blocker(); if it now passes, the listing is restored to
+    ACTIVE — this is the whole point of sending rejected listings to the
+    AI pass: the regex parser can miss a spec the description actually
+    states. A status the user locked by hand (Scarta / Segna venduta) is
+    never changed. Passing config=None skips all of this (score/text still
+    update normally, status untouched).
+
+    The corrected fields are also stored as overrides, so the next scan
+    applies them on top of the parser's output instead of losing them."""
     current = db.get_listing_with_specs(listing_id)
     if current is None:
         return None
 
+    status_locked = bool(current.get("status_locked"))
     was_auto_rejected = (
-        current.get("status") == "REJECTED" and current.get("rejection_reason") != MANUAL_REJECT_REASON
+        current.get("status") == "REJECTED"
+        and current.get("rejection_reason") != MANUAL_REJECT_REASON
+        and not status_locked
     )
 
     # A field present with an explicit None/"" clears it back to unset —
@@ -136,6 +146,7 @@ def apply_spec_correction(
 
     current["red_flag_details"] = json.loads(current["red_flag_details"]) if current.get("red_flag_details") else []
     db.save_specifications(listing_id, current)
+    db.save_spec_overrides(listing_id, {field: corrected_fields[field] for field in applied_fields})
 
     listing_data = {"price_chf": current.get("price_chf"), "distance_km": current.get("distance_km")}
     score_result = scorer.calculate_score(listing_data, current)
@@ -147,15 +158,15 @@ def apply_spec_correction(
     analysis = generate_user_analysis(score_result["score_total"], current, listing_data)
     db.save_user_analysis(listing_id, analysis)
 
-    if config is not None:
+    if config is not None and not status_locked:
         if was_auto_rejected:
-            reject_reason = _meets_original_hard_filters(current, config)
+            reject_reason = _restore_blocker(current, applied_fields, config)
             if reject_reason is None:
                 db.set_manual_status(listing_id, "ACTIVE")
             else:
                 db.set_manual_status(listing_id, "REJECTED", reason=reject_reason)
         else:
-            reject_reason = _corrected_reject_reason(current, applied_fields, config)
+            reject_reason = corrected_reject_reason(current, applied_fields, config)
             if reject_reason:
                 db.set_manual_status(listing_id, "REJECTED", reason=reject_reason)
 

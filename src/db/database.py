@@ -59,6 +59,7 @@ class Database:
             distance_km REAL,
             status TEXT NOT NULL DEFAULT 'NEW',
             rejection_reason TEXT,
+            status_locked INTEGER NOT NULL DEFAULT 0,
             is_favorite INTEGER NOT NULL DEFAULT 0,
             dedupe_signature TEXT,
             image_phash TEXT,
@@ -117,6 +118,18 @@ class Database:
             calculated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        -- Spec values set by hand (dashboard) or read by the AI pass. They win
+        -- over whatever RegexParser extracts on the next scan, which would
+        -- otherwise silently overwrite every correction. value_json holds the
+        -- JSON-encoded value so numbers stay numbers.
+        CREATE TABLE IF NOT EXISTS spec_overrides (
+            listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+            field TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (listing_id, field)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_listings_portal_status ON listings(portal, status);
         CREATE INDEX IF NOT EXISTS idx_listings_status_price ON listings(status, price_chf);
         CREATE INDEX IF NOT EXISTS idx_listings_dedupe ON listings(dedupe_signature);
@@ -143,6 +156,16 @@ class Database:
             cursor.execute("ALTER TABLE listings ADD COLUMN ai_analyzed_at TIMESTAMP")
         if "is_favorite" not in columns:
             cursor.execute("ALTER TABLE listings ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
+        if "status_locked" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN status_locked INTEGER NOT NULL DEFAULT 0")
+            # Older DBs: a manual "Scarta" is recognizable by its reason; lock
+            # those so the next scan stops flipping them back to ACTIVE. A
+            # manual SOLD can't be told apart from a 404-detected one, so
+            # those stay unlocked.
+            cursor.execute(
+                "UPDATE listings SET status_locked = 1 WHERE status = 'REJECTED' AND rejection_reason = ?",
+                (MANUAL_REJECT_REASON,),
+            )
         self.conn.commit()
 
         # Migration: add motor_verified to specifications if missing (older DBs).
@@ -154,6 +177,10 @@ class Database:
             cursor.execute("ALTER TABLE specifications ADD COLUMN motor_verified INTEGER")
             self.conn.commit()
 
+    @staticmethod
+    def make_listing_id(portal: str, portal_id: Any) -> str:
+        return f"{portal}_{portal_id}"
+
     def upsert_listing(self, item: Dict[str, Any]) -> Tuple[str, bool, bool]:
         """
         Upserts listing.
@@ -163,9 +190,13 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         portal = item["portal"]
         portal_id = str(item["portal_id"])
-        listing_id = f"{portal}_{portal_id}"
+        listing_id = self.make_listing_id(portal, portal_id)
 
-        cursor.execute("SELECT id, price_raw, currency, price_chf, status FROM listings WHERE portal = ? AND portal_id = ?", (portal, portal_id))
+        cursor.execute(
+            "SELECT id, price_raw, currency, price_chf, status, rejection_reason, status_locked"
+            " FROM listings WHERE portal = ? AND portal_id = ?",
+            (portal, portal_id),
+        )
         existing = cursor.fetchone()
 
         is_new = existing is None
@@ -198,10 +229,17 @@ class Database:
             old_status = existing["status"]
             requested_status = item.get("status", old_status)
             new_status = requested_status
+            rejection_reason = item.get("rejection_reason")
+            locked = bool(existing["status_locked"])
 
+            if locked:
+                # The user decided this one by hand (Scarta / Segna venduta):
+                # a rescan refreshes price/text but never overrides that call.
+                new_status = old_status
+                rejection_reason = existing["rejection_reason"]
             # Never let a price-drop promotion override an explicit rejection,
             # and ignore bogus 0/negative prices (failed scraping) as drops.
-            if requested_status != "REJECTED" and new_price > 0 and old_price > 0 and new_price < old_price:
+            elif requested_status != "REJECTED" and new_price > 0 and old_price > 0 and new_price < old_price:
                 is_price_drop = True
                 new_status = "PRICE_DROP"
                 cursor.execute("""
@@ -223,7 +261,7 @@ class Database:
                 item["title"], item.get("description_raw", ""), item["price_raw"], item["currency"],
                 item["price_chf"], item.get("price_eur", item["price_chf"]), item.get("location_raw", ""),
                 item.get("location_normalized", ""), item.get("region", ""), item.get("latitude"),
-                item.get("longitude"), item.get("distance_km"), new_status, item.get("rejection_reason"),
+                item.get("longitude"), item.get("distance_km"), new_status, rejection_reason,
                 now, now, listing_id
             ))
 
@@ -444,27 +482,57 @@ class Database:
         (server.py) — REJECTED ("non mi piace"), SOLD, or ACTIVE (undo).
         Distinct from mark_sold_or_delisted(), which the scanner itself uses
         for automated 404-detected SOLD marks; this one also clears/sets
-        rejection_reason so a restored listing doesn't carry a stale one."""
+        rejection_reason so a restored listing doesn't carry a stale one.
+
+        A REJECTED with no reason (the user's own "Scarta") and a SOLD lock
+        the status, so the next scan can't flip it back to ACTIVE; a REJECTED
+        with a reason (pipeline/corrections.py's automatic re-check) and an
+        ACTIVE restore leave it unlocked."""
         if status not in ("REJECTED", "SOLD", "ACTIVE"):
             raise ValueError(f"Unsupported manual status: {status!r}")
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         if status == "REJECTED":
             cursor.execute(
-                "UPDATE listings SET status = ?, rejection_reason = ?, delisted_at = ? WHERE id = ?",
-                (status, reason or MANUAL_REJECT_REASON, now, listing_id),
+                "UPDATE listings SET status = ?, rejection_reason = ?, delisted_at = ?, status_locked = ? WHERE id = ?",
+                (status, reason or MANUAL_REJECT_REASON, now, 0 if reason else 1, listing_id),
             )
         elif status == "SOLD":
             cursor.execute(
-                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = ? WHERE id = ?",
+                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = ?, status_locked = 1 WHERE id = ?",
                 (status, now, listing_id),
             )
         else:  # ACTIVE — undo a manual reject/sold
             cursor.execute(
-                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = NULL WHERE id = ?",
+                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = NULL, status_locked = 0 WHERE id = ?",
                 (status, listing_id),
             )
         self.conn.commit()
+
+    def save_spec_overrides(self, listing_id: str, fields: Dict[str, Any]) -> None:
+        """Remember hand/AI-corrected spec values so the next scan applies them
+        on top of the parser's output instead of overwriting them. A None/""
+        value means "I don't actually know this" — it drops the override and
+        lets the parser decide again."""
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        for field, value in fields.items():
+            if value is None or value == "":
+                cursor.execute(
+                    "DELETE FROM spec_overrides WHERE listing_id = ? AND field = ?", (listing_id, field)
+                )
+            else:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO spec_overrides (listing_id, field, value_json, updated_at)"
+                    " VALUES (?, ?, ?, ?)",
+                    (listing_id, field, json.dumps(value), now),
+                )
+        self.conn.commit()
+
+    def get_spec_overrides(self, listing_id: str) -> Dict[str, Any]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT field, value_json FROM spec_overrides WHERE listing_id = ?", (listing_id,))
+        return {row["field"]: json.loads(row["value_json"]) for row in cursor.fetchall()}
 
     def toggle_favorite(self, listing_id: str) -> bool:
         """Flip is_favorite for a listing and return the new value. A
@@ -494,7 +562,7 @@ class Database:
         correction from the dashboard."""
         cursor = self.conn.cursor()
         cursor.execute("""
-        SELECT l.id, l.price_chf, l.distance_km, l.status, l.rejection_reason,
+        SELECT l.id, l.price_chf, l.distance_km, l.status, l.rejection_reason, l.status_locked,
                s.brand, s.model, s.model_year, s.category, s.suspension_type,
                s.travel_front_mm, s.travel_rear_mm, s.frame_size, s.motor_brand,
                s.motor_model, s.motor_torque_nm, s.motor_verified, s.battery_capacity_wh,

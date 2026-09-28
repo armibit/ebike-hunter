@@ -121,6 +121,12 @@ def test_component_scoring_unverified_motor_gets_flat_low_credit():
     assert score_unverified < score_confirmed
     assert score_confirmed - score_unverified == 7  # 15pts tier credit vs flat 8pts
 
+    # Specs read back from SQLite carry 0/1 instead of False/True — the
+    # penalty must hold for those too; None (never set) is not "unverified".
+    assert engine._score_components({**specs_unverified, "motor_verified": 0}) == score_unverified
+    assert engine._score_components({**specs_unverified, "motor_verified": 1}) == score_confirmed
+    assert engine._score_components({**specs_unverified, "motor_verified": None}) == score_confirmed
+
     print("✅ Unverified motor scoring test passed")
 
 
@@ -183,6 +189,12 @@ def test_fit_scoring():
     specs_wrong = {"frame_size": "XL", "travel_front_mm": 140}
     score_wrong = engine._score_fit(specs_wrong)
     assert score_wrong < 50
+
+    # A hand-typed correction ("m", " s2 ") counts like the parser's "M".
+    assert engine._score_fit({"frame_size": "m", "travel_front_mm": 145}) == 100.0
+    assert engine._score_fit({"frame_size": " s2 ", "travel_front_mm": 145}) == 100.0
+    # A stored NULL frame size is unknown (neutral), not wrong.
+    assert engine._score_fit({"frame_size": None}) == engine._score_fit({"frame_size": "unknown"})
 
     print("✅ Fit scoring tests passed")
 
