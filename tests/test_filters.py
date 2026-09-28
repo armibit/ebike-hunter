@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from connectors.base import MAX_RETRY_AFTER_SECONDS, _retry_after_seconds
-from pipeline.filters import hard_filter_reasons
+from pipeline.filters import distance_reject_reason, hard_filter_reasons, is_correctable_rejection
 
 CONFIG = {
     "buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}},
@@ -50,6 +50,45 @@ def test_unknown_values_are_allowed():
     print("✅ Hard filters: unknown values allowed")
 
 
+RADIUS_CONFIG = {"buyer_profile": {"max_radius_km": {
+    "ticino": 45, "lombardia": 105, "exempt_portals": ["ebikestorebrescia"],
+}}}
+
+
+def test_distance_filter_uses_region_radius():
+    # Ticino listing beyond the Ticino radius
+    assert distance_reject_reason("tutti", 46.5, 60, "ticino", RADIUS_CONFIG) == "Too far (60 km > 45 km)"
+    assert distance_reject_reason("tutti", 46.0, 40, "ticino", RADIUS_CONFIG) is None
+    # Everything else uses the wider radius
+    assert distance_reject_reason("subito", 45.5, 100, "lombardia", RADIUS_CONFIG) is None
+    assert distance_reject_reason("subito", 45.5, 115, "other", RADIUS_CONFIG) == "Too far (115 km > 105 km)"
+    print("✅ Distance filter: per-region radius")
+
+
+def test_distance_filter_skips_unknown_location_and_shipping_shops():
+    # Unknown location gets a neutral placeholder distance, not a real one.
+    assert distance_reject_reason("subito", None, 150, "other", RADIUS_CONFIG) is None
+    # A shop that ships is never rejected for distance.
+    assert distance_reject_reason("ebikestorebrescia", 45.5, 115, "other", RADIUS_CONFIG) is None
+    # No radius configured at all: no filter.
+    assert distance_reject_reason("subito", 45.5, 500, "other", {}) is None
+    print("✅ Distance filter: unknown location / exempt portals")
+
+
+def test_correctable_rejections():
+    assert is_correctable_rejection("No motor detected (likely not an e-bike)")
+    assert is_correctable_rejection("Weak motor (50nm < 60nm); Small battery (400Wh < 500Wh)")
+    assert is_correctable_rejection("Taglia esclusa dopo correzione manuale (XL non tra le taglie target)")
+    # One uncorrectable part is enough to make the whole rejection final.
+    assert not is_correctable_rejection("No motor detected (likely not an e-bike); Over budget (3500 > 3000 CHF)")
+    assert not is_correctable_rejection("Hardtail (need full suspension)")
+    assert not is_correctable_rejection("Too far (130 km > 105 km)")
+    assert not is_correctable_rejection("Red flags: senza caricatore")
+    assert not is_correctable_rejection("Wrong category (fat bike)")
+    assert not is_correctable_rejection(None)
+    print("✅ Correctable-rejection classification")
+
+
 def test_retry_after_parsing():
     assert _retry_after_seconds(None) == 60
     assert _retry_after_seconds("") == 60
@@ -69,5 +108,8 @@ if __name__ == "__main__":
     test_good_listing_passes()
     test_each_hard_filter_fires()
     test_unknown_values_are_allowed()
+    test_distance_filter_uses_region_radius()
+    test_distance_filter_skips_unknown_location_and_shipping_shops()
+    test_correctable_rejections()
     test_retry_after_parsing()
     print("\n✅ All filter tests passed!")

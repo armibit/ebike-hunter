@@ -233,6 +233,32 @@ def test_scraped_title_and_url_are_escaped_in_dashboard():
     print("✅ Dashboard escaping test passed")
 
 
+def test_cross_portal_duplicate_is_flagged_in_dashboard():
+    db_path = tempfile.mktemp(suffix=".db")
+    db = Database(db_path)
+    for portal, pid, title, price in (
+        ("tutti", "1", "Trek Rail 9.7 2022", 2800),
+        ("velomarkt", "7", "TREK Rail 9.7 - 2022", 2790),
+        ("tutti", "2", "Cube Stereo Hybrid 140", 2400),
+    ):
+        db.upsert_listing({
+            "portal": portal, "portal_id": pid, "url": f"https://example.com/{pid}", "title": title,
+            "price_raw": price, "currency": "CHF", "price_chf": price, "price_eur": price,
+            "distance_km": 10.0, "status": "ACTIVE",
+        })
+    db.close()
+    server_module.DB_PATH = db_path
+
+    page = server_module.app.test_client().get("/").data.decode()
+
+    assert page.count("🔁 anche su") == 2
+    assert "🔁 anche su velomarkt" in page
+    assert "🔁 anche su tutti" in page
+
+    Path(db_path).unlink()
+    print("✅ Dashboard duplicate badge test passed")
+
+
 if __name__ == "__main__":
     test_index_lists_active_listing()
     test_reject_keeps_listing_visible_greyed_then_restore_active()
@@ -244,4 +270,5 @@ if __name__ == "__main__":
     test_cross_site_post_is_refused()
     test_foreign_host_header_is_refused()
     test_scraped_title_and_url_are_escaped_in_dashboard()
+    test_cross_portal_duplicate_is_flagged_in_dashboard()
     print("\n✅ All server tests passed!")

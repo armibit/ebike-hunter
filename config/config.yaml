@@ -2,7 +2,6 @@ app:
   name: "lugano-emtb-hunter"
   log_level: "INFO"
   db_path: "/Users/danielearmillotta/ebike-hunter/data/emtb_hunter.db"
-  poll_interval_seconds: 900
   parallel_scans: 5
 
 buyer_profile:
@@ -10,9 +9,15 @@ buyer_profile:
     name: "Lugano, Ticino"
     latitude: 46.0037
     longitude: 8.9511
+  # Listings farther than this are rejected (only when the location was
+  # actually recognized): "ticino" applies to Ticino listings, "lombardia"
+  # to everything else (Lombardia, Verbano, rest of Switzerland).
   max_radius_km:
     ticino: 45
     lombardia: 105
+    # Shops that ship: distance only lowers their score, never rejects them.
+    exempt_portals: ["upway", "decathlon", "ridewill", "zbike", "godspeed", "ebikelab",
+                     "ecycles_shop", "ebikestorebrescia", "buybestgear", "buycycle"]
   budget:
     target_price: 2200
     hard_max_price: 3000
@@ -67,7 +72,10 @@ portals:
   subito_it:
     enabled: true
     base_url: "https://www.subito.it"
-    provinces: ["como", "varese", "lecco", "monza", "milano"]
+    # Paths exactly as in Subito's own search URLs: whole region or one province.
+    search_paths:
+      - "/annunci-lombardia/vendita/biciclette"
+      - "/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola"
     max_pages: 4
     search_queries:
       - "ebike full"
@@ -87,11 +95,11 @@ portals:
       - "lapierre overvolt"
       - "santa cruz heckler"
   buycycle:
-    enabled: true
+    # Connector is a stub (client-rendered site, no scriptable endpoint yet —
+    # see src/connectors/buycycle.py); enabling it only adds a "0 found" line.
+    enabled: false
     base_url: "https://buycycle.com"
-    country_filter: ["CH", "IT", "DE"]
-    frame_sizes: ["M"]
-    category: "e-mountainbike"
+    country_filter: ["CH", "IT"]
   upway:
     enabled: true
     base_url: "https://upway.ch"
@@ -99,7 +107,9 @@ portals:
     brands: ["cube", "lapierre", "haibike", "trek", "specialized", "e-mountainbike"]
     max_pages: 5
   decathlon:
-    enabled: true
+    # Connector is a stub (Cloudflare Turnstile blocks automated access — see
+    # src/connectors/decathlon.py); the dashboard links it for a manual check.
+    enabled: false
     base_url: "https://www.decathlon.ch/search"
     max_pages: 5
   velomarkt:

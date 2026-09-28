@@ -836,6 +836,40 @@ def test_migration_locks_legacy_manual_rejects():
     print("✅ Legacy manual-reject migration test passed")
 
 
+def test_ai_scope_skips_rejections_no_correction_can_fix():
+    # Sending an over-budget or too-far listing to the AI is wasted money:
+    # no corrected_specs field can change price or distance.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+
+    fixable_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="1", status="REJECTED", rejection_reason="No motor detected (likely not an e-bike)",
+    ))
+    over_budget_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="2", status="REJECTED",
+        rejection_reason="Over budget (3500 > 3000 CHF); No motor detected (likely not an e-bike)",
+    ))
+    too_far_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="3", status="REJECTED", rejection_reason="Too far (130 km > 105 km)",
+    ))
+    active_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="4"))
+
+    eligible = {row["id"] for row in db.get_listings_needing_ai_analysis()}
+    assert eligible == {fixable_id, active_id}
+
+    # --force widens to already-analyzed listings, not to hopeless rejections.
+    assert over_budget_id not in {row["id"] for row in db.get_listings_needing_ai_analysis(force=True)}
+    # An explicit --id still analyzes whatever you point it at.
+    assert [row["id"] for row in db.get_listings_needing_ai_analysis(listing_id=too_far_id)] == [too_far_id]
+    # limit still applies after the filtering.
+    assert len(db.get_listings_needing_ai_analysis(limit=1)) == 1
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI scope skips uncorrectable rejections test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
@@ -859,4 +893,5 @@ if __name__ == "__main__":
     test_automatic_reject_with_reason_is_not_locked()
     test_spec_overrides_roundtrip_and_clear()
     test_migration_locks_legacy_manual_rejects()
+    test_ai_scope_skips_rejections_no_correction_can_fix()
     print("\n✅ All database tests passed!")

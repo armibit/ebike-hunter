@@ -223,18 +223,28 @@ class ScoringEngine:
         elif frame_size == "UNKNOWN":
             score += 30  # Neutral
 
-        # Travel range (max 40 points)
-        travel_mm = specs.get("travel_front_mm")
-        if travel_mm:
-            travel_min, travel_max = self.travel_front_range
-            ideal_min = (travel_min + travel_max) // 2 - 5
-            ideal_max = (travel_min + travel_max) // 2 + 5
-
-            if ideal_min <= travel_mm <= ideal_max:
-                score += 40
-            elif travel_min <= travel_mm <= travel_max:
-                score += 35
-            else:
-                score += 20
+        # Travel range (max 40 points): front travel, averaged with rear
+        # travel when the listing states it too.
+        travel_points = [
+            self._travel_points(specs.get(field), travel_range)
+            for field, travel_range in (
+                ("travel_front_mm", self.travel_front_range),
+                ("travel_rear_mm", self.travel_rear_range),
+            )
+            if specs.get(field)
+        ]
+        if specs.get("travel_front_mm") and travel_points:
+            score += sum(travel_points) / len(travel_points)
 
         return min(100.0, score)
+
+    @staticmethod
+    def _travel_points(travel_mm: float, travel_range) -> float:
+        travel_min, travel_max = travel_range
+        ideal_min = (travel_min + travel_max) // 2 - 5
+        ideal_max = (travel_min + travel_max) // 2 + 5
+        if ideal_min <= travel_mm <= ideal_max:
+            return 40.0
+        if travel_min <= travel_mm <= travel_max:
+            return 35.0
+        return 20.0

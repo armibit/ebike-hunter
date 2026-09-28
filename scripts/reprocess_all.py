@@ -29,7 +29,9 @@ import yaml
 from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
 from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
-from pipeline.filters import hard_filter_reasons
+from pipeline.dedupe import dedupe_signature
+from pipeline.filters import distance_reject_reason, hard_filter_reasons
+from pipeline.normalizer import Normalizer
 from pipeline.regex_parser import RegexParser
 from pipeline.scoring import ScoringEngine
 
@@ -60,11 +62,13 @@ def main() -> None:
 
     cursor = db.conn.cursor()
     cursor.execute("""
-        SELECT id, title, description_raw, price_chf, distance_km, status, rejection_reason, status_locked
+        SELECT id, portal, title, description_raw, location_raw, price_chf, distance_km,
+               status, rejection_reason, status_locked
         FROM listings
         WHERE status IN ('ACTIVE', 'PRICE_DROP', 'REJECTED')
     """)
     rows = cursor.fetchall()
+    normalizer = Normalizer()
 
     restored = 0
     newly_rejected = 0
@@ -82,9 +86,22 @@ def main() -> None:
             skipped_manual += 1
             continue
 
+        # Re-resolve the location too, so normalizer fixes (new towns,
+        # province codes) and the distance filter reach stored listings.
+        lat, lon, distance_km, region = normalizer.resolve_location(row["location_raw"] or "")
+        if not dry_run:
+            db.conn.execute(
+                "UPDATE listings SET latitude = ?, longitude = ?, distance_km = ?, region = ?,"
+                " dedupe_signature = ? WHERE id = ?",
+                (lat, lon, distance_km, region, dedupe_signature(row["title"], price_chf), listing_id),
+            )
+
         overrides = db.get_spec_overrides(listing_id)
         specs = apply_spec_overrides(parser.parse(row["title"], row["description_raw"] or ""), overrides)
         reasons = evaluate_reject_reasons(specs, price_chf, config, list(overrides))
+        distance_reason = distance_reject_reason(row["portal"], lat, distance_km, region, config)
+        if distance_reason:
+            reasons.append(distance_reason)
         was_active = status in ("ACTIVE", "PRICE_DROP")
 
         if reasons:
@@ -106,7 +123,7 @@ def main() -> None:
                         (new_reason, listing_id),
                     )
         else:
-            listing_data = {"price_chf": price_chf, "distance_km": row["distance_km"]}
+            listing_data = {"price_chf": price_chf, "distance_km": distance_km}
             score_result = scorer.calculate_score(listing_data, specs)
 
             if not was_active:

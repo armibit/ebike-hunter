@@ -204,6 +204,51 @@ def test_rejected_listing_still_gets_its_parsed_specs_saved():
     print("✅ Rejected listing keeps parsed specs test passed")
 
 
+def _process_raw(db, parser, config, **raw_overrides):
+    from pipeline.normalizer import Normalizer
+    from pipeline.scoring import ScoringEngine
+    return run.process_listing(_raw_listing(**raw_overrides), parser, Normalizer(), ScoringEngine(config), db, config)
+
+
+def test_far_listing_is_rejected_unless_the_portal_ships():
+    config = {**CONFIG, "buyer_profile": {**CONFIG["buyer_profile"], "max_radius_km": {
+        "ticino": 45, "lombardia": 105, "exempt_portals": ["ebikestorebrescia"],
+    }}}
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+
+    # Private seller in Brescia (~115 km): too far to go and see.
+    assert _process_raw(db, parser, config, portal="subito", portal_id="9", location_raw="Brescia (BS)") is False
+    row = db.get_listing_with_specs("subito_9")
+    assert "Too far" in row["rejection_reason"]
+
+    # A shop in Brescia that ships: kept, distance only lowers the score.
+    assert _process_raw(db, parser, config, portal="ebikestorebrescia", portal_id="9", location_raw="Brescia") is True
+
+    # Verbano (~35 km) is within reach.
+    assert _process_raw(db, parser, config, portal="subito", portal_id="10", location_raw="Gravellona Toce (VB)") is True
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Distance filter in process_listing test passed")
+
+
+def test_process_listing_stores_dedupe_signature():
+    from pipeline.dedupe import dedupe_signature
+    db_path, db = _fresh_db()
+
+    _process(db, _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True))
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT dedupe_signature, price_chf FROM listings WHERE id = 'tutti_42'")
+    row = cursor.fetchone()
+    assert row["dedupe_signature"] == dedupe_signature("Cube Stereo Hybrid", row["price_chf"])
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Dedupe signature stored test passed")
+
+
 if __name__ == "__main__":
     test_generate_user_analysis_is_italian_not_english()
     test_generate_user_analysis_verdict_tiers()
@@ -213,4 +258,6 @@ if __name__ == "__main__":
     test_rescan_rechecks_overridden_frame_size_strictly()
     test_rescan_does_not_undo_manual_reject()
     test_rejected_listing_still_gets_its_parsed_specs_saved()
+    test_far_listing_is_rejected_unless_the_portal_ships()
+    test_process_listing_stores_dedupe_signature()
     print("\n✅ All run.py tests passed!")

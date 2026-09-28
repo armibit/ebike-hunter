@@ -4,7 +4,9 @@ Personal, local tool that scrapes full-suspension e-MTB classifieds — mostly u
 
 ## Features
 
-- **14 portal connectors**: Tutti.ch, Subito.it, Buycycle, Upway, Decathlon.ch, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia, Buybestgear.com (new bikes, not used — see below)
+- **12 working portal connectors**: Tutti.ch, Subito.it (Lombardia + Verbano, configurable via `search_paths`), Upway, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia, Buybestgear.com (new bikes, not used — see below). Buycycle and Decathlon.ch are stubs (no scriptable access) and disabled by default
+- **Distance filter**: `max_radius_km` rejects private listings too far to go and see; shops that ship (`exempt_portals`) are only scored lower
+- **Duplicate flag**: the same bike on two portals (or re-listed) is marked "🔁 anche su …" in the dashboard
 - **Zero-token parsing**: regex/taxonomy-based spec extraction (motor, battery, frame size, brakes, travel, odometer, model year) — no LLM calls in the main scan
 - **Deterministic scoring**: 0–100 score from price, components, condition/mileage, distance, fit
 - **Optional AI second opinion**: `analyze.py` sends listings to Claude Haiku for an independent Italian-language verdict, red-flag/condition reading from the raw description, and — only when the seller's own text names it — spec corrections the regex parser missed
@@ -16,7 +18,7 @@ Personal, local tool that scrapes full-suspension e-MTB classifieds — mostly u
 
 Configured in `config/config.yaml` — current defaults:
 
-- **Location**: Lugano, Ticino (CH); Ticino radius 45 km, Lombardia radius 105 km
+- **Location**: Lugano, Ticino (CH); Ticino radius 45 km, everywhere else (Lombardia, Verbano, …) 105 km — farther private listings are rejected
 - **Category**: Full suspension e-MTB, 130–160mm travel front/rear
 - **Motor / battery hard minimums** (below these, a listing is rejected outright): ≥60Nm torque, ≥500Wh battery
 - **Frame size**: M, S2, S3, 42–46cm, 17"/18"

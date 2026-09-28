@@ -12,7 +12,6 @@ def _make_connector():
             "subito_it": {
                 "base_url": "https://www.subito.it",
                 "search_queries": [],
-                "provinces": ["como"],
             }
         }
     }
@@ -134,10 +133,59 @@ def test_get_listing_details_falls_back_to_description_class_not_title():
     assert details["description_raw"].strip() != "Descrizione"
 
 
+def test_search_all_covers_every_search_path_once_per_listing():
+    # search_paths lets the scan reach beyond Lombardia (e.g. the Verbano,
+    # 30–50 km from Lugano); a listing surfacing under two queries or paths
+    # is only processed once.
+    connector = SubitoConnector({"portals": {"subito_it": {
+        "base_url": "https://www.subito.it",
+        "search_queries": ["ebike full", "turbo levo"],
+        "search_paths": ["/annunci-lombardia/vendita/biciclette",
+                         "/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola"],
+    }}})
+    requested_urls = []
+
+    def fake_get(url, params=None, **kwargs):
+        requested_urls.append(url)
+        return type("R", (), {"text": "", "url": url})()
+
+    connector.get = fake_get
+    calls = []
+
+    def fake_search(query, search_path):
+        calls.append((search_path, query))
+        # "shared" shows up under every query and path; the other id is per path.
+        return [{"portal_id": "shared"}, {"portal_id": search_path.rsplit("/", 1)[-1]}]
+
+    connector.search = fake_search
+    results = connector.search_all()
+
+    assert len(calls) == 4
+    assert {path for path, _ in calls} == set(connector.search_paths)
+    assert sorted(r["portal_id"] for r in results) == ["biciclette", "shared", "verbano-cusio-ossola"]
+
+
+def test_search_uses_configured_path():
+    connector = _make_connector()
+    urls = []
+    connector.get = lambda url, params=None, **kwargs: urls.append(url) or type("R", (), {"text": "", "url": url})()
+
+    connector.search("ebike", search_path="/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola/")
+
+    assert urls == ["https://www.subito.it/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola"]
+
+
+def test_default_search_path_is_lombardia():
+    assert _make_connector().search_paths == ["/annunci-lombardia/vendita/biciclette"]
+
+
 if __name__ == "__main__":
     test_aggregate_offer_json_ld_is_skipped_not_treated_as_listing()
     test_wrapper_div_is_not_matched_as_a_card()
     test_parse_card_extracts_title_via_h3_and_real_price()
     test_get_listing_details_reads_full_description_from_json_ld()
     test_get_listing_details_falls_back_to_description_class_not_title()
+    test_search_all_covers_every_search_path_once_per_listing()
+    test_search_uses_configured_path()
+    test_default_search_path_is_lombardia()
     print("\n✅ All Subito connector tests passed!")

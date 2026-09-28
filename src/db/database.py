@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from pipeline.filters import is_correctable_rejection
+
 logger = logging.getLogger(__name__)
 
 # Default rejection_reason set by set_manual_status(status="REJECTED") when
@@ -386,11 +388,16 @@ class Database:
                 " AND (l.ai_analysis IS NULL"
                 " OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))"
             )
-        params.append(limit)
-        cursor.execute(
-            base_select + scope_filter + " ORDER BY sc.score_total DESC LIMIT ?", params
-        )
-        return [dict(row) for row in cursor.fetchall()]
+        cursor.execute(base_select + scope_filter + " ORDER BY sc.score_total DESC", params)
+        # An automatic rejection is only worth an AI read when a spec
+        # correction could actually overturn it (see
+        # filters.is_correctable_rejection) — over budget, too far, hardtail,
+        # wrong category or red flags stay rejected whatever the AI reads.
+        rows = [
+            dict(row) for row in cursor.fetchall()
+            if row["status"] != "REJECTED" or is_correctable_rejection(row["rejection_reason"])
+        ]
+        return rows[:limit]
 
     def resolve_listing_id(self, value: str) -> Optional[str]:
         """Accept either a listing's real id (e.g. "tutti_12345") or the
@@ -434,6 +441,8 @@ class Database:
                 row["reason"] = f"stato {row['status']} (non più sul mercato)"
             elif row["status"] == "REJECTED" and row["rejection_reason"] == MANUAL_REJECT_REASON:
                 row["reason"] = "scartata manualmente da te — lasciata invariata"
+            elif row["status"] == "REJECTED" and not is_correctable_rejection(row["rejection_reason"]):
+                row["reason"] = "scartata per un motivo che nessuna correzione delle specifiche può cambiare"
             elif row["ai_analysis"] is not None:
                 due_for_recheck = (
                     row["status"] == "PRICE_DROP"

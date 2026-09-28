@@ -39,6 +39,20 @@ KNOWN_COORDINATES: Dict[str, Tuple[float, float]] = {
     "rho": (45.5328, 9.0408),
     "legnano": (45.5967, 8.9167),
     "brescia": (45.5416, 10.2118),
+    "luino": (46.0017, 8.7433),
+    "laveno": (45.9086, 8.6187),
+    # Piemonte — Verbano (Lago Maggiore / Ossola), 30–50 km from Lugano
+    "verbania": (45.9214, 8.5519),
+    "verbano-cusio-ossola": (45.9214, 8.5519),
+    "stresa": (45.8836, 8.5333),
+    "omegna": (45.8766, 8.4078),
+    "domodossola": (46.1159, 8.2926),
+    "cannobio": (46.0617, 8.6961),
+}
+
+_PROVINCE_CAPITALS = {
+    "vb": "verbania", "va": "varese", "co": "como", "lc": "lecco",
+    "mb": "monza", "mi": "milano", "bs": "brescia",
 }
 
 
@@ -93,6 +107,14 @@ class Normalizer:
                 else:
                     region = "lombardia" if dist <= 120.0 else "other"
                 return lat, lon, dist, region
+
+        # Italian province code, e.g. "Gravellona Toce (VB)" — a town not in
+        # KNOWN_COORDINATES still gets its province capital's position.
+        province = re.search(r"\((vb|va|co|lc|mb|mi|bs)\)", loc_lower)
+        if province:
+            lat, lon = KNOWN_COORDINATES[_PROVINCE_CAPITALS[province.group(1)]]
+            dist = self.haversine_km(lat, lon)
+            return lat, lon, dist, "lombardia" if dist <= 120.0 else "other"
 
         # Regional heuristics
         if any(t in loc_lower for t in ["ticino", "lugano", "mendrisiotto"]) or re.search(r"\bti\b", loc_lower):

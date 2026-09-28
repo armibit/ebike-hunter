@@ -11,6 +11,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from db.database import Database
+from pipeline.dedupe import dedupe_signature, find_duplicates
 import yaml
 
 
@@ -315,6 +316,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
+
+    # Computed here rather than read from listings.dedupe_signature, so rows
+    # stored before the current signature format are grouped too.
+    for bike in listings:
+        bike["dedupe_signature"] = dedupe_signature(bike["title"], bike["price_chf"])
+    duplicates_by_id = find_duplicates(listings)
 
     # Price history (listing_snapshots), grouped by listing — one query for
     # all listings rather than one per row, then sliced per-listing below.
@@ -728,6 +735,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
         frame_text = _attr(bike["frame_size"]) or "N/A"
         history = history_by_id.get(bike["id"], [])
+        duplicates = duplicates_by_id.get(bike["id"], [])
+        dup_icon = (
+            '<span class="dup-icon" title="Probabilmente la stessa bici: '
+            + _attr(", ".join(f"#{d['numeric_id']} ({d['portal']})" for d in duplicates))
+            + f'">🔁 anche su {_attr(", ".join(sorted({d["portal"] for d in duplicates})))}</span> '
+            if duplicates else ''
+        )
         previous_price = _get_previous_price(history) if status == "PRICE_DROP" else None
         price_text = _format_price(bike, previous_price)
         anno_text = bike.get("model_year") or "N/A"
@@ -771,7 +785,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
                         <a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
-                        <div class="title-meta">{new_icon}{ai_icon}{_attr(bike['portal'])} · {meta_text}</div>
+                        <div class="title-meta">{new_icon}{ai_icon}{dup_icon}{_attr(bike['portal'])} · {meta_text}</div>
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>

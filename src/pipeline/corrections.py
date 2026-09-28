@@ -11,15 +11,16 @@ from typing import Any, Dict, Optional
 
 from db.database import Database, MANUAL_REJECT_REASON
 from pipeline.analysis_text import generate_user_analysis
-from pipeline.filters import hard_filter_reasons
+from pipeline.filters import TOO_FAR_PREFIX, hard_filter_reasons
 from pipeline.scoring import ScoringEngine
 
 EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size", "suspension_type"]
 
 # Rejection reasons a spec correction can never fix, because the value behind
 # them isn't one of EDITABLE_SPEC_FIELDS and isn't stored in `specifications`
-# (the parser's excluded_category lives only in the scan's reject reason).
-_UNCORRECTABLE_REJECT_MARKERS = ("Wrong category",)
+# (the parser's excluded_category and the resolved location live only in the
+# scan's reject reason).
+_UNCORRECTABLE_REJECT_MARKERS = ("Wrong category", TOO_FAR_PREFIX)
 
 
 def _normalize_size(value: str) -> str:

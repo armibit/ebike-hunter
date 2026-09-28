@@ -196,6 +196,11 @@ def test_fit_scoring():
     # A stored NULL frame size is unknown (neutral), not wrong.
     assert engine._score_fit({"frame_size": None}) == engine._score_fit({"frame_size": "unknown"})
 
+    # Rear travel (travel_rear_range) counts too when the listing states it:
+    # ideal front + far-out-of-range rear averages the two travel scores.
+    assert engine._score_fit({"frame_size": "M", "travel_front_mm": 145, "travel_rear_mm": 145}) == 100.0
+    assert engine._score_fit({"frame_size": "M", "travel_front_mm": 145, "travel_rear_mm": 100}) == 90.0
+
     print("✅ Fit scoring tests passed")
 
 

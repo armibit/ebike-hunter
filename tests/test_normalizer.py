@@ -116,6 +116,26 @@ def test_city_match_is_whole_word_only():
     print("✅ Whole-word city match test passed")
 
 
+def test_verbano_and_province_codes_resolve_nearby():
+    from pipeline.normalizer import KNOWN_COORDINATES
+    norm = Normalizer()
+
+    # Verbano towns are 30–50 km away — they used to fall back to 150 km.
+    lat, lon, dist, region = norm.resolve_location("Verbania")
+    assert (lat, lon) == KNOWN_COORDINATES["verbania"]
+    assert 25 <= dist <= 45
+
+    # A town not in the list still gets its province capital's position.
+    lat, lon, dist, region = norm.resolve_location("Gravellona Toce (VB)")
+    assert (lat, lon) == KNOWN_COORDINATES["verbania"]
+    assert dist < 50
+
+    # Subito's usual "Town (XX)" format for a Lombardia province.
+    assert norm.resolve_location("Gavirate (VA)")[:2] == KNOWN_COORDINATES["varese"]
+
+    print("✅ Verbano / province code resolution test passed")
+
+
 if __name__ == "__main__":
     test_currency_normalization()
     test_haversine_distance()
@@ -123,4 +143,5 @@ if __name__ == "__main__":
     test_unknown_currency_returns_raw()
     test_ticino_word_boundary_false_positive()
     test_city_match_is_whole_word_only()
+    test_verbano_and_province_codes_resolve_nearby()
     print("\n✅ All normalizer tests passed!")

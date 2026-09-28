@@ -4,7 +4,6 @@ E-Bike Hunter - Main runner script.
 Scans every enabled portal for e-bike listings, filters, scores, and stores in database.
 """
 
-import hashlib
 import logging
 import sys
 import yaml
@@ -18,7 +17,8 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 from db.database import Database
 from pipeline.analysis_text import generate_user_analysis
 from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
-from pipeline.filters import hard_filter_reasons
+from pipeline.dedupe import dedupe_signature
+from pipeline.filters import distance_reject_reason, hard_filter_reasons
 from pipeline.regex_parser import RegexParser
 from pipeline.normalizer import Normalizer
 from pipeline.scoring import ScoringEngine
@@ -140,12 +140,12 @@ def process_listing(
         if override_reason:
             reject_reasons.append(override_reason)
 
-    # Calculate dedupe_signature for duplicate detection
-    # Use normalized title (lowercase, spaces removed, trimmed to first 3 words)
-    # to group similar products (e.g., same model in different colors/sizes)
-    title_words = listing_raw["title"].lower().split()[:3]
-    title_norm = "_".join(title_words).strip()
-    dedupe_sig = hashlib.md5(title_norm.encode()).hexdigest()[:16]
+    distance_reason = distance_reject_reason(listing_raw["portal"], lat, distance_km, region, config)
+    if distance_reason:
+        reject_reasons.append(distance_reason)
+
+    # Same bike on another portal / re-listed — flagged in the dashboard.
+    dedupe_sig = dedupe_signature(listing_raw["title"], price_chf)
 
     # Prepare listing data
     listing_data = {
