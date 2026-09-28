@@ -1,4 +1,5 @@
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -298,3 +299,10 @@ if __name__ == "__main__":
     test_price_and_size_thresholds_come_from_config()
     test_config_missing_key_raises()
     print("\n✅ All scoring tests passed!")
+
+
+def test_age_penalty():
+    assert ScoringEngine._age_penalty(None) == 0
+    assert ScoringEngine._age_penalty(date.today().year - 3) == 0
+    assert ScoringEngine._age_penalty(date.today().year - 5) == 6
+    assert ScoringEngine._age_penalty(2010) == 20

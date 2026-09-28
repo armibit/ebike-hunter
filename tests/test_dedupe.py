@@ -91,3 +91,21 @@ if __name__ == "__main__":
     test_price_gap_and_distance_veto_a_match()
     test_find_duplicates_groups_across_portals_and_ignores_dead_copies()
     print("\n✅ All dedupe tests passed!")
+
+
+def test_collapse_identical_upway_units():
+    """Upway lists each refurbished unit separately (Haibike TREKKING 4
+    rk5ff1/rk5ff6/…): identical live units become one row; a different
+    size, price or a rejected unit stays its own row."""
+    from pipeline.dedupe import collapse_identical_units
+
+    def unit(i, size="M", price=1849.0, status="ACTIVE"):
+        return {"id": f"upway_{i}", "portal": "upway", "title": "Haibike TREKKING 4",
+                "frame_size": size, "model_year": 2023, "price_chf": price, "status": status}
+
+    rows = [unit(1), unit(2), unit(3, status="PRICE_DROP"), unit(4, size="S"),
+            unit(5, price=1949.0), unit(6, status="REJECTED")]
+    kept, units = collapse_identical_units(rows)
+    assert [r["id"] for r in kept] == ["upway_1", "upway_4", "upway_5", "upway_6"]
+    assert [u["id"] for u in units["upway_1"]] == ["upway_2", "upway_3"]
+    assert "upway_4" not in units

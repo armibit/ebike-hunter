@@ -169,6 +169,81 @@ def test_render_dashboard_html_no_literal_backslash_n_end_to_end():
     print("✅ End-to-end no-literal-backslash-n test passed")
 
 
+def test_render_dashboard_order_and_badge_follow_ranking_score():
+    """Regressions: a rejected favorite stayed on top (looked like 'Scarta'
+    did nothing), and the badge showed score_total while the list sorted by
+    the AI-blended ranking_score (88.4 above 89.5). Also inline/modal spec
+    edits must reload so the new score shows."""
+    import tempfile, os, re
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+
+    tmp = tempfile.mktemp(suffix=".db")
+    db = Database(tmp)
+    scores = {"a": (89.5, None), "b": (88.0, 95.0), "c": (95.0, None)}
+    for pid, (total, ai) in scores.items():
+        db.upsert_listing({
+            "portal": "x", "portal_id": pid, "url": f"https://example.com/{pid}", "title": f"Bike {pid}",
+            "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+            "distance_km": 10, "status": "ACTIVE",
+        })
+        db.save_score(f"x_{pid}", {
+            "score_total": total, "score_price_value": 0, "score_component_quality": 0,
+            "score_condition_mileage": 0, "score_location_proximity": 0, "score_fit_geometry": 0,
+        })
+        if ai is not None:
+            db.save_ai_analysis(f"x_{pid}", "ok", ai)
+    db.toggle_favorite("x_c")
+    db.set_manual_status("x_c", "REJECTED")
+    db.close()
+
+    html = render_dashboard_html(tmp, interactive=True)
+    os.remove(tmp)
+
+    tbody = html[html.index('<tbody id="tbody">'):]
+    rows = re.findall(r'<tr[^>]*data-id="(x_\w)"[^>]*data-score="([\d.]+)"', tbody)
+    assert [r[0] for r in rows] == ["x_b", "x_a", "x_c"]  # b: .6*88+.4*95=90.8
+    assert dict(rows)["x_b"] == str(0.6 * 88.0 + 0.4 * 95.0)
+    assert "AI 95 (60/40)" in tbody
+    assert "if (specsChanged) location.reload()" in html
+    # "Marca" checkbox filter: no brand parsed -> "Altro".
+    assert 'class="brand-cb" value="Altro"> Altro (3)' in html
+    assert 'data-brand="Altro"' in tbody
+    # Brands sit in a collapsible list with select/deselect all.
+    assert '<details class="brand-dropdown">' in html
+    assert "setAllBrands(true)" in html and "setAllBrands(false)" in html
+
+
+def test_render_dashboard_thumbnail_and_image_kept_on_rescan():
+    """List thumbnails: image_url from the connector is stored, survives a
+    rescan whose card had no image (COALESCE), and non-http URLs never render."""
+    import tempfile, os
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+    from bs4 import BeautifulSoup
+    from connectors.base import card_image
+
+    card = BeautifulSoup('<div><img src="/icons/info.svg"><img class="lazy" src="https://ik.imagekit.io/q-10,bl-90/a.jpg" '
+                         'data-src="https://ik.imagekit.io/q-80/a.jpg"></div>', "html.parser")
+    assert card_image(card, "ik.imagekit.io") == "https://ik.imagekit.io/q-80/a.jpg"
+    assert card_image(card, "img.velocorner.ch") is None
+
+    tmp = tempfile.mktemp(suffix=".db")
+    db = Database(tmp)
+    base = {"portal": "x", "url": "https://example.com/", "title": "Bike", "price_raw": 2000, "currency": "CHF",
+            "price_chf": 2000, "price_eur": 1900, "distance_km": 10, "status": "ACTIVE"}
+    db.upsert_listing({**base, "portal_id": "a", "image_url": "https://cdn.example.com/a.jpg"})
+    db.upsert_listing({**base, "portal_id": "a"})  # rescan, card without image
+    db.upsert_listing({**base, "portal_id": "b", "image_url": "javascript:alert(1)"})
+    db.close()
+
+    html = render_dashboard_html(tmp, interactive=True)
+    os.remove(tmp)
+    assert '<img class="thumb" src="https://cdn.example.com/a.jpg"' in html
+    assert "javascript:alert" not in html
+    assert html.count('class="thumb"') == 1
+
+
 if __name__ == "__main__":
     test_format_price_shows_original_currency_not_converted()
     test_format_price_falls_back_without_raw_price()
@@ -181,4 +256,6 @@ if __name__ == "__main__":
     test_build_red_flags_html_only_when_flagged()
     test_build_detail_html_includes_metadata_history_and_ai_verdict()
     test_render_dashboard_html_no_literal_backslash_n_end_to_end()
+    test_render_dashboard_order_and_badge_follow_ranking_score()
+    test_render_dashboard_thumbnail_and_image_kept_on_rescan()
     print("\n✅ All generate_dashboard tests passed!")

@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # loaded by analyze.py's main() *after* this module is imported, still
 # takes effect.
 DEFAULT_MODEL = "claude-haiku-4-5"
-MAX_BATCH_SIZE = 15  # keeps one call's prompt + output comfortably in-budget
+MAX_BATCH_SIZE = 10  # keeps one call's prompt + output comfortably in-budget
 # 15 Italian verdicts of 2–4 sentences plus JSON overhead can approach 4k
 # tokens on their own — a truncated tool call loses the whole batch.
 MAX_OUTPUT_TOKENS = 8192

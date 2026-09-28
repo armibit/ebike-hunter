@@ -3,7 +3,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector
+from .base import BaseConnector, card_image
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,7 @@ class TcsVelocornerConnector(BaseConnector):
                 "price_raw": price_raw,
                 "currency": "CHF",
                 "location_raw": location_raw,
+                "image_url": card_image(item, "img.velocorner.ch"),
             }
         except Exception:
             return None

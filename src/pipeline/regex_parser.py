@@ -1,7 +1,22 @@
 import json
 import re
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def price_from_text(text: str) -> float:
+    """Asking price written in the ad body ("prezzo € 2450", "Preis: 1'900.-"),
+    for listings whose portal price field is empty/0. 0.0 when not found."""
+    match = re.search(
+        r"\b(?:prezzo|price|preis|prix)\b[^\d\n]{0,15}?(\d{1,2}[.' ]\d{3}|\d{3,5})(?![\d.,]*\s*(?:km|wh|nm|mm))",
+        text or "", re.IGNORECASE,
+    )
+    if match:
+        price = float(re.sub(r"\D", "", match.group(1)))
+        if 100 <= price <= 20000:
+            return price
+    return 0.0
 
 
 class RegexParser:
@@ -15,6 +30,11 @@ class RegexParser:
         self.suspension_types = self.taxonomy["suspension_types"]
         self.red_flags = self.taxonomy["red_flags"]
         self.excluded_categories = self.taxonomy["excluded_categories"]
+        # alias -> canonical name, longest alias first ("santa cruz" before "santa").
+        self.bike_brands = sorted(
+            ((alias, name) for name, aliases in self.taxonomy.get("bike_brands", {}).items() for alias in aliases),
+            key=lambda pair: -len(pair[0]),
+        )
 
     def parse(self, title: str, description: str) -> Dict[str, Any]:
         text = f"{title} {description}".lower()
@@ -55,6 +75,16 @@ class RegexParser:
             specs["motor_model"] = motor_data["model"]
             specs["motor_torque_nm"] = motor_data["torque_nm"]
             specs["motor_verified"] = motor_data["verified"]
+            # Gen4 (85Nm) arrived with MY2020: a generic "Bosch CX" on an
+            # older bike is the 75Nm Gen2/3, unless 85Nm/Gen4 is stated.
+            if (
+                specs["motor_model"] == "Performance Line CX Gen4"
+                and specs["model_year"] is not None
+                and specs["model_year"] <= 2019
+                and not re.search(r"gen\s?4|85\s*nm", text)
+            ):
+                specs["motor_model"] = "Performance Line CX Gen2/3"
+                specs["motor_torque_nm"] = 75
         elif specs["battery_capacity_wh"] is not None:
             # No motor brand/keyword named anywhere in the text, but a
             # battery Wh figure was extracted — no muscular bike specs a
@@ -68,7 +98,7 @@ class RegexParser:
             specs["motor_verified"] = False
 
         # Brand & Model extraction (basic heuristics)
-        brand_model = self._extract_brand_model(title)
+        brand_model = self._extract_brand_model(title) or self._extract_brand_model(description)
         if brand_model:
             specs["brand"], specs["model"] = brand_model
 
@@ -186,9 +216,17 @@ class RegexParser:
 
     def _detect_excluded_category(self, text: str) -> Optional[str]:
         for kw in self.excluded_categories:
-            if re.search(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE):
+            for match in re.finditer(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE):
+                # "lucchetto Abus pieghevole", "folding lock": an accessory
+                # that folds, not a folding bike.
+                if self._FOLDING_ACCESSORY_CONTEXT.search(text[max(0, match.start() - 25):match.start()]):
+                    continue
                 return kw
         return None
+
+    _FOLDING_ACCESSORY_CONTEXT = re.compile(
+        r"lucchett|antifurto|lock|schloss|cadenas|pedal|cavallett|specchi", re.IGNORECASE
+    )
 
     # Yamaha's motor series is literally named "PW-S2"/"PW-S3" (see
     # taxonomy.json's yamaha_pwx patterns), e.g. Upway's spec table prints
@@ -207,7 +245,33 @@ class RegexParser:
             return True
         return False
 
+    # A labelled size field ("Frame size Small" on velocorner, "Rahmengrösse
+    # M", "Taglia telaio: L") beats loose words elsewhere in the text.
+    _SIZE_TOKEN = r"(?:extra[\s-]?small|extra[\s-]?large|small|medium|large|xx?s|xx?l|s[1-6]|[sml])"
+    _LABELLED_SIZE = re.compile(
+        r"\b(?:frame\s*size|rahmengr(?:ö|oe)(?:ss|ß)e|taglia\s+telaio|taille\s+(?:du\s+)?cadre)\s*[:\-]?\s*"
+        rf"({_SIZE_TOKEN}(?:\s*(?:[-/,]|oder|or|o|und|e)\s*{_SIZE_TOKEN})*)\b",
+        re.IGNORECASE,
+    )
+    _SIZE_WORDS = {"small": "S", "medium": "M", "large": "L", "extrasmall": "XS", "extralarge": "XL"}
+
+    def _labelled_size(self, text: str) -> Optional[str]:
+        """Size from a labelled field; a range or list ("S-M", "S, M oder
+        L") that includes a fitting size counts as that size."""
+        match = self._LABELLED_SIZE.search(text)
+        if not match:
+            return None
+        sizes = [
+            self._SIZE_WORDS.get(re.sub(r"[\s-]", "", token.lower()), token.upper())
+            for token in re.findall(self._SIZE_TOKEN, match.group(1), re.IGNORECASE)
+        ]
+        return next((size for size in sizes if size in ("M", "S2", "S3")), sizes[0])
+
     def _detect_frame_size(self, text: str) -> str:
+        labelled = self._labelled_size(text)
+        if labelled:
+            return labelled if labelled in ("M", "S2", "S3") else "disallowed"
+
         # Check target sizes
         for pattern in self.frame_sizes["target_m"]:
             if re.search(pattern, text, re.IGNORECASE):
@@ -225,6 +289,9 @@ class RegexParser:
         return "unknown"
 
     def _disallowed_size_text(self, text: str) -> Optional[str]:
+        labelled = self._labelled_size(text)
+        if labelled:
+            return labelled
         for pattern in self.frame_sizes["disallowed_sizes"]:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
@@ -321,6 +388,8 @@ class RegexParser:
             # number would otherwise defeat.
             rf"km\s*total[ei]\s*[:\-]?\s*({NUM})",
             rf"total[ei]\s*km\s*[:\-]?\s*({NUM})",
+            # "ha all'attivo 2.300 km"
+            rf"attivo[^\d\n]{{0,15}}({NUM})\s*km",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -347,26 +416,34 @@ class RegexParser:
         return None
 
     def _extract_year(self, text: str) -> Optional[int]:
-        match = re.search(r"\b(20\d{2})\b", text)
-        if match:
+        # A labelled year ("Anno: 2017", "Modelljahr 2019") wins over the
+        # first bare 20xx, which may be a service/purchase date instead.
+        max_year = date.today().year + 1
+        labelled = re.search(
+            r"\b(?:anno|year|jahrgang|modelljahr|baujahr|mj|my)\s*[:\-]?\s*(20\d{2})\b", text
+        )
+        candidates = [labelled] if labelled else []
+        candidates += re.finditer(r"\b(20\d{2})\b", text)
+        for match in candidates:
             year = int(match.group(1))
-            if 2018 <= year <= 2026:
+            if 2010 <= year <= max_year:
                 return year
         return None
 
     def _extract_brand_model(self, title: str) -> Optional[Tuple[str, str]]:
-        title_lower = title.lower()
-        brands = ["specialized", "trek", "cube", "canyon", "focus", "scott", "giant", "merida", "mondraker", "orbea", "santa cruz", "rocky mountain"]
-
-        for brand in brands:
-            if brand in title_lower:
-                # Extract model (simple heuristic: words after brand)
-                match = re.search(rf"{brand}\s+([a-z0-9\s\-]+)", title_lower, re.IGNORECASE)
-                if match:
-                    model_raw = match.group(1).strip()
-                    model = " ".join(model_raw.split()[:3])  # Take first 3 words
-                    return brand.title(), model.title()
-        return None
+        """Frame brand named earliest in the text, plus up to 3 following
+        words as the model. Whole words only: "TREKKING" is not Trek."""
+        title_lower = (title or "").lower()
+        best = None
+        for alias, name in self.bike_brands:
+            match = re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", title_lower)
+            if match and (best is None or match.start() < best[0].start()):
+                best = (match, name)
+        if not best:
+            return None
+        match, name = best
+        model = " ".join(re.findall(r"[a-z0-9\-\.]+", title_lower[match.end():])[:3])
+        return name, model.title()
 
     def _detect_red_flags(self, text: str) -> List[str]:
         matches = []

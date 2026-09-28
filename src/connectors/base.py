@@ -14,6 +14,17 @@ from utils.console import status
 logger = logging.getLogger(__name__)
 
 
+def card_image(tag, host: str) -> Optional[str]:
+    """First card <img> served from the portal's image CDN (lazy data-src
+    wins over a blurred placeholder src); skips icon svgs on other hosts."""
+    for img in tag.find_all("img"):
+        for attr in ("data-src", "src"):
+            src = img.get(attr) or ""
+            if host in src:
+                return src
+    return None
+
+
 MAX_RETRY_AFTER_SECONDS = 300
 
 

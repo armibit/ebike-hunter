@@ -20,7 +20,7 @@ from pipeline.analysis_text import generate_user_analysis
 from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
 from pipeline.dedupe import dedupe_signature
 from pipeline.filters import distance_reject_reason, hard_filter_reasons
-from pipeline.regex_parser import RegexParser
+from pipeline.regex_parser import RegexParser, price_from_text
 from pipeline.normalizer import Normalizer
 from pipeline.scoring import ScoringEngine
 from connectors.registry import PORTALS, is_enabled, portal_country
@@ -143,6 +143,12 @@ def process_listing(
                 return False
         except Exception as e:
             logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e, exc_info=True)
+
+    # Seller left the portal's price field empty but wrote it in the text.
+    if not listing_raw.get("price_raw") or listing_raw["price_raw"] <= 0:
+        listing_raw["price_raw"] = price_from_text(
+            f"{listing_raw['title']}\n{listing_raw.get('description_raw') or ''}"
+        )
 
     # Normalize currency
     price_chf, price_eur = normalizer.normalize_currency(

@@ -394,6 +394,68 @@ def test_disallowed_frame_size_remembers_what_was_written():
     print("✅ Disallowed frame size keeps the detected size")
 
 
+def test_old_bike_year_and_bosch_cx_generation():
+    parser = RegexParser(TAXONOMY_PATH)
+    # Real tutti listing: 2017 bike, generic "bosch performance CX".
+    specs = parser.parse(
+        "E-bike Moustache Samedi Trail 5 bosch CX",
+        "Anno: 2017\nBatteria: 500wh\nMotore: bosch performance CX\nRevisionata 2025",
+    )
+    assert specs["model_year"] == 2017
+    assert specs["motor_torque_nm"] == 75
+
+    # Stated 85Nm keeps Gen4 even on an old year.
+    specs = parser.parse("Trek Rail 2019", "Bosch CX 85Nm")
+    assert specs["motor_torque_nm"] == 85
+
+
+def test_labelled_frame_size_field():
+    """Regression: velocorner's "Frame size Small" (Husqvarna MC4, #1824)
+    was not recognised at all -> unknown."""
+    parser = RegexParser(TAXONOMY_PATH)
+    text = "Model year 2024 Condition Used Frame size Small Dimensions Color White"
+    specs = parser.parse("Husqvarna Mountain Cross MC4", text)
+    assert specs["frame_size"] == "disallowed"
+    assert specs["frame_size_detected"] == "S"
+    assert parser.parse("Bike", "Frame size Medium Color Black")["frame_size"] == "M"
+    assert parser.parse("Bike", "Rahmengrösse: L")["frame_size_detected"] == "L"
+    assert parser.parse("Bike", "Taglia telaio S2")["frame_size"] == "S2"
+    # Labelled field wins over a loose "M" elsewhere ("M10" isn't a size anyway).
+    assert parser.parse("Orbea Rise M", "Frame size Large")["frame_size"] == "disallowed"
+    # Ranges / lists that include M fit.
+    assert parser.parse("Focus THRON", "Frame size S-M Color Black")["frame_size"] == "M"
+    assert parser.parse("Cannondale", "Rahmengrösse: S, M oder L")["frame_size"] == "M"
+
+
+def test_bike_brand_extraction():
+    """Frame brand as its own field for the dashboard "Marca" filter.
+    Regression: substring match made "Haibike TREKKING 4" a Trek."""
+    parser = RegexParser(TAXONOMY_PATH)
+    assert parser.parse("Haibike TREKKING 4", "")["brand"] == "Haibike"
+    assert parser.parse("Moustache Samedi Trail 5", "")["brand"] == "Moustache"
+    assert parser.parse("Vendo Riese & Müller Delite", "")["brand"] == "Riese & Müller"
+    assert parser.parse("Santa Cruz Heckler 9", "")["brand"] == "Santa Cruz"
+    assert parser.parse("Turbo Levo Comp", "")["brand"] == "Specialized"
+    # Not in the title -> taken from the description.
+    assert parser.parse("E-MTB full 150mm", "Vendo la mia Lapierre Overvolt")["brand"] == "Lapierre"
+    assert parser.parse("E-MTB full 150mm", "motore Bosch CX")["brand"] is None
+
+
+def test_price_from_text_and_folding_excluded():
+    from pipeline.regex_parser import price_from_text
+    assert price_from_text("Batteria 625Wh\nprezzo € 2450 \nconsegna a mano") == 2450
+    assert price_from_text("Preis: 1'900.- CHF") == 1900
+    assert price_from_text("prezzo trattabile, 625 Wh") == 0.0
+
+    parser = RegexParser(TAXONOMY_PATH)
+    specs = parser.parse("Giant Trance X E+ 3", "Motore: Yamaha SyncDrive Pro. La bicicletta ha all'attivo 2.300 km")
+    assert specs["motor_brand"] == "Yamaha"
+    assert specs["odometer_km"] == 2300
+    assert parser.parse("Engwe L20 Foldable Electric Bike", "")["excluded_category"] == "foldable"
+    assert parser.parse("Cube Stereo", "copertoni Maxxis folding")["excluded_category"] is None
+    assert parser.parse("Moustache Samedi", "lucchetto: Abus pieghevole")["excluded_category"] is None
+
+
 if __name__ == "__main__":
     test_motor_detection()
     test_motor_detection_handles_real_world_phrasing_and_typos()

@@ -31,7 +31,7 @@ from pipeline.corrections import apply_spec_overrides, corrected_reject_reason
 from pipeline.dedupe import dedupe_signature
 from pipeline.filters import distance_reject_reason, hard_filter_reasons
 from pipeline.normalizer import Normalizer
-from pipeline.regex_parser import RegexParser
+from pipeline.regex_parser import RegexParser, price_from_text
 from pipeline.scoring import ScoringEngine
 from utils.config import load_config
 
@@ -57,7 +57,7 @@ def main() -> None:
 
     cursor = db.conn.cursor()
     cursor.execute("""
-        SELECT id, portal, title, description_raw, location_raw, price_chf, distance_km,
+        SELECT id, portal, title, description_raw, location_raw, price_chf, currency, distance_km,
                status, rejection_reason, status_locked
         FROM listings
         WHERE status IN ('ACTIVE', 'PRICE_DROP', 'REJECTED')
@@ -77,6 +77,18 @@ def main() -> None:
         status = row["status"]
         old_reason = row["rejection_reason"]
         price_chf = row["price_chf"] or 0
+
+        # Stored with a 0 price (portal field empty): retry from the ad text.
+        if price_chf <= 0:
+            text_price = price_from_text(f"{row['title']}\n{row['description_raw'] or ''}")
+            if text_price:
+                price_chf, price_eur = normalizer.normalize_currency(text_price, row["currency"] or "EUR")
+                print(f"  PRICE   {listing_id}: 0 -> {price_chf} CHF (from text)")
+                if not dry_run:
+                    db.conn.execute(
+                        "UPDATE listings SET price_raw = ?, price_chf = ?, price_eur = ? WHERE id = ?",
+                        (text_price, price_chf, price_eur, listing_id),
+                    )
 
         if row["status_locked"] or (status == "REJECTED" and old_reason == MANUAL_REJECT_REASON):
             skipped_manual += 1
@@ -137,10 +149,12 @@ def main() -> None:
                 rescored += 1
 
             if not dry_run:
-                db.save_specifications(listing_id, specs)
                 db.save_score(listing_id, score_result)
 
         if not dry_run:
+            # Rejected rows too (as run.py does): they're shown greyed in the
+            # dashboard and filtered by brand/size, so stale specs mislead.
+            db.save_specifications(listing_id, specs)
             db.conn.commit()
 
     print()

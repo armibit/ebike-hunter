@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Dict, Any
 
 
@@ -62,6 +63,12 @@ class ScoringEngine:
         elif suspension_type == "hardtail":
             score_total = max(0.0, score_total - 15.0)
 
+        # Age penalty: an old e-bike carries a worn battery and dated motor/
+        # geometry that low km alone doesn't reveal. Free up to 3 years old,
+        # then -3 per year, capped at -20. Unknown year = no penalty.
+        age_penalty = self._age_penalty(specs.get("model_year"))
+        score_total = max(0.0, score_total - age_penalty)
+
         is_deal_target = score_total >= 75.0 and price_chf <= self.hard_max_price
 
         return {
@@ -82,9 +89,17 @@ class ScoringEngine:
                 "brakes": specs.get("brakes_tier"),
                 "fork": specs.get("fork_tier"),
                 "odometer_km": specs.get("odometer_km"),
-                "year": specs.get("model_year")
+                "year": specs.get("model_year"),
+                "age_penalty": age_penalty
             }
         }
+
+    @staticmethod
+    def _age_penalty(model_year) -> float:
+        if not model_year:
+            return 0.0
+        age = date.today().year - int(model_year)
+        return float(min(20, max(0, age - 3) * 3))
 
     def _score_price(self, price_chf: float) -> float:
         """

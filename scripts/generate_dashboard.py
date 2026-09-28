@@ -2,6 +2,7 @@
 """Generate static HTML dashboard from DB listings."""
 
 import json
+from collections import Counter
 import re
 import sys
 from pathlib import Path
@@ -11,7 +12,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from db.database import Database
-from pipeline.dedupe import find_duplicates
+from pipeline.dedupe import collapse_identical_units, find_duplicates
 
 
 def _attr(value) -> str:
@@ -295,11 +296,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     cursor.execute("""
     SELECT
         l.rowid AS numeric_id,
-        l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url,
+        l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url, l.image_url,
         l.latitude, l.longitude,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
         l.user_analysis, l.ai_analysis, l.ai_score,
-        s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
+        s.brand, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
         s.battery_capacity_wh, s.frame_size, s.model_year, s.odometer_km,
         s.travel_front_mm, s.brakes_tier, s.suspension_type,
         s.has_red_flag, s.red_flag_details,
@@ -310,12 +311,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
-    ORDER BY l.is_favorite DESC,
-             CASE WHEN l.status IN ('SOLD', 'REJECTED', 'DELISTED') THEN 1 ELSE 0 END,
+    ORDER BY CASE WHEN l.status IN ('SOLD', 'REJECTED', 'DELISTED') THEN 1 ELSE 0 END,
+             l.is_favorite DESC,
              COALESCE(ranking_score, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
+
+    # Identical shop units (Upway) shown once with a "×N unità" badge.
+    listings, units_by_id = collapse_identical_units(listings)
 
     # Same bike on another portal / re-listed (pipeline/dedupe.py).
     duplicates_by_id = find_duplicates(listings)
@@ -332,6 +336,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         history_by_id.setdefault(row["listing_id"], []).append(dict(row))
 
     db.close()
+
+    # "Marca" checkbox filter: every frame brand in the list, most common first.
+    brand_counts = Counter(bike["brand"] or "Altro" for bike in listings)
+    brand_checkboxes = "".join(
+        f'<label class="filter-checkbox"><input type="checkbox" class="brand-cb" value="{_attr(name)}"> {_attr(name)} ({count})</label>'
+        for name, count in sorted(brand_counts.items(), key=lambda kv: (kv[0] == "Altro", -kv[1], kv[0]))
+    )
 
     # Top 10
     top_10 = listings[:10]
@@ -388,6 +399,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .range-row {{ display: flex; align-items: center; gap: 8px; height: 33px; }}
         .range-row input[type="range"] {{ flex: 1; min-width: 0; width: auto; height: auto; padding: 0; border: none; }}
         .range-value {{ font-size: 12px; font-weight: 700; color: var(--primary); min-width: 32px; text-align: right; flex-shrink: 0; }}
+        .brand-filter {{ grid-column: 1 / -1; }}
+        .brand-dropdown {{ border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }}
+        .brand-dropdown summary {{ cursor: pointer; padding: 7px 10px; font-size: 13px; color: var(--text); }}
+        .brand-actions {{ display: flex; gap: 8px; padding: 0 10px 6px; }}
+        .brand-actions button {{ font-size: 12px; padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; }}
+        .brand-list {{ display: flex; flex-wrap: wrap; gap: 2px 14px; max-height: 180px; overflow-y: auto; padding: 0 10px 8px; }}
+        .brand-list .filter-checkbox {{ height: 24px; text-transform: none; letter-spacing: normal; font-weight: 500; font-size: 12px; color: var(--text); }}
         .filter-checkbox {{ flex-direction: row; align-items: center; gap: 6px; font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--text); font-size: 13px; height: 33px; }}
         .filter-checkbox input {{ width: auto; height: auto; flex-shrink: 0; }}
         .btn-reset {{ padding: 6px 14px; background: var(--surface); color: var(--danger); border: 1px solid var(--danger-bg); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; flex-shrink: 0; }}
@@ -414,6 +432,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         tbody tr.sold {{ opacity: .45; }}
 
         .title-link {{ font-weight: 600; color: var(--text); }}
+        .thumb {{ float: left; width: 64px; height: 44px; object-fit: cover; border-radius: 4px; margin-right: 8px; background: var(--border, #ddd); }}
         .title-meta {{ color: var(--text-muted); font-size: 12px; margin-top: 3px; }}
         .ai-icon {{ font-size: 11px; cursor: default; }}
         .new-icon {{ font-size: 11px; cursor: default; }}
@@ -614,6 +633,17 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <label>&nbsp;</label>
                     <label class="filter-checkbox"><input type="checkbox" id="aiOnly"> 🤖 Solo con analisi AI</label>
                 </div>
+                <div class="filter-group brand-filter">
+                    <label>Marca</label>
+                    <details class="brand-dropdown">
+                        <summary id="brandSummary">Tutte le marche</summary>
+                        <div class="brand-actions">
+                            <button type="button" onclick="setAllBrands(true)">Seleziona tutto</button>
+                            <button type="button" onclick="setAllBrands(false)">Deseleziona tutto</button>
+                        </div>
+                        <div class="brand-list">{brand_checkboxes}</div>
+                    </details>
+                </div>
                 <div class="filter-group">
                     <label>Ricerca testo libero</label>
                     <input type="text" id="textFilter" placeholder="Titolo, marca, modello...">
@@ -626,7 +656,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 """
 
     for idx, bike in enumerate(top_10, 1):
-        score_val = bike["score_total"] or 0
+        score_val = bike["ranking_score"] if bike.get("ranking_score") is not None else (bike["score_total"] or 0)
         analysis = _combine_analysis(bike) or "In attesa di valutazione"
         fav_prefix = "⭐ " if bike.get("is_favorite") else ""
         html += f"""            <div class="top-item">
@@ -703,8 +733,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     row_templates = []
 
     for idx, bike in enumerate(listings):
-        score_val = bike["score_total"] or 0
+        # Show the value the list is ranked/sorted by (score blended with the
+        # AI verdict when there is one), else the badge contradicts the order.
+        score_val = bike["ranking_score"] if bike.get("ranking_score") is not None else (bike["score_total"] or 0)
         score_class = _score_class(score_val)
+        score_title = (
+            f'Score {bike["score_total"] or 0:.1f} · AI {bike["ai_score"]:.0f} (60/40)'
+            if bike.get("ai_score") is not None else "Score"
+        )
 
         status = bike["status"]
         status_class = (
@@ -733,6 +769,18 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         frame_text = _attr(bike["frame_size"]) or "N/A"
         history = history_by_id.get(bike["id"], [])
         duplicates = duplicates_by_id.get(bike["id"], [])
+        units = units_by_id.get(bike["id"], [])
+        thumb_src = _safe_url(bike.get("image_url"))
+        thumb = (
+            f'<img class="thumb" src="{thumb_src}" alt="" loading="lazy" referrerpolicy="no-referrer">'
+            if thumb_src != "#" else ""
+        )
+        units_icon = (
+            '<span class="dup-icon" title="Altre unità identiche: '
+            + _attr(", ".join(f"#{u['numeric_id']}" for u in units))
+            + f'">×{len(units) + 1} unità</span> '
+            if units else ""
+        )
         dup_icon = (
             '<span class="dup-icon" title="Probabilmente la stessa bici: '
             + _attr(", ".join(f"#{d['numeric_id']} ({d['portal']})" for d in duplicates))
@@ -778,11 +826,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
             motor_cell_attrs = battery_cell_attrs = suspension_cell_attrs = frame_cell_attrs = ''
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
-                    <td><span class="score {score_class}">{score_val:.1f}</span></td>
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-brand="{_attr(bike['brand'] or 'Altro')}" data-score="{score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+                    <td><span class="score {score_class}" title="{score_title}">{score_val:.1f}</span></td>
                     <td>
-                        <a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
-                        <div class="title-meta">{new_icon}{ai_icon}{dup_icon}{_attr(bike['portal'])} · {meta_text}</div>
+                        {thumb}<a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
+                        <div class="title-meta">{new_icon}{ai_icon}{dup_icon}{units_icon}{_attr(bike['portal'])} · {meta_text}</div>
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>
@@ -860,9 +908,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             updateModalNavButtons();
         }
 
+        // Set by saveSpecs(): the modal stays open for more edits, so the
+        // table behind it is refreshed only once the modal is closed.
+        let specsChanged = false;
+
         function closeAnalysis() {
             document.getElementById('analysisModal').classList.remove('show');
             document.body.style.overflow = '';
+            if (specsChanged) location.reload();
         }
 
         // Prev/Next cycle through the currently *visible* rows (respecting
@@ -978,7 +1031,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 frame_size: document.getElementById('editFrame').value || null
             });
             if (result) {
-                alert('✓ Specifiche salvate.');
+                specsChanged = true;
+                alert('✓ Specifiche salvate. Score: ' + result.score_total);
             }
         }
 
@@ -1042,26 +1096,18 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const listingId = row.getAttribute('data-id');
 
             const payload = {};
-            let newValue = null;
             if (field === 'battery') {
                 const v = document.getElementById('cellEdit_battery').value;
                 payload.battery_capacity_wh = v !== '' ? parseFloat(v) : null;
-                newValue = v !== '' ? `${parseFloat(v).toFixed(0)}Wh` : 'N/A';
             } else if (field === 'suspension') {
                 payload.suspension_type = document.getElementById('cellEdit_suspension').value || null;
-                const val = document.getElementById('cellEdit_suspension').value;
-                newValue = val === 'full_suspension' ? 'Full suspension' : val === 'hardtail' ? 'Hardtail' : 'Non specificata';
             } else if (field === 'frame') {
                 payload.frame_size = document.getElementById('cellEdit_frame').value || null;
-                newValue = document.getElementById('cellEdit_frame').value || 'N/A';
             } else if (field === 'motor') {
                 const torque = document.getElementById('cellEdit_motor_torque').value;
                 payload.motor_brand = document.getElementById('cellEdit_motor_brand').value || null;
                 payload.motor_model = document.getElementById('cellEdit_motor_model').value || null;
                 payload.motor_torque_nm = torque !== '' ? parseFloat(torque) : null;
-                const brand = payload.motor_brand || '';
-                const torqueStr = payload.motor_torque_nm ? ` ${payload.motor_torque_nm.toFixed(0)}Nm` : '';
-                newValue = (brand + torqueStr).trim() || 'N/A';
             }
 
             try {
@@ -1072,26 +1118,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 });
                 if (!resp.ok) throw new Error(await resp.text());
 
-                // Update row attributes and display without full reload
-                if (field === 'battery') {
-                    row.setAttribute('data-edit-battery', payload.battery_capacity_wh || '');
-                    row.setAttribute('data-battery', payload.battery_capacity_wh || 0);
-                } else if (field === 'suspension') {
-                    row.setAttribute('data-edit-suspension', payload.suspension_type || '');
-                    row.setAttribute('data-suspension', payload.suspension_type || 'unknown');
-                } else if (field === 'frame') {
-                    row.setAttribute('data-edit-frame', payload.frame_size || '');
-                    row.setAttribute('data-frame', payload.frame_size || 'N/A');
-                } else if (field === 'motor') {
-                    row.setAttribute('data-edit-motor-brand', payload.motor_brand || '');
-                    row.setAttribute('data-edit-motor-model', payload.motor_model || '');
-                    row.setAttribute('data-edit-motor-torque', payload.motor_torque_nm || '');
-                    row.setAttribute('data-motor-torque', payload.motor_torque_nm || '');
-                    row.setAttribute('data-motor', newValue);
-                }
-
-                td.textContent = newValue;
-                td.classList.remove('editing');
+                // Reload: a correction can change the score and even the
+                // status (e.g. a frame size outside the targets rejects it).
+                location.reload();
             } catch (e) {
                 alert('Salvataggio non riuscito. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
             }
@@ -1226,6 +1255,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const aiOnly = document.getElementById('aiOnly').checked;
             const statusFilter = document.getElementById('statusFilter').value;
             const textFilter = document.getElementById('textFilter').value.toLowerCase();
+            const brands = checkedBrands();
+            const brandTotal = document.querySelectorAll('.brand-cb').length;
+            document.getElementById('brandSummary').textContent =
+                !brands.length || brands.length === brandTotal ? 'Tutte le marche'
+                : brands.length <= 3 ? brands.join(', ') : brands.length + ' marche selezionate';
 
             const rows = document.querySelectorAll('#tbody tr');
             let visibleCount = 0;
@@ -1256,6 +1290,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 if (aiOnly && !hasAi) show = false;
                 if (statusFilter && statusGroup !== statusFilter) show = false;
                 if (textFilter && !titleText.includes(textFilter)) show = false;
+                if (brands.length && !brands.includes(row.dataset.brand)) show = false;
 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
@@ -1272,6 +1307,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 noResult.innerHTML = '<td colspan="13" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
+        }
+
+        function checkedBrands() {
+            return [...document.querySelectorAll('.brand-cb:checked')].map(cb => cb.value);
+        }
+        document.querySelectorAll('.brand-cb').forEach(cb => cb.addEventListener('change', applyFilters));
+        function setAllBrands(checked) {
+            document.querySelectorAll('.brand-cb').forEach(cb => cb.checked = checked);
+            applyFilters();
         }
 
         function resetFilters() {
@@ -1295,6 +1339,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('aiOnly').checked = false;
             document.getElementById('statusFilter').value = '';
             document.getElementById('textFilter').value = '';
+            document.querySelectorAll('.brand-cb').forEach(cb => cb.checked = false);
             saveFilters();
             applyFilters();
         }
@@ -1312,7 +1357,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 favOnly: document.getElementById('favOnly').checked,
                 aiOnly: document.getElementById('aiOnly').checked,
                 statusFilter: document.getElementById('statusFilter').value,
-                textFilter: document.getElementById('textFilter').value
+                textFilter: document.getElementById('textFilter').value,
+                brands: checkedBrands()
             };
             localStorage.setItem('ebike-filters', JSON.stringify(filters));
         }
@@ -1336,6 +1382,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 document.getElementById('aiOnly').checked = filters.aiOnly;
                 document.getElementById('statusFilter').value = filters.statusFilter;
                 document.getElementById('textFilter').value = filters.textFilter || '';
+                const brands = filters.brands || [];
+                document.querySelectorAll('.brand-cb').forEach(cb => cb.checked = brands.includes(cb.value));
                 filterTable();
             } catch (e) {
                 console.error('Errore ripristino filtri:', e);

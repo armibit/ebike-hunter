@@ -168,3 +168,30 @@ def find_duplicates(listings: Iterable[Dict[str, Any]]) -> Dict[str, List[Dict[s
         for listing in clean:
             duplicates[listing["id"]] = [other for other in clean if other["id"] != listing["id"]]
     return duplicates
+
+
+def collapse_identical_units(listings: List[Dict[str, Any]]):
+    """Shops like Upway list every refurbished unit of a model as its own
+    product (haibike-trekking-4-rk5ff1, -rk5ff6, …): same title, size, year
+    and price. Not duplicates — distinct bikes — but N identical rows bury
+    the list. Keep the first live one (input is ranked, so the best) and
+    return {kept id: [the other units]}; non-live rows are never grouped."""
+    kept: List[Dict[str, Any]] = []
+    units: Dict[str, List[Dict[str, Any]]] = {}
+    first_by_key: Dict[tuple, str] = {}
+    for listing in listings:
+        if listing.get("status") in _LIVE_STATUSES:
+            key = (
+                listing.get("portal"),
+                " ".join((listing.get("title") or "").lower().split()),
+                _norm_size(listing.get("frame_size")),
+                listing.get("model_year"),
+                round(listing.get("price_chf") or 0),
+            )
+            if key in first_by_key:
+                units[first_by_key[key]].append(listing)
+                continue
+            first_by_key[key] = listing["id"]
+            units[listing["id"]] = []
+        kept.append(listing)
+    return kept, {k: v for k, v in units.items() if v}

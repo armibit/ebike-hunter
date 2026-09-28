@@ -199,6 +199,7 @@ class TuttiConnector(BaseConnector):
                 "category": (node.get("primaryCategory", {}) or {}).get("categoryID", ""),
                 "seller_name": seller.get("alias", ""),
                 "timestamp": node.get("timestamp", ""),
+                "image_url": ((node.get("thumbnail") or {}).get("normalRendition") or {}).get("src"),
             }
         except Exception:
             logger.debug("Failed to parse Tutti listing node", exc_info=True)

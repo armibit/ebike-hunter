@@ -105,6 +105,7 @@ class UpwayConnector(BaseConnector):
                 "location_raw": "Switzerland",
                 # Sold-out one-off bikes stay in the collection feed.
                 "is_available": shopify_variants_available(variants),
+                "image_url": ((product.get("images") or [{}])[0] or {}).get("src"),
             }
         except Exception:
             logger.debug("Failed to parse Upway product", exc_info=True)

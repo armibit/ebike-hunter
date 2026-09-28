@@ -165,6 +165,8 @@ class Database:
             cursor.execute("ALTER TABLE listings ADD COLUMN ai_analyzed_at TIMESTAMP")
         if "is_favorite" not in columns:
             cursor.execute("ALTER TABLE listings ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
+        if "image_url" not in columns:
+            cursor.execute("ALTER TABLE listings ADD COLUMN image_url TEXT")
         if "status_locked" not in columns:
             cursor.execute("ALTER TABLE listings ADD COLUMN status_locked INTEGER NOT NULL DEFAULT 0")
             # Older DBs: a manual "Scarta" is recognizable by its reason; lock
@@ -217,8 +219,8 @@ class Database:
                 id, portal, portal_id, url, title, description_raw, seller_id, seller_name,
                 price_raw, currency, price_chf, price_eur, location_raw, location_normalized,
                 region, latitude, longitude, distance_km, status, rejection_reason,
-                dedupe_signature, image_phash, first_seen_at, last_seen_at, last_checked_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                dedupe_signature, image_phash, image_url, first_seen_at, last_seen_at, last_checked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 listing_id, portal, portal_id, item["url"], item["title"],
                 item.get("description_raw", ""), item.get("seller_id"), item.get("seller_name"),
@@ -226,7 +228,7 @@ class Database:
                 item.get("location_raw", ""), item.get("location_normalized", ""),
                 item.get("region", ""), item.get("latitude"), item.get("longitude"),
                 item.get("distance_km"), item.get("status", "NEW"), item.get("rejection_reason"),
-                item.get("dedupe_signature", ""), item.get("image_phash"), now, now, now
+                item.get("dedupe_signature", ""), item.get("image_phash"), item.get("image_url"), now, now, now
             ))
             cursor.execute("""
             INSERT INTO listing_snapshots (listing_id, price_raw, currency, price_chf, status, captured_at)
@@ -273,14 +275,15 @@ class Database:
                 title = ?, description_raw = ?, price_raw = ?, currency = ?,
                 price_chf = ?, price_eur = ?, location_raw = ?, location_normalized = ?,
                 region = ?, latitude = ?, longitude = ?, distance_km = ?,
-                status = ?, rejection_reason = ?, dedupe_signature = ?, last_seen_at = ?, last_checked_at = ?
+                status = ?, rejection_reason = ?, dedupe_signature = ?, last_seen_at = ?, last_checked_at = ?,
+                image_url = COALESCE(?, image_url)
             WHERE id = ?
             """, (
                 item["title"], item.get("description_raw", ""), item["price_raw"], item["currency"],
                 item["price_chf"], item.get("price_eur", item["price_chf"]), item.get("location_raw", ""),
                 item.get("location_normalized", ""), item.get("region", ""), item.get("latitude"),
                 item.get("longitude"), item.get("distance_km"), new_status, rejection_reason,
-                item.get("dedupe_signature", ""), now, now, listing_id
+                item.get("dedupe_signature", ""), now, now, item.get("image_url"), listing_id
             ))
 
         self.conn.commit()
