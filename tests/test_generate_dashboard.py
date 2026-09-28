@@ -21,12 +21,11 @@ def test_format_price_shows_original_currency_not_converted():
     # CHF listing: no conversion hint needed, it's already the "home" currency.
     assert _format_price({"price_raw": 2100.0, "currency": "CHF", "price_chf": 2100.0}) == "2100 CHF"
 
-    # EUR listing: must show the original EUR amount as the primary value,
-    # not the silently-converted CHF figure — with a small CHF hint since
-    # the budget filters are CHF-based.
+    # EUR listing: shown exactly as posted, with no converted CHF figure —
+    # the "~CHF" hint was dropped on purpose in 879a60e ("without
+    # conversions"); scoring/filtering still use price_chf internally.
     text = _format_price({"price_raw": 2400.0, "currency": "EUR", "price_chf": 2280.0})
-    assert text.startswith("2400 EUR")
-    assert "2280 CHF" in text
+    assert text == "2400 EUR"
 
     print("✅ Price display (original currency) test passed")
 

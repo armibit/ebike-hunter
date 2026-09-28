@@ -23,12 +23,13 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
 import yaml
-from flask import Flask, jsonify, request
+from flask import Flask, abort, jsonify, request
 
 from db.database import Database
 from pipeline.corrections import apply_spec_correction
@@ -50,6 +51,36 @@ DB_PATH = config["app"]["db_path"]
 scorer = ScoringEngine(config)
 
 app = Flask(__name__)
+
+# Hostnames this local server answers to. Anything else in the Host header is
+# a DNS-rebinding attempt (a public name pointed at 127.0.0.1).
+_ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost"}
+
+
+def _hostname(value: str) -> str:
+    """'localhost:5050' -> 'localhost', 'http://127.0.0.1:5050' -> '127.0.0.1'."""
+    netloc = urlsplit(value).netloc if "://" in value else value
+    return netloc.rsplit(":", 1)[0].strip("[]").lower()
+
+
+@app.before_request
+def _block_cross_site_requests():
+    """Every other website open in the same browser can send requests to
+    http://127.0.0.1:5050 — without this, any page could POST to /delete or
+    /specs (get_json(force=True) even accepts a text/plain body, which needs
+    no CORS preflight). Browsers always attach Origin to cross-origin POSTs,
+    and Sec-Fetch-Site on modern ones; the dashboard's own fetch() calls are
+    same-origin and pass."""
+    if _hostname(request.host or "") not in _ALLOWED_HOSTNAMES:
+        abort(403)
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    if request.headers.get("Sec-Fetch-Site") == "cross-site":
+        abort(403)
+    origin = request.headers.get("Origin")
+    if origin is not None and _hostname(origin) not in _ALLOWED_HOSTNAMES:
+        abort(403)
+    return None
 
 
 @app.route("/")
@@ -162,7 +193,15 @@ def _find_app_mode_browser() -> Optional[str]:
     return None
 
 
-APP_PROFILE_DIR = Path.home() / "Library" / "Application Support" / "EbikeHunterAppMode"
+def _app_profile_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "EbikeHunterAppMode"
+    if sys.platform.startswith("win"):
+        return Path.home() / "AppData" / "Local" / "EbikeHunterAppMode"
+    return Path.home() / ".config" / "EbikeHunterAppMode"
+
+
+APP_PROFILE_DIR = _app_profile_dir()
 
 
 def _open_app_window():

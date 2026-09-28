@@ -97,10 +97,30 @@ def test_ticino_word_boundary_false_positive():
     print("✅ Ticino word-boundary false-positive test passed")
 
 
+def test_city_match_is_whole_word_only():
+    from pipeline.normalizer import KNOWN_COORDINATES
+    norm = Normalizer()
+
+    # "Verbania" contains "erba" — it used to get Erba's coordinates.
+    lat, lon, dist, region = norm.resolve_location("Verbania (VB)")
+    assert (lat, lon) != KNOWN_COORDINATES["erba"]
+
+    # "Rhodes"/"Comologno" contain "rho"/"como" as plain substrings.
+    assert norm.resolve_location("Comologno")[:2] != KNOWN_COORDINATES["como"]
+    assert norm.resolve_location("Rhodes")[:2] != KNOWN_COORDINATES["rho"]
+
+    # Real whole-word matches, accents included, still resolve.
+    assert norm.resolve_location("Erba (CO)")[:2] == KNOWN_COORDINATES["erba"]
+    assert norm.resolve_location("Cantù (CO)")[:2] == KNOWN_COORDINATES["cantù"]
+
+    print("✅ Whole-word city match test passed")
+
+
 if __name__ == "__main__":
     test_currency_normalization()
     test_haversine_distance()
     test_location_resolution()
     test_unknown_currency_returns_raw()
     test_ticino_word_boundary_false_positive()
+    test_city_match_is_whole_word_only()
     print("\n✅ All normalizer tests passed!")

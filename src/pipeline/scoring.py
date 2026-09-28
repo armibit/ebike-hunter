@@ -124,7 +124,11 @@ class ScoringEngine:
         # It still passes the min-torque filter — a human can check photos —
         # but it must not outrank a listing with a genuinely identified one.
         motor_nm = specs.get("motor_torque_nm") or 0
-        if specs.get("motor_verified") is False:
+        # Specs read back from SQLite carry 0/1, not False/True — `is False`
+        # would silently give an unverified motor full tier credit on every
+        # rescore from the DB. None (never set) is not "unverified".
+        motor_verified = specs.get("motor_verified")
+        if motor_verified is not None and not motor_verified:
             score += 8
         elif motor_nm >= 90:
             score += 30
@@ -212,10 +216,11 @@ class ScoringEngine:
         score = 0.0
 
         # Frame size (max 60 points)
-        frame_size = specs.get("frame_size", "unknown")
+        # Normalized so a hand-typed "m" / " S2 " counts like the parser's "M".
+        frame_size = "".join(str(specs.get("frame_size") or "unknown").split()).upper()
         if frame_size in ("M", "S2", "S3"):
             score += 60
-        elif frame_size == "unknown":
+        elif frame_size == "UNKNOWN":
             score += 30  # Neutral
 
         # Travel range (max 40 points)

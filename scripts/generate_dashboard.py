@@ -27,6 +27,14 @@ def _attr(value) -> str:
     )
 
 
+def _safe_url(url) -> str:
+    """Escaped href for a scraped listing URL — only http(s), so a
+    `javascript:` URL from a portal can never become a clickable script."""
+    if not url or not re.match(r"^https?://", str(url).strip(), re.IGNORECASE):
+        return "#"
+    return _attr(str(url).strip())
+
+
 def _format_price(bike: dict, previous_price: str = None) -> str:
     """Show the price in the currency the listing was actually posted in,
     without conversions. Scoring/filtering still use price_chf internally."""
@@ -232,7 +240,7 @@ def _build_detail_html(bike: dict, history: list) -> str:
         '<div class="detail-topbar">'
         f'<span class="detail-price">{_attr(_format_price(bike))}</span>'
         f'<span class="score {_score_class(total)}">{total:.0f}</span>'
-        f'<a href="{_attr(bike.get("url"))}" target="_blank">Apri annuncio originale ↗</a>'
+        f'<a href="{_safe_url(bike.get("url"))}" target="_blank" rel="noopener noreferrer">Apri annuncio originale ↗</a>'
         "</div>"
         f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}</p>'
         "</div>"
@@ -618,8 +626,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         analysis = _combine_analysis(bike) or "In attesa di valutazione"
         fav_prefix = "⭐ " if bike.get("is_favorite") else ""
         html += f"""            <div class="top-item">
-                <div><span class="top-rank">{idx}</span>{fav_prefix}<a href="{bike['url']}" target="_blank">{bike['title']}</a> <span class="top-portal">({bike['portal']})</span></div>
-                <div class="top-analysis">{analysis}</div>
+                <div><span class="top-rank">{idx}</span>{fav_prefix}<a href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{_attr(bike['title'])}</a> <span class="top-portal">({_attr(bike['portal'])})</span></div>
+                <div class="top-analysis">{_attr(analysis)}</div>
                 <div class="top-meta">{score_val:.1f} · {_format_price(bike)} · {bike['distance_km']:.1f} km</div>
             </div>
 """
@@ -708,14 +716,17 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             "active"
         )
 
-        motor_text = f"{bike['motor_brand']}" if bike["motor_brand"] else "N/A"
+        # motor_text/frame_text are HTML-escaped here once: they go into both
+        # cell content and data-* attributes, and can come from AI-read or
+        # hand-typed corrections, not just the parser's fixed vocabulary.
+        motor_text = _attr(bike["motor_brand"]) if bike["motor_brand"] else "N/A"
         if bike.get("motor_torque_nm"):
             motor_text += f" {bike['motor_torque_nm']:.0f}Nm"
         if bike.get("motor_verified") == 0:
             motor_text += " ⚠️ da verificare"
 
         battery_text = f"{bike['battery_capacity_wh']:.0f}Wh" if bike["battery_capacity_wh"] else "N/A"
-        frame_text = bike["frame_size"] or "N/A"
+        frame_text = _attr(bike["frame_size"]) or "N/A"
         history = history_by_id.get(bike["id"], [])
         previous_price = _get_previous_price(history) if status == "PRICE_DROP" else None
         price_text = _format_price(bike, previous_price)
@@ -759,8 +770,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-score="{bike.get('ranking_score') if bike.get('ranking_score') is not None else score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}">{score_val:.1f}</span></td>
                     <td>
-                        <a class="title-link" href="{bike['url']}" target="_blank">{fav_prefix}{bike['title'][:70]}</a>
-                        <div class="title-meta">{new_icon}{ai_icon}{bike['portal']} · {meta_text}</div>
+                        <a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
+                        <div class="title-meta">{new_icon}{ai_icon}{_attr(bike['portal'])} · {meta_text}</div>
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>
@@ -783,6 +794,22 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     <div id="detailTemplates" style="display: none;">""" + "".join(row_templates) + """</div>
 
     <script>
+        // Anything that came from a portal, the AI or a text field must go
+        // through these before being interpolated into innerHTML.
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function safeUrl(url) {
+            const s = String(url ?? '').trim();
+            return /^https?:[/][/]/i.test(s) ? escapeHtml(s) : '#';
+        }
+
         // Modal functions
         let currentListingId = null;
 
@@ -963,7 +990,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
             let inputHtml = '';
             if (field === 'battery') {
-                const val = row.getAttribute('data-edit-battery') || '';
+                const val = escapeHtml(row.getAttribute('data-edit-battery') || '');
                 inputHtml = `<input type="number" class="cell-edit-input" id="cellEdit_battery" value="${val}">`;
             } else if (field === 'suspension') {
                 const val = row.getAttribute('data-edit-suspension') || '';
@@ -971,12 +998,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     SUSPENSION_OPTIONS.map(([v, l]) => `<option value="${v}"${v === val ? ' selected' : ''}>${l}</option>`).join('') +
                     '</select>';
             } else if (field === 'frame') {
-                const val = row.getAttribute('data-edit-frame') || '';
+                const val = escapeHtml(row.getAttribute('data-edit-frame') || '');
                 inputHtml = `<input type="text" class="cell-edit-input" id="cellEdit_frame" value="${val}">`;
             } else if (field === 'motor') {
-                const brand = row.getAttribute('data-edit-motor-brand') || '';
-                const model = row.getAttribute('data-edit-motor-model') || '';
-                const torque = row.getAttribute('data-edit-motor-torque') || '';
+                const brand = escapeHtml(row.getAttribute('data-edit-motor-brand') || '');
+                const model = escapeHtml(row.getAttribute('data-edit-motor-model') || '');
+                const torque = escapeHtml(row.getAttribute('data-edit-motor-torque') || '');
                 inputHtml =
                     `<input type="text" class="cell-edit-input" id="cellEdit_motor_brand" placeholder="Marca" value="${brand}">` +
                     `<input type="text" class="cell-edit-input" id="cellEdit_motor_model" placeholder="Modello" value="${model}">` +
@@ -1052,7 +1079,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     row.setAttribute('data-motor', newValue);
                 }
 
-                td.innerHTML = newValue;
+                td.textContent = newValue;
                 td.classList.remove('editing');
             } catch (e) {
                 alert('Salvataggio non riuscito. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
@@ -1122,9 +1149,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 const item = document.createElement('div');
                 item.className = 'top-item';
                 const rankBadge = idx + 1;
-                const link = deal.url || '#';
-                const title = deal.title || 'Unknown';
-                const portal = deal.portal || 'unknown';
+                const link = safeUrl(deal.url);
+                const title = escapeHtml(deal.title || 'Unknown');
+                const portal = escapeHtml(deal.portal || 'unknown');
+                const analysisText = escapeHtml(deal.user_analysis || 'Nessuna analisi disponibile');
                 const score = deal.ranking_score ? deal.ranking_score.toFixed(1) : deal.score_total?.toFixed(1) || 'N/A';
                 const price = deal.price_raw ? `${deal.price_raw.toFixed(0)} ${deal.currency || 'CHF'}` : `${deal.price_chf?.toFixed(0) || 'N/A'} CHF`;
                 const distance = deal.distance_km ? deal.distance_km.toFixed(1) : 'N/A';
@@ -1132,11 +1160,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 item.innerHTML = `
                     <div>
                         <span class="top-rank">${rankBadge}</span>
-                        <a href="${link}" target="_blank">${title}</a>
+                        <a href="${link}" target="_blank" rel="noopener noreferrer">${title}</a>
                         <span class="top-portal">(${portal})</span>
                     </div>
-                    <div class="top-analysis">${deal.user_analysis || 'Nessuna analisi disponibile'}</div>
-                    <div class="top-meta">${score} · ${price} · ${distance} km</div>
+                    <div class="top-analysis">${analysisText}</div>
+                    <div class="top-meta">${score} · ${escapeHtml(price)} · ${distance} km</div>
                 `;
 
                 topContainer.appendChild(item);

@@ -1,0 +1,73 @@
+import sys
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from connectors.base import MAX_RETRY_AFTER_SECONDS, _retry_after_seconds
+from pipeline.filters import hard_filter_reasons
+
+CONFIG = {
+    "buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}},
+    "hardware_requirements": {"min_motor_torque_nm": 60, "min_battery_wh": 500},
+}
+
+GOOD_SPECS = {
+    "suspension_type": "full_suspension", "motor_torque_nm": 85, "battery_capacity_wh": 625,
+    "frame_size": "M", "has_red_flag": False, "red_flag_details": [],
+}
+
+
+def test_good_listing_passes():
+    assert hard_filter_reasons(2000, GOOD_SPECS, CONFIG) == []
+    print("✅ Hard filters: good listing passes")
+
+
+def test_each_hard_filter_fires():
+    cases = [
+        (0, {}, "Invalid price"),
+        (3500, {}, "Over budget"),
+        (500, {}, "Suspicious price"),
+        (2000, {"suspension_type": "hardtail"}, "Hardtail"),
+        (2000, {"excluded_category": "fat bike"}, "Wrong category (fat bike)"),
+        (2000, {"motor_torque_nm": None}, "No motor detected"),
+        (2000, {"motor_torque_nm": 50}, "Weak motor (50nm < 60nm)"),
+        (2000, {"battery_capacity_wh": 400.0}, "Small battery (400Wh < 500Wh)"),
+        (2000, {"frame_size": "disallowed"}, "Wrong size"),
+        (2000, {"has_red_flag": True, "red_flag_details": ["senza caricatore"]}, "Red flags: senza caricatore"),
+    ]
+    for price, spec_changes, expected in cases:
+        reasons = hard_filter_reasons(price, {**GOOD_SPECS, **spec_changes}, CONFIG)
+        assert any(expected in r for r in reasons), f"{expected!r} not in {reasons!r}"
+    print("✅ Hard filters: every filter fires")
+
+
+def test_unknown_values_are_allowed():
+    # Unknown suspension, frame size or battery are not reasons to reject.
+    specs = {**GOOD_SPECS, "suspension_type": "unknown", "frame_size": "unknown", "battery_capacity_wh": None}
+    assert hard_filter_reasons(2000, specs, CONFIG) == []
+    print("✅ Hard filters: unknown values allowed")
+
+
+def test_retry_after_parsing():
+    assert _retry_after_seconds(None) == 60
+    assert _retry_after_seconds("") == 60
+    assert _retry_after_seconds("30") == 30
+    assert _retry_after_seconds("not a date") == 60
+    # HTTP-date form used to crash int() and abort the whole portal scan.
+    future = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120), usegmt=True)
+    assert 100 <= _retry_after_seconds(future) <= 120
+    past = format_datetime(datetime.now(timezone.utc) - timedelta(seconds=120), usegmt=True)
+    assert _retry_after_seconds(past) == 0
+    # Capped so one portal can't park its thread for hours.
+    assert _retry_after_seconds("86400") == MAX_RETRY_AFTER_SECONDS
+    print("✅ Retry-After parsing test passed")
+
+
+if __name__ == "__main__":
+    test_good_listing_passes()
+    test_each_hard_filter_fires()
+    test_unknown_values_are_allowed()
+    test_retry_after_parsing()
+    print("\n✅ All filter tests passed!")

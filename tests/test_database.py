@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from db.database import Database
+from db.database import Database, MANUAL_REJECT_REASON
 
 
 def test_database_init():
@@ -700,6 +700,142 @@ def test_toggle_favorite():
     print("✅ Toggle favorite test passed")
 
 
+def _rescan_listing(**overrides):
+    base = {
+        "portal": "tutti", "portal_id": "88888", "url": "https://tutti.ch/rescan",
+        "title": "Rescanned bike", "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 2100, "distance_km": 5.0, "status": "ACTIVE",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_manual_reject_survives_rescan():
+    # Regression: every scan used to write status=ACTIVE for a listing that
+    # passes the hard filters, silently undoing the user's own "Scarta".
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+
+    listing_id, _, _ = db.upsert_listing(_rescan_listing())
+    db.set_manual_status(listing_id, "REJECTED")
+
+    # Next scan: still on the portal, now even cheaper.
+    _, _, is_price_drop = db.upsert_listing(_rescan_listing(price_raw=1800, price_chf=1800))
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status, rejection_reason, price_chf FROM listings WHERE id = ?", (listing_id,))
+    row = cursor.fetchone()
+    assert row["status"] == "REJECTED"
+    assert row["rejection_reason"] == MANUAL_REJECT_REASON
+    assert row["price_chf"] == 1800, "price/text still refresh on a locked listing"
+    assert is_price_drop is False
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Manual reject survives rescan test passed")
+
+
+def test_manual_sold_survives_rescan_and_restore_unlocks():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+
+    listing_id, _, _ = db.upsert_listing(_rescan_listing())
+    db.set_manual_status(listing_id, "SOLD")
+    db.upsert_listing(_rescan_listing())
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status FROM listings WHERE id = ?", (listing_id,))
+    assert cursor.fetchone()["status"] == "SOLD"
+
+    # "Ripristina attiva" hands the listing back to the scanner.
+    db.set_manual_status(listing_id, "ACTIVE")
+    db.upsert_listing(_rescan_listing(status="REJECTED", rejection_reason="Over budget"))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", (listing_id,))
+    row = cursor.fetchone()
+    assert row["status"] == "REJECTED"
+    assert row["rejection_reason"] == "Over budget"
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Manual sold survives rescan / restore unlocks test passed")
+
+
+def test_automatic_reject_with_reason_is_not_locked():
+    # A REJECTED set with a reason is the correction path's automatic
+    # re-check, not the user's call — a later scan may still revive it.
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+
+    listing_id, _, _ = db.upsert_listing(_rescan_listing())
+    db.set_manual_status(listing_id, "REJECTED", reason="Batteria troppo piccola dopo correzione manuale")
+    db.upsert_listing(_rescan_listing())
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status FROM listings WHERE id = ?", (listing_id,))
+    assert cursor.fetchone()["status"] == "ACTIVE"
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Automatic reject not locked test passed")
+
+
+def test_spec_overrides_roundtrip_and_clear():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+
+    listing_id, _, _ = db.upsert_listing(_rescan_listing())
+    assert db.get_spec_overrides(listing_id) == {}
+
+    db.save_spec_overrides(listing_id, {"motor_brand": "Bosch", "motor_torque_nm": 85.0})
+    assert db.get_spec_overrides(listing_id) == {"motor_brand": "Bosch", "motor_torque_nm": 85.0}
+
+    # Clearing a field ("I don't know") drops the override instead of pinning None.
+    db.save_spec_overrides(listing_id, {"motor_brand": None, "motor_torque_nm": 90})
+    assert db.get_spec_overrides(listing_id) == {"motor_torque_nm": 90}
+
+    # Deleting the listing removes its overrides too (FK cascade).
+    db.delete_listing(listing_id)
+    assert db.get_spec_overrides(listing_id) == {}
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Spec overrides roundtrip test passed")
+
+
+def test_migration_locks_legacy_manual_rejects():
+    # A DB created before status_locked existed: the manual "Scarta" rows
+    # (recognizable by their reason) must come out locked.
+    import sqlite3
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+    manual_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
+    auto_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
+    db.set_manual_status(manual_id, "REJECTED")
+    db.set_manual_status(auto_id, "REJECTED", reason="Over budget")
+    db.close()
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("ALTER TABLE listings DROP COLUMN status_locked")
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT id, status_locked FROM listings")
+    locked = {row["id"]: row["status_locked"] for row in cursor.fetchall()}
+    assert locked[manual_id] == 1
+    assert locked[auto_id] == 0
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Legacy manual-reject migration test passed")
+
+
 if __name__ == "__main__":
     test_database_init()
     test_listing_insert()
@@ -718,4 +854,9 @@ if __name__ == "__main__":
     test_set_manual_status_reject_and_restore()
     test_get_listing_with_specs()
     test_toggle_favorite()
+    test_manual_reject_survives_rescan()
+    test_manual_sold_survives_rescan_and_restore_unlocks()
+    test_automatic_reject_with_reason_is_not_locked()
+    test_spec_overrides_roundtrip_and_clear()
+    test_migration_locks_legacy_manual_rejects()
     print("\n✅ All database tests passed!")

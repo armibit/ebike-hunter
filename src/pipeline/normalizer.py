@@ -80,7 +80,9 @@ class Normalizer:
 
         # Check known city coordinates
         for city, coords in KNOWN_COORDINATES.items():
-            if city in loc_lower:
+            # Whole words only — a plain substring test put "Verbania" at
+            # Erba and would match "rho"/"como" inside unrelated names.
+            if re.search(rf"\b{re.escape(city)}\b", loc_lower):
                 lat, lon = coords
                 dist = self.haversine_km(lat, lon)
                 if dist <= 50.0 and (
@@ -95,7 +97,7 @@ class Normalizer:
         # Regional heuristics
         if any(t in loc_lower for t in ["ticino", "lugano", "mendrisiotto"]) or re.search(r"\bti\b", loc_lower):
             return LUGANO_LAT, LUGANO_LON, 15.0, "ticino"
-        if any(l in loc_lower for l in ["como", "varese", "lecco", "monza", "milano", "lombardia"]):
+        if re.search(r"\b(?:como|varese|lecco|monza|milano|lombardia)\b", loc_lower):
             return 45.8081, 9.0852, 35.0, "lombardia"
 
         return None, None, 150.0, "other"

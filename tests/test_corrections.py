@@ -318,6 +318,164 @@ def test_apply_spec_correction_does_not_restore_manually_rejected_listing():
     print("✅ apply_spec_correction leaves a manually rejected listing alone")
 
 
+def _fresh_db_with_auto_rejected(rejection_reason, price_chf=2000, **spec_overrides):
+    db_path = tempfile.mktemp(suffix=".db")
+    db = Database(db_path)
+    db.upsert_listing({
+        "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
+        "price_raw": price_chf, "currency": "CHF", "price_chf": price_chf, "price_eur": price_chf,
+        "distance_km": 10, "status": "REJECTED", "rejection_reason": rejection_reason,
+    })
+    specs = {
+        "motor_brand": None, "motor_torque_nm": None, "motor_verified": None,
+        "battery_capacity_wh": 625, "frame_size": "unknown",
+    }
+    specs.update(spec_overrides)
+    db.save_specifications("x_1", specs)
+    return db_path, db
+
+
+def _status_and_reason(db):
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    row = cursor.fetchone()
+    return row["status"], row["rejection_reason"]
+
+
+def test_ai_motor_does_not_restore_over_budget_listing():
+    # Regression: the restore check only re-ran the spec filters, so an
+    # AI-read motor brought back a listing rejected for being over budget.
+    db_path, db = _fresh_db_with_auto_rejected(
+        "Over budget (3500 > 3000 CHF); No motor detected (likely not an e-bike)", price_chf=3500,
+    )
+    apply_spec_correction(db, ScoringEngine(CONFIG), "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85}, config=CONFIG)
+
+    status, reason = _status_and_reason(db)
+    assert status == "REJECTED"
+    assert "Over budget" in reason
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI motor correction does not restore over-budget listing")
+
+
+def test_ai_motor_does_not_restore_red_flag_listing():
+    db_path, db = _fresh_db_with_auto_rejected(
+        "No motor detected (likely not an e-bike); Red flags: senza caricatore",
+        has_red_flag=True, red_flag_details=["senza caricatore"],
+    )
+    apply_spec_correction(db, ScoringEngine(CONFIG), "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85}, config=CONFIG)
+
+    status, reason = _status_and_reason(db)
+    assert status == "REJECTED"
+    assert "Red flags" in reason
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI motor correction does not restore red-flag listing")
+
+
+def test_ai_motor_does_not_restore_wrong_category_listing():
+    # excluded_category isn't stored in specifications — only the scan's
+    # reject reason remembers it, so that's what must block the restore.
+    db_path, db = _fresh_db_with_auto_rejected(
+        "Wrong category (fat bike); No motor detected (likely not an e-bike)",
+    )
+    apply_spec_correction(db, ScoringEngine(CONFIG), "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85}, config=CONFIG)
+
+    status, reason = _status_and_reason(db)
+    assert status == "REJECTED"
+    assert "Wrong category" in reason
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI motor correction does not restore wrong-category listing")
+
+
+def test_restore_uses_stored_battery_not_only_corrected_fields():
+    # The parser found a 400Wh battery (below the 500Wh minimum) — a motor
+    # correction alone must not bring the listing back.
+    db_path, db = _fresh_db_with_auto_rejected(
+        "No motor detected (likely not an e-bike); Small battery (400Wh < 500Wh)",
+        battery_capacity_wh=400,
+    )
+    apply_spec_correction(db, ScoringEngine(CONFIG), "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85}, config=CONFIG)
+
+    status, reason = _status_and_reason(db)
+    assert status == "REJECTED"
+    assert "400" in reason
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Restore re-checks the stored battery")
+
+
+def test_ai_frame_size_outside_targets_does_not_restore():
+    # The restore path used to reject only the parser's literal "disallowed"
+    # marker, so an explicit "XL" read by the AI passed.
+    db_path, db = _fresh_db_with_auto_rejected("No motor detected (likely not an e-bike)")
+    apply_spec_correction(
+        db, ScoringEngine(CONFIG), "x_1",
+        {"motor_brand": "Bosch", "motor_torque_nm": 85, "frame_size": "XL"}, config=CONFIG,
+    )
+
+    status, reason = _status_and_reason(db)
+    assert status == "REJECTED"
+    assert "XL" in reason
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ AI frame size outside targets does not restore")
+
+
+def test_correction_never_changes_a_status_the_user_locked():
+    # Marked sold by hand, then a correction that would normally reject it:
+    # it's the user's call, so it stays SOLD.
+    db_path, db = _fresh_db_with_unverified_motor()
+    db.set_manual_status("x_1", "SOLD")
+
+    apply_spec_correction(db, ScoringEngine(CONFIG), "x_1", {"frame_size": "XL"}, config=CONFIG)
+
+    status, _ = _status_and_reason(db)
+    assert status == "SOLD"
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Correction leaves a user-locked status alone")
+
+
+def test_correction_is_stored_as_override_and_cleared_by_null():
+    db_path, db = _fresh_db_with_unverified_motor()
+    scorer = ScoringEngine(CONFIG)
+
+    apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85, "seller_name": "x"})
+    assert db.get_spec_overrides("x_1") == {"motor_brand": "Bosch", "motor_torque_nm": 85}
+
+    apply_spec_correction(db, scorer, "x_1", {"motor_brand": None})
+    assert db.get_spec_overrides("x_1") == {"motor_torque_nm": 85}
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Corrections are persisted as overrides")
+
+
+def test_rescore_from_db_keeps_unverified_motor_penalty():
+    # Regression: specs read back from SQLite carry motor_verified=0, and
+    # scoring tested `is False`, so correcting an unrelated field (battery)
+    # silently upgraded an unverified motor to full tier credit.
+    db_path, db = _fresh_db_with_unverified_motor()
+    scorer = ScoringEngine(CONFIG)
+
+    unverified = apply_spec_correction(db, scorer, "x_1", {"battery_capacity_wh": 625})
+    verified = apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 60})
+
+    assert verified["score_component_quality"] > unverified["score_component_quality"]
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Rescore from DB keeps the unverified-motor penalty")
+
+
 if __name__ == "__main__":
     test_apply_spec_correction_marks_verified_and_rescores_higher()
     test_apply_spec_correction_regenerates_user_analysis_text()
@@ -333,4 +491,12 @@ if __name__ == "__main__":
     test_apply_spec_correction_restores_auto_rejected_listing_when_criteria_now_met()
     test_apply_spec_correction_keeps_auto_rejected_listing_rejected_if_still_failing()
     test_apply_spec_correction_does_not_restore_manually_rejected_listing()
+    test_ai_motor_does_not_restore_over_budget_listing()
+    test_ai_motor_does_not_restore_red_flag_listing()
+    test_ai_motor_does_not_restore_wrong_category_listing()
+    test_restore_uses_stored_battery_not_only_corrected_fields()
+    test_ai_frame_size_outside_targets_does_not_restore()
+    test_correction_never_changes_a_status_the_user_locked()
+    test_correction_is_stored_as_override_and_cleared_by_null()
+    test_rescore_from_db_keeps_unverified_motor_penalty()
     print("\n✅ All corrections tests passed!")

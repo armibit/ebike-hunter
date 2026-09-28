@@ -155,6 +155,84 @@ def test_specs_correction_unknown_listing_returns_404():
     print("✅ Server unknown-listing 404 test passed")
 
 
+def test_cross_site_post_is_refused():
+    # Any other page open in the browser can POST to 127.0.0.1:5050 — that
+    # must not be able to delete or edit listings.
+    db_path = _fresh_db_with_listing()
+    client = server_module.app.test_client()
+
+    resp = client.post("/api/listings/x_1/delete", headers={"Origin": "https://evil.example"})
+    assert resp.status_code == 403
+    resp = client.post("/api/listings/x_1/delete", headers={"Sec-Fetch-Site": "cross-site"})
+    assert resp.status_code == 403
+    # text/plain body = no CORS preflight; get_json(force=True) would accept it.
+    resp = client.post(
+        "/api/listings/x_1/specs", data='{"frame_size": "XL"}',
+        headers={"Origin": "null", "Content-Type": "text/plain"},
+    )
+    assert resp.status_code == 403
+
+    db = Database(db_path)
+    row = db.get_listing_with_specs("x_1")
+    assert row is not None, "the listing must survive the cross-site delete"
+    assert row["frame_size"] == "M"
+    db.close()
+
+    # The dashboard's own same-origin requests still work.
+    resp = client.post(
+        "/api/listings/x_1/favorite",
+        headers={"Origin": "http://127.0.0.1:5050", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert resp.status_code == 200
+
+    Path(db_path).unlink()
+    print("✅ Server cross-site POST refusal test passed")
+
+
+def test_foreign_host_header_is_refused():
+    # DNS rebinding: a public hostname resolving to 127.0.0.1.
+    db_path = _fresh_db_with_listing()
+    client = server_module.app.test_client()
+
+    assert client.get("/", headers={"Host": "evil.example:5050"}).status_code == 403
+    assert client.get("/", headers={"Host": "127.0.0.1:5050"}).status_code == 200
+
+    Path(db_path).unlink()
+    print("✅ Server foreign Host refusal test passed")
+
+
+def test_scraped_title_and_url_are_escaped_in_dashboard():
+    db_path = tempfile.mktemp(suffix=".db")
+    db = Database(db_path)
+    db.upsert_listing({
+        "portal": "x", "portal_id": "1", "url": "javascript:alert(1)",
+        "title": '<img src=x onerror="alert(1)">', "price_raw": 2000, "currency": "CHF",
+        "price_chf": 2000, "price_eur": 1900, "distance_km": 10.0, "status": "ACTIVE",
+    })
+    db.save_specifications("x_1", {
+        "motor_brand": '"><script>alert(2)</script>', "motor_torque_nm": 85,
+        "battery_capacity_wh": 625, "frame_size": "<b>M</b>",
+    })
+    db.save_score("x_1", {
+        "score_total": 90.0, "score_price_value": 90.0, "score_component_quality": 90.0,
+        "score_condition_mileage": 90.0, "score_location_proximity": 90.0,
+        "score_fit_geometry": 90.0, "is_deal_target": True, "breakdown": {},
+    })
+    db.close()
+    server_module.DB_PATH = db_path
+
+    page = server_module.app.test_client().get("/").data.decode()
+
+    assert '<img src=x onerror' not in page
+    assert '<script>alert(2)</script>' not in page
+    assert '<b>M</b>' not in page
+    assert 'href="javascript:' not in page
+    assert '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;' in page
+
+    Path(db_path).unlink()
+    print("✅ Dashboard escaping test passed")
+
+
 if __name__ == "__main__":
     test_index_lists_active_listing()
     test_reject_keeps_listing_visible_greyed_then_restore_active()
@@ -163,4 +241,7 @@ if __name__ == "__main__":
     test_specs_correction_unknown_listing_returns_404()
     test_favorite_toggle_persists_and_survives_reload()
     test_favorite_unknown_listing_returns_404()
+    test_cross_site_post_is_refused()
+    test_foreign_host_header_is_refused()
+    test_scraped_title_and_url_are_escaped_in_dashboard()
     print("\n✅ All server tests passed!")

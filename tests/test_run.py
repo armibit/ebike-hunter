@@ -72,9 +72,145 @@ def test_generate_user_analysis_includes_red_flags():
     print("✅ generate_user_analysis red flags test passed")
 
 
+CONFIG = {
+    "buyer_profile": {
+        "budget": {"target_price": 2200, "hard_max_price": 3000},
+        "rider_specs": {"target_sizes": ["M", "S2", "S3"]},
+    },
+    "hardware_requirements": {"min_motor_torque_nm": 60, "min_battery_wh": 500},
+    "scoring_weights": {
+        "price_value": 0.35, "component_quality": 0.25, "condition_mileage": 0.15,
+        "location_proximity": 0.15, "fit_geometry": 0.10,
+    },
+}
+
+
+class _FakeParser:
+    """Stands in for RegexParser so a test controls exactly what "the
+    parser read" on each scan."""
+
+    def __init__(self, **specs):
+        self.specs = specs
+
+    def parse(self, title, description):
+        return {
+            "suspension_type": "full_suspension", "motor_brand": None, "motor_model": None,
+            "motor_torque_nm": None, "motor_verified": None, "battery_capacity_wh": 625,
+            "frame_size": "M", "has_red_flag": False, "red_flag_details": [],
+            **self.specs,
+        }
+
+
+def _raw_listing(**overrides):
+    base = {
+        "portal": "tutti", "portal_id": "42", "url": "https://tutti.ch/42", "title": "Cube Stereo Hybrid",
+        "description_raw": "Bici in ottime condizioni", "price_raw": 2000, "currency": "CHF",
+        "location_raw": "Lugano",
+    }
+    base.update(overrides)
+    return base
+
+
+def _process(db, parser):
+    from pipeline.normalizer import Normalizer
+    from pipeline.scoring import ScoringEngine
+    return run.process_listing(_raw_listing(), parser, Normalizer(), ScoringEngine(CONFIG), db, CONFIG)
+
+
+def _fresh_db():
+    import tempfile
+    from db.database import Database
+    db_path = tempfile.mktemp(suffix=".db")
+    return db_path, Database(db_path)
+
+
+def test_rescan_keeps_ai_corrected_motor_and_active_status():
+    # Regression: the AI read "Bosch CX" off a listing the parser had
+    # rejected for "no motor" and restored it; the next scan re-parsed it,
+    # rejected it again and — since it was already AI-analyzed — nothing
+    # ever looked at it again.
+    from pipeline.corrections import apply_spec_correction
+    from pipeline.scoring import ScoringEngine
+
+    db_path, db = _fresh_db()
+    parser = _FakeParser()  # parser never finds the motor
+
+    assert _process(db, parser) is False
+    apply_spec_correction(db, ScoringEngine(CONFIG), "tutti_42",
+                          {"motor_brand": "Bosch", "motor_torque_nm": 85}, config=CONFIG)
+    assert db.get_listing_with_specs("tutti_42")["status"] == "ACTIVE"
+
+    assert _process(db, parser) is True  # rescan
+
+    row = db.get_listing_with_specs("tutti_42")
+    assert row["status"] == "ACTIVE"
+    assert row["motor_brand"] == "Bosch"
+    assert row["motor_torque_nm"] == 85
+    assert row["motor_verified"] == 1
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Rescan keeps AI-corrected motor test passed")
+
+
+def test_rescan_rechecks_overridden_frame_size_strictly():
+    # A hand-set "XL" isn't the parser's "disallowed" marker — the scan must
+    # still reject it, as the correction itself did.
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+
+    assert _process(db, parser) is True
+    db.save_spec_overrides("tutti_42", {"frame_size": "XL"})
+
+    assert _process(db, parser) is False
+    row = db.get_listing_with_specs("tutti_42")
+    assert row["status"] == "REJECTED"
+    assert "XL" in row["rejection_reason"]
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Rescan re-checks overridden frame size test passed")
+
+
+def test_rescan_does_not_undo_manual_reject():
+    db_path, db = _fresh_db()
+    parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
+
+    assert _process(db, parser) is True
+    db.set_manual_status("tutti_42", "REJECTED")
+    _process(db, parser)
+
+    assert db.get_listing_with_specs("tutti_42")["status"] == "REJECTED"
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Rescan does not undo manual reject test passed")
+
+
+def test_rejected_listing_still_gets_its_parsed_specs_saved():
+    # The AI pass and the restore check both need what the parser found
+    # (battery, frame) for an auto-rejected listing, not NULLs.
+    db_path, db = _fresh_db()
+
+    assert _process(db, _FakeParser(battery_capacity_wh=400)) is False
+
+    row = db.get_listing_with_specs("tutti_42")
+    assert row["status"] == "REJECTED"
+    assert row["battery_capacity_wh"] == 400
+    assert row["frame_size"] == "M"
+
+    db.close()
+    Path(db_path).unlink()
+    print("✅ Rejected listing keeps parsed specs test passed")
+
+
 if __name__ == "__main__":
     test_generate_user_analysis_is_italian_not_english()
     test_generate_user_analysis_verdict_tiers()
     test_generate_user_analysis_does_not_duplicate_the_spec_grid()
     test_generate_user_analysis_includes_red_flags()
+    test_rescan_keeps_ai_corrected_motor_and_active_status()
+    test_rescan_rechecks_overridden_frame_size_strictly()
+    test_rescan_does_not_undo_manual_reject()
+    test_rejected_listing_still_gets_its_parsed_specs_saved()
     print("\n✅ All run.py tests passed!")
