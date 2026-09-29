@@ -128,9 +128,32 @@ def test_get_listing_details_reads_real_tab_not_related_products_carousel():
     assert "Bafang" not in details["description_raw"]
 
 
+def _stock_page(stock_span):
+    return f"""<html><body>
+<div class="box-product"><div class="box-product__availability">
+  <span class="unavailable"><strong>Non disponibile</strong></span></div></div>
+<div class="product-main__content"><p class="m-0">{stock_span}</p></div>
+</body></html>"""
+
+
+def test_availability_reads_own_stock_line_not_carousel_labels():
+    connector = _make_connector()
+    for span, expected in [
+        ('<span class="text-green">Disponibile. Consegna in 2 giorni.</span>', True),
+        ('<span class="text-red">Non disponibile.</span>', False),
+    ]:
+        connector.get = lambda url, html=_stock_page(span), **kw: type("R", (), {"text": html})()
+        assert connector.check_availability("1", "https://www.ridewill.it/p/it/x/1/") is expected
+
+    # No stock line found: no verdict, so the listing is left alone.
+    connector.get = lambda url, **kw: type("R", (), {"text": "<html><body>Non disponibile</body></html>"})()
+    assert connector.check_availability("1", "https://www.ridewill.it/p/it/x/1/") is None
+
+
 if __name__ == "__main__":
     test_parse_card_extracts_fields_offline()
     test_parse_card_handles_absolute_url_and_missing_price()
     test_parse_products_finds_all_cards_in_fragment()
     test_get_listing_details_reads_real_tab_not_related_products_carousel()
+    test_availability_reads_own_stock_line_not_carousel_labels()
     print("\n✅ All Ridewill connector tests passed!")

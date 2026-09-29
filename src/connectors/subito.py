@@ -238,7 +238,7 @@ class SubitoConnector(BaseConnector):
                 "description_raw": description
             }
         except Exception as e:
-            logger.exception("Error fetching details for %s: %s", listing_id, e)
+            logger.warning("Error fetching details for %s: %s", listing_id, e)
             return {}
 
     def _extract_json_ld_description(self, soup: BeautifulSoup) -> str:

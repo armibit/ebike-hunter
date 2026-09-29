@@ -171,7 +171,18 @@ class BaseConnector(ABC):
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
-            logger.exception("HTTP error fetching %s: %s", url, e)
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code in (404, 410):
+                # Listing removed by the seller: expected, not worth a traceback.
+                logger.warning("Listing gone (%s): %s", status_code, url)
+            elif status_code and status_code >= 500:
+                # Server error: transient issue, not a client problem.
+                logger.warning("Server error (%s) fetching %s", status_code, url)
+            else:
+                logger.exception("HTTP error fetching %s: %s", url, e)
+            raise
+        except requests.exceptions.Timeout as e:
+            logger.warning("Timeout fetching %s", url)
             raise
         except requests.exceptions.RequestException as e:
             logger.exception("Request failed for %s: %s", url, e)
@@ -196,7 +207,14 @@ class BaseConnector(ABC):
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
-            logger.exception("HTTP error posting to %s: %s", url, e)
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            if status_code and status_code >= 500:
+                logger.warning("Server error (%s) posting to %s", status_code, url)
+            else:
+                logger.exception("HTTP error posting to %s: %s", url, e)
+            raise
+        except requests.exceptions.Timeout as e:
+            logger.warning("Timeout posting to %s", url)
             raise
         except requests.exceptions.RequestException as e:
             logger.exception("Request failed for %s: %s", url, e)

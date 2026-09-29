@@ -169,7 +169,7 @@ class VelomarktConnector(BaseConnector):
 
             return {"description_raw": description}
         except Exception as e:
-            logger.exception("Error fetching Velomarkt details %s: %s", listing_id, e)
+            logger.warning("Error fetching Velomarkt details %s: %s", listing_id, e)
             return {}
 
     @staticmethod

@@ -228,7 +228,7 @@ class TuttiConnector(BaseConnector):
                         return {"description_raw": localization.get("body", "") or ""}
             return {}
         except Exception as e:
-            logger.exception("Error fetching details for %s: %s", listing_id, e)
+            logger.warning("Error fetching details for %s: %s", listing_id, e)
             return {}
 
     def search_all(self) -> List[Dict[str, Any]]:

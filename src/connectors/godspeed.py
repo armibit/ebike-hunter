@@ -92,7 +92,7 @@ class GodspeedConnector(BaseConnector):
             response = self.get(url)
             return {"description_raw": self._extract_description(response.text)}
         except Exception as e:
-            logger.exception("Error fetching Godspeed details %s: %s", listing_id, e)
+            logger.warning("Error fetching Godspeed details %s: %s", listing_id, e)
             return {}
 
     def _extract_description(self, html: str) -> str:

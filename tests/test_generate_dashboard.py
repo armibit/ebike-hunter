@@ -246,6 +246,57 @@ def test_render_dashboard_thumbnail_and_image_kept_on_rescan():
     assert html.count('class="thumb none"') == 1
 
 
+def test_sort_select_options_match_sortable_columns():
+    """Card view hides the table, so the sort <select> is the only sort control
+    there. Its option values are raw column indices into SORT_COLUMNS, which
+    silently point at the wrong column (or at the non-sortable 'Azioni' one) if
+    a <th> is ever added or removed without updating them."""
+    import tempfile, os, re
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+
+    tmp = tempfile.mktemp(suffix=".db")
+    db = Database(tmp)
+    db.upsert_listing({
+        "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
+        "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+        "distance_km": 10, "status": "ACTIVE",
+    })
+    db.close()
+
+    html = render_dashboard_html(tmp, interactive=True)
+    os.remove(tmp)
+
+    select = re.search(r'<select id="sortSelect".*?</select>', html, re.S)
+    assert select, "expected the sort <select> in the toolbar"
+    options = re.findall(r'value="(\d+):(-?1)"', select.group(0))
+    assert options, "expected sort options"
+
+    columns = re.search(r"const SORT_COLUMNS = \[(.*?)\n        \];", html, re.S).group(1)
+    entries = [line.strip() for line in columns.strip().splitlines() if not line.strip().startswith("//")]
+    headers = re.findall(r"<th\b[^>]*>", re.search(r"<thead>.*?</thead>", html, re.S).group(0))
+    assert len(entries) == len(headers), f"{len(entries)} accessors for {len(headers)} columns"
+
+    for index, _ in options:
+        assert entries[int(index)] != "null,", f"option {index} points at a non-sortable column"
+    print("✅ Sort select options match sortable columns")
+
+
+def test_hide_sold_filter_checked_by_default_and_wired():
+    import tempfile, os
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+
+    tmp = tempfile.mktemp(suffix=".db")
+    Database(tmp).close()
+    html = render_dashboard_html(tmp)
+    os.remove(tmp)
+
+    assert 'id="hideSold" checked' in html
+    assert "statusGroup === 'sold' && hideSold" in html
+    print("✅ Hide-sold filter test passed")
+
+
 if __name__ == "__main__":
     test_format_price_shows_original_currency_not_converted()
     test_format_price_falls_back_without_raw_price()
@@ -260,4 +311,6 @@ if __name__ == "__main__":
     test_render_dashboard_html_no_literal_backslash_n_end_to_end()
     test_render_dashboard_order_and_badge_follow_ranking_score()
     test_render_dashboard_thumbnail_and_image_kept_on_rescan()
+    test_sort_select_options_match_sortable_columns()
+    test_hide_sold_filter_checked_by_default_and_wired()
     print("\n✅ All generate_dashboard tests passed!")

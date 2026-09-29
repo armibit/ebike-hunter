@@ -179,6 +179,19 @@ def test_default_search_path_is_lombardia():
     assert _make_connector().search_paths == ["/annunci-lombardia/vendita/biciclette"]
 
 
+def test_gone_listing_410_logs_warning_without_traceback(caplog):
+    from curl_cffi.requests.exceptions import HTTPError
+
+    connector = _make_connector()
+    resp = type("R", (), {"status_code": 410, "headers": {}})()
+    connector.session = type("S", (), {"headers": {}, "get": lambda self, *a, **k: resp})()
+    resp.raise_for_status = lambda: (_ for _ in ()).throw(HTTPError("HTTP Error 410: ", 0, resp))
+    connector._rate_limit = lambda: None
+
+    assert connector.get_listing_details("1", "https://www.subito.it/x") == {}
+    assert all(r.levelname != "ERROR" and not r.exc_info for r in caplog.records)
+
+
 if __name__ == "__main__":
     test_aggregate_offer_json_ld_is_skipped_not_treated_as_listing()
     test_wrapper_div_is_not_matched_as_a_card()

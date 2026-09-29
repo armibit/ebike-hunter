@@ -128,19 +128,17 @@ class RidewillConnector(BaseConnector):
                 desc_tag = soup.find(class_=re.compile("description|scheda|caratteristiche"))
             description = desc_tag.get_text(" ", strip=True) if desc_tag else ""
 
-            # Check availability: look for "non disponibile", "non in stock", etc.
-            page_text = soup.get_text(" ", strip=True).lower()
-            is_available = not any(phrase in page_text for phrase in [
-                "non disponibile", "esaurito", "out of stock", "non in stock",
-                "non più disponibile", "fuori stock"
-            ])
-
-            return {
-                "description_raw": description,
-                "is_available": is_available
-            }
+            result = {"description_raw": description}
+            # Availability from the product's own stock line only. Every card
+            # in the related-products carousel carries a hidden "Non
+            # disponibile" label, so searching the whole page text flagged
+            # every bike as sold.
+            stock = soup.select_one(".product-main__content span.text-red, .product-main__content span.text-green")
+            if stock:
+                result["is_available"] = "text-green" in stock.get("class", [])
+            return result
         except Exception as e:
-            logger.exception("Error fetching Ridewill details %s: %s", listing_id, e)
+            logger.warning("Error fetching Ridewill details %s: %s", listing_id, e)
             return {}
 
     def check_availability(self, listing_id: str, url: str) -> Optional[bool]:

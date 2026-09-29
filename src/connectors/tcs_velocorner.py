@@ -171,7 +171,7 @@ class TcsVelocornerConnector(BaseConnector):
 
             return {"description_raw": description}
         except Exception as e:
-            logger.exception("Error fetching TCS Velocorner details %s: %s", listing_id, e)
+            logger.warning("Error fetching TCS Velocorner details %s: %s", listing_id, e)
             return {}
 
     def _extract_json_ld_description(self, soup: BeautifulSoup) -> str:

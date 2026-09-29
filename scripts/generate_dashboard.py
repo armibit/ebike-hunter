@@ -36,6 +36,26 @@ def _safe_url(url) -> str:
     return _attr(str(url).strip())
 
 
+# Portals that only list brand-new stock, and the one that only sells
+# factory-refurbished bikes. Everything else is a private-seller marketplace.
+_NEW_PORTALS = {
+    "buybestgear", "ebikelab", "ebikestorebrescia", "ecycles_shop",
+    "godspeed", "ridewill", "zbike", "tcs_velocorner",
+}
+_REFURBISHED_PORTALS = {"upway"}
+
+
+def _condition_label(portal: str) -> str:
+    """New / refurbished / used, inferred from the portal the listing came from
+    (no per-listing condition field exists in the DB)."""
+    portal = (portal or "").lower()
+    if portal in _NEW_PORTALS:
+        return "Nuovo"
+    if portal in _REFURBISHED_PORTALS:
+        return "Ricondizionato"
+    return "Usato"
+
+
 def _format_price(bike: dict, previous_price: str = None) -> str:
     """Show the price in the currency the listing was actually posted in,
     without conversions. Scoring/filtering still use price_chf internally."""
@@ -297,7 +317,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     SELECT
         l.rowid AS numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url, l.image_url,
-        l.latitude, l.longitude,
+        l.latitude, l.longitude, l.location_normalized, l.region,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
         l.user_analysis, l.ai_analysis, l.ai_score,
         s.brand, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
@@ -548,50 +568,78 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .view-toggle button {{ width: 36px; height: 36px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 16px; transition: all .15s; }}
         .view-toggle button.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
         .view-toggle button:hover {{ border-color: var(--primary); }}
+        .view-toggle .spacer {{ flex: 1; }}
+        /* Card view hides the table, and with it the click-to-sort headers —
+           this select is the only way to reorder there, so it drives the same
+           sortTable() the headers do. */
+        .view-toggle select {{ height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; }}
+        .view-toggle select:hover {{ border-color: var(--primary); }}
+        html.filters-hidden .filters {{ display: none; }}
 
-        .cards-container {{ display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }}
+        .cards-container {{ display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding: 10px 0; }}
         .cards-container.active {{ display: grid; }}
+        /* Set by the inline script below from localStorage, before first paint,
+           so a reload in card view never flashes the table first. */
+        html.view-card #table {{ display: none; }}
 
-        .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform .15s, box-shadow .15s; position: relative; display: flex; flex-direction: column; }}
-        .card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }}
+        .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform .2s, box-shadow .2s; position: relative; display: flex; flex-direction: column; cursor: pointer; }}
+        .card:hover {{ transform: translateY(-4px); box-shadow: 0 8px 16px rgba(0,0,0,0.12); }}
 
-        .card-badge {{ position: absolute; top: 8px; left: 8px; background: rgba(255,255,255,0.95); padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; z-index: 2; }}
-        .card-badge.new {{ background: #dbeafe; color: #1e40af; }}
-        .card-badge.used {{ background: #f3f4f6; color: #6b7280; }}
+        .card-header {{ position: relative; overflow: hidden; }}
+        .card-image {{ width: 100%; height: 220px; object-fit: cover; background: #f3f4f6; display: block; }}
+        .card-image-none {{ display: flex; align-items: center; justify-content: center; font-size: 32px; color: #9ca3af; }}
 
-        .card-heart {{ position: absolute; top: 8px; right: 8px; font-size: 20px; cursor: pointer; z-index: 2; transition: transform .15s; }}
-        .card-heart:hover {{ transform: scale(1.2); }}
+        .card-cond {{ position: absolute; top: 10px; left: 10px; z-index: 3; padding: 5px 11px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: rgba(255,255,255,0.94); color: #475569; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }}
+        .card-cond.nuovo {{ background: #1e3a5f; color: #fff; }}
+        .card-cond.ricondizionato {{ background: #e6f52f; color: #1f2937; }}
 
-        .card-image {{ width: 100%; height: 200px; object-fit: cover; background: var(--border); }}
-        .card-body {{ padding: 14px; flex: 1; display: flex; flex-direction: column; }}
+        .card-heart {{ position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.92); color: #3d4a6b; display: flex; align-items: center; justify-content: center; font-size: 19px; line-height: 1; cursor: pointer; z-index: 3; transition: transform .2s, background .2s, color .2s; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }}
+        .card-heart:hover {{ transform: scale(1.12); background: #3d4a6b; color: #fff; }}
+        .card-heart.fav {{ color: #dc2626; }}
+        .card-heart.fav:hover {{ background: #dc2626; color: #fff; }}
 
-        .card-title {{ font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px; line-height: 1.3; }}
-        .card-type {{ font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }}
-        .card-brand {{ font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }}
+        /* Score sits on the bottom edge of the photo like velocorner's "TOP"
+           ribbon: rounded on top only, flush with the image border. */
+        .card-score {{ position: absolute; bottom: 0; right: 16px; min-width: 62px; padding: 7px 14px; border-radius: 10px 10px 0 0; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; z-index: 2; letter-spacing: -0.01em; }}
+        .card-score.high {{ background: #d9f99d; color: #365314; }}
+        .card-score.mid {{ background: #fde047; color: #422006; }}
+        .card-score.low {{ background: #fecaca; color: #7f1d1d; }}
 
-        .card-specs {{ font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; }}
-        .card-location {{ font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }}
-        .card-date {{ font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }}
+        .card-body {{ padding: 14px 16px 16px; flex: 1; display: flex; flex-direction: column; gap: 4px; }}
 
-        .card-price-section {{ margin: 8px 0; padding-top: 10px; border-top: 1px solid var(--border); }}
-        .card-price-old {{ font-size: 11px; color: var(--text-muted); text-decoration: line-through; margin-bottom: 2px; }}
-        .card-price-new {{ font-size: 18px; font-weight: 700; color: var(--primary); }}
+        .card-title {{ font-size: 16px; font-weight: 700; color: #1e3a5f; line-height: 1.25; margin: 0 0 6px; }}
+        .card-id {{ font-size: 11px; color: #9ca3af; font-weight: 600; letter-spacing: .02em; }}
+        .card-row {{ display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; color: #4b5563; line-height: 1.5; }}
+        .card-row > span {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .card-row > span:last-child {{ text-align: right; color: #6b7280; }}
+        .card-category {{ font-weight: 500; }}
 
-        .card-score {{ position: absolute; bottom: 60px; right: 8px; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }}
-        .card-score.high {{ background: #16a34a; }}
-        .card-score.mid {{ background: #d97706; }}
-        .card-score.low {{ background: #dc2626; }}
+        /* margin-top:auto pins the price + buttons to the bottom of every card,
+           so they line up across a row no matter how tall the title wraps. */
+        .card-price-section {{ margin-top: auto; padding-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }}
+        .card-price-top {{ display: flex; align-items: baseline; gap: 10px; }}
+        .card-price-old {{ font-size: 13px; color: #6b7280; text-decoration: line-through; font-weight: 600; }}
+        .card-price-drop {{ font-size: 13px; color: #65a30d; font-weight: 700; }}
+        .card-price-new {{ font-size: 24px; font-weight: 700; color: #1e3a5f; letter-spacing: -0.01em; }}
 
-        .card-actions {{ display: flex; gap: 6px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border); }}
-        .card-action-btn {{ width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--primary-light); color: var(--primary); cursor: pointer; font-size: 16px; transition: all .15s; position: relative; display: flex; align-items: center; justify-content: center; }}
-        .card-action-btn:hover {{ background: var(--primary); color: white; }}
-        .card-action-btn.delete {{ background: #fee2e2; color: #dc2626; }}
-        .card-action-btn.delete:hover {{ background: #dc2626; color: white; }}
-        .card-action-btn.sold {{ background: #f3f4f6; color: #6b7280; }}
-        .card-action-btn.sold:hover {{ background: #6b7280; color: white; }}
-        .card-action-btn::after {{ content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s; margin-bottom: 6px; }}
-        .card-action-btn:hover::after {{ opacity: 1; }}
+        .card-sold {{ position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.7); color: white; padding: 12px 20px; border-radius: 8px; font-weight: 700; font-size: 14px; z-index: 3; display: none; align-items: center; gap: 6px; }}
+        .card.sold .card-sold {{ display: flex; }}
+        .card.sold .card-image {{ opacity: 0.4; }}
+
+        /* Inline SVG (currentColor) instead of emoji, so the glyph colour can be
+           set for contrast against the lime / slate button fills. */
+        .card-buttons {{ display: flex; gap: 8px; flex-shrink: 0; }}
+        .card-action {{ width: 42px; height: 42px; border-radius: 50%; border: none; cursor: pointer; transition: all .2s; display: flex; align-items: center; justify-content: center; padding: 0; }}
+        .card-action svg {{ width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }}
+        .card-action.sell {{ background: #e6f52f; color: #1a2e05; }}
+        .card-action.sell:hover {{ background: #1a2e05; color: #e6f52f; transform: scale(1.08); }}
+        .card-action.danger {{ background: #e2e8f0; color: #475569; }}
+        .card-action.danger:hover {{ background: #b91c1c; color: #fff; transform: scale(1.08); }}
     </style>
+    <script>
+    if ((localStorage.getItem('ebike-view') || 'card') === 'card') document.documentElement.classList.add('view-card');
+    if (localStorage.getItem('ebike-filters') === 'hidden') document.documentElement.classList.add('filters-hidden');
+    </script>
 </head>
 <body>
     <button id="backToTop" class="back-to-top" title="Torna in cima">↑</button>
@@ -688,6 +736,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <label>&nbsp;</label>
                     <label class="filter-checkbox"><input type="checkbox" id="showRejected"> 🚫 Mostra scartati</label>
                 </div>
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <label class="filter-checkbox"><input type="checkbox" id="hideSold" checked> 🚫 Nascondi non disponibili</label>
+                </div>
                 <div class="filter-group brand-filter">
                     <label>Marca</label>
                     <details class="brand-dropdown">
@@ -765,8 +817,21 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         <h2 class="section-title">📋 Tutti gli annunci</h2>
         <div class="view-toggle">
-            <button id="viewListBtn" class="active" title="Vista Lista">☰</button>
+            <button id="viewListBtn" title="Vista Lista">☰</button>
             <button id="viewCardBtn" title="Vista Card">⊞</button>
+            <select id="sortSelect" title="Ordina">
+                <option value="0:-1">Punteggio ↓</option>
+                <option value="2:1">Prezzo ↑</option>
+                <option value="2:-1">Prezzo ↓</option>
+                <option value="10:-1">Più recenti</option>
+                <option value="9:1">Distanza ↑</option>
+                <option value="5:-1">Batteria ↓</option>
+                <option value="4:-1">Coppia ↓</option>
+                <option value="7:-1">Anno ↓</option>
+                <option value="1:1">Titolo A→Z</option>
+            </select>
+            <span class="spacer"></span>
+            <button id="filtersBtn" title="Mostra/nascondi filtri">🔍</button>
         </div>
         <div id="cardsContainer" class="cards-container"></div>
         <table id="table">
@@ -854,6 +919,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         added_text = _format_date(bike.get("first_seen_at"))
         suspension_text = _SUSPENSION_LABELS.get(bike.get("suspension_type"), "N/A") if bike.get("suspension_type") else "N/A"
         meta_text = f"Taglia {frame_text} · {anno_text} · {km_text}"
+        location_text = (bike.get("location_normalized") or bike.get("region") or "").strip().title()
+        condition_text = _condition_label(bike["portal"])
         ai_icon = '<span class="ai-icon" title="Analisi AI disponibile">🤖</span> ' if bike.get("ai_analysis") else ''
         new_icon = '<span class="new-icon" title="Annuncio nuovo">🆕</span> ' if status == "NEW" else ''
 
@@ -886,7 +953,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
             motor_cell_attrs = battery_cell_attrs = suspension_cell_attrs = frame_cell_attrs = ''
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-brand="{_attr(bike['brand'] or 'Altro')}" data-score="{score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-brand="{_attr(bike['brand'] or 'Altro')}" data-score="{score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-location="{_attr(location_text)}" data-condition="{_attr(condition_text)}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}" title="{score_title}">{score_val:.1f}</span></td>
                     <td>
                         {thumb}<a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
@@ -1296,6 +1363,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         document.getElementById('favOnly').addEventListener('change', applyFilters);
         document.getElementById('aiOnly').addEventListener('change', applyFilters);
         document.getElementById('showRejected').addEventListener('change', applyFilters);
+        document.getElementById('hideSold').addEventListener('change', applyFilters);
         document.getElementById('statusFilter').addEventListener('change', applyFilters);
 
         // Text filter with debounce
@@ -1318,6 +1386,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const aiOnly = document.getElementById('aiOnly').checked;
             const statusFilter = document.getElementById('statusFilter').value;
             const showRejected = document.getElementById('showRejected').checked;
+            const hideSold = document.getElementById('hideSold').checked;
             const textFilter = document.getElementById('textFilter').value.toLowerCase();
             const brands = checkedBrands();
             const brandTotal = document.querySelectorAll('.brand-cb').length;
@@ -1355,6 +1424,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 if (statusFilter && statusGroup !== statusFilter) show = false;
                 // Hidden by default; picking "Scartati" in Stato shows them anyway.
                 if (statusGroup === 'rejected' && !showRejected && statusFilter !== 'rejected') show = false;
+                // On by default; picking "Venduti" in Stato shows them anyway.
+                if (statusGroup === 'sold' && hideSold && statusFilter !== 'sold') show = false;
                 if (textFilter && !titleText.includes(textFilter)) show = false;
                 if (brands.length && !brands.includes(row.dataset.brand)) show = false;
 
@@ -1404,6 +1475,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             document.getElementById('favOnly').checked = false;
             document.getElementById('aiOnly').checked = false;
             document.getElementById('statusFilter').value = '';
+            document.getElementById('hideSold').checked = true;
             document.getElementById('textFilter').value = '';
             document.querySelectorAll('.brand-cb').forEach(cb => cb.checked = false);
             saveFilters();
@@ -1423,6 +1495,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 favOnly: document.getElementById('favOnly').checked,
                 aiOnly: document.getElementById('aiOnly').checked,
                 showRejected: document.getElementById('showRejected').checked,
+                hideSold: document.getElementById('hideSold').checked,
                 statusFilter: document.getElementById('statusFilter').value,
                 textFilter: document.getElementById('textFilter').value,
                 brands: checkedBrands()
@@ -1448,6 +1521,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 document.getElementById('favOnly').checked = filters.favOnly;
                 document.getElementById('aiOnly').checked = filters.aiOnly;
                 document.getElementById('showRejected').checked = !!filters.showRejected;
+                document.getElementById('hideSold').checked = filters.hideSold !== false;
                 document.getElementById('statusFilter').value = filters.statusFilter;
                 document.getElementById('textFilter').value = filters.textFilter || '';
                 const brands = filters.brands || [];
@@ -1484,13 +1558,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         let sortState = { index: null, dir: 1 };
 
-        function sortTable(colIndex) {
+        // forceDir (1/-1) is for the sort <select>, which names its own
+        // direction instead of toggling like a header click does.
+        function sortTable(colIndex, forceDir) {
             const column = SORT_COLUMNS[colIndex];
             if (!column) return;
             const isText = typeof column === 'object';
             const getValue = isText ? column.text : column;
 
-            const dir = (sortState.index === colIndex) ? -sortState.dir : 1;
+            const dir = forceDir || ((sortState.index === colIndex) ? -sortState.dir : 1);
             sortState = { index: colIndex, dir };
 
             const tbody = document.getElementById('tbody');
@@ -1514,6 +1590,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 th.classList.remove('sorted-asc', 'sorted-desc');
                 if (i === colIndex) th.classList.add(dir === 1 ? 'sorted-asc' : 'sorted-desc');
             });
+            // Keep the select honest after a header click: it goes blank when
+            // the header sorted by something the select has no option for.
+            const sortSelect = document.getElementById('sortSelect');
+            if (sortSelect) sortSelect.value = colIndex + ':' + dir;
+            localStorage.setItem('ebike-sort', colIndex + ':' + dir);
         }
 
         document.querySelectorAll('#table thead th').forEach((th, i) => {
@@ -1536,104 +1617,153 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     const table = document.getElementById('table');
     const cardsContainer = document.getElementById('cardsContainer');
 
-    const savedView = localStorage.getItem('ebike-view') || 'list';
+    const savedView = localStorage.getItem('ebike-view') || 'card';
 
-    function switchToList() {{
-        table.style.display = 'table';
+    const ICON_TRASH = '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg>';
+    const ICON_SELL = '<svg viewBox="0 0 24 24"><path d="M20 12V7a1 1 0 0 0-1-1h-5L3 17l4 4L18 10"/><circle cx="16.5" cy="9.5" r="1.3"/></svg>';
+
+    const filtersBtn = document.getElementById('filtersBtn');
+    filtersBtn.addEventListener('click', () => {
+        const hidden = document.documentElement.classList.toggle('filters-hidden');
+        localStorage.setItem('ebike-filters', hidden ? 'hidden' : 'shown');
+    });
+
+    function switchToList() {
+        document.documentElement.classList.remove('view-card');
         cardsContainer.classList.remove('active');
         viewListBtn.classList.add('active');
         viewCardBtn.classList.remove('active');
         localStorage.setItem('ebike-view', 'list');
-    }}
+    }
 
-    function switchToCard() {{
-        table.style.display = 'none';
+    function switchToCard() {
+        document.documentElement.classList.add('view-card');
         cardsContainer.classList.add('active');
         viewListBtn.classList.remove('active');
         viewCardBtn.classList.add('active');
         localStorage.setItem('ebike-view', 'card');
         buildCards();
-    }}
+    }
 
     viewListBtn.addEventListener('click', switchToList);
     viewCardBtn.addEventListener('click', switchToCard);
 
-    function buildCards() {{
+    // Price cell is "1200 EUR" or "1200 EUR<br><small>era: 1400 EUR</small>".
+    // Render it velocorner-style: struck-through old price + green delta above
+    // the current price.
+    function renderPrice(cell) {
+        if (!cell) return '';
+        const now = cell.firstChild ? cell.firstChild.textContent.trim() : '';
+        const old = cell.querySelector('small')?.textContent.replace('era:', '').trim() || '';
+        if (!old) return '<div class="card-price-new">' + now + '</div>';
+        const drop = parseFloat(old.replace(/[^0-9.]/g, '')) - parseFloat(now.replace(/[^0-9.]/g, ''));
+        const dropText = drop > 0 ? '<span class="card-price-drop">-' + drop.toFixed(0) + '</span>' : '';
+        return '<div class="card-price-top"><span class="card-price-old">' + old + '</span>' + dropText + '</div>' +
+               '<div class="card-price-new">' + now + '</div>';
+    }
+
+    function buildCards() {
         const tbody = table.querySelector('tbody');
         if (!tbody) return;
 
         cardsContainer.innerHTML = '';
-        const rows = tbody.querySelectorAll('tr');
 
-        rows.forEach(row => {{
+        tbody.querySelectorAll('tr').forEach(row => {
+            if (row.style.display === 'none') return;
             const tds = row.querySelectorAll('td');
-            if (tds.length < 5) return;
+            if (tds.length < 9) return;
 
-            // Extract data
             const scoreSpan = tds[0].querySelector('.score');
             const scoreVal = parseFloat(scoreSpan?.textContent) || 0;
-            const scoreClass = scoreSpan?.classList.contains('high') ? 'high' : scoreSpan?.classList.contains('mid') ? 'mid' : 'low';
+            const scoreClass = scoreVal >= 75 ? 'high' : scoreVal >= 60 ? 'mid' : 'low';
 
             const titleCell = tds[1];
             const thumb = titleCell.querySelector('.thumb');
-            const titleLink = titleCell.querySelector('.title-link');
-            const title = titleLink?.textContent?.trim() || 'N/A';
-            const titleMeta = titleCell.querySelector('.title-meta')?.textContent?.trim() || '';
+            const title = (titleCell.querySelector('.title-link')?.textContent || 'N/A').replace('⭐', '').trim();
+            const portal = titleCell.querySelector('.title-meta')?.textContent?.trim().split('·')[0].trim() || '';
 
-            const price = tds[2]?.innerHTML || 'N/A';
-            const status = tds[3]?.textContent?.trim() || '';
             const motor = tds[4]?.textContent?.trim() || '';
             const battery = tds[5]?.textContent?.trim() || '';
+            const year = tds[7]?.textContent?.trim() || '';
+            const size = tds[8]?.textContent?.trim() || '';
+            const dist = tds[9]?.textContent?.trim() || '';
 
-            const thumbSrc = thumb?.src || '';
+            const isSold = row.dataset.statusGroup !== 'active';
+            const isFav = row.dataset.favorite === '1';
+            const cond = row.dataset.condition || 'Usato';
+            const place = row.dataset.location || '';
 
-            // Parse title meta: "PORTAL · META_TEXT"
-            const metaParts = titleMeta.split('·').map(p => p.trim());
-            const portal = metaParts[0] || '';
-            const metaFull = metaParts.slice(1).join(' · ') || '';
-
-            // Build card
             const card = document.createElement('div');
-            card.className = 'card';
-            card.innerHTML = `
-                <div class="card-badge ${{status.includes('ACTIVE') ? 'used' : 'new'}}">${{status}}</div>
-                <div class="card-heart" onclick="toggleFavorite(event)">🤍</div>
-                <img src="${{thumbSrc}}" alt="Bike" class="card-image" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect fill=%22%23ddd%22 width=%22200%22 height=%22200%22/%3E%3C/svg%3E'">
-                <div class="card-body">
-                    <div class="card-title">${{title.substring(0, 60)}}</div>
-                    <div class="card-type">${{portal}}</div>
-                    <div class="card-brand">${{motor}}</div>
-                    <div class="card-specs">
-                        <div>${{battery}}</div>
-                    </div>
-                    <div class="card-location">${{metaFull}}</div>
-                    <div class="card-price-section">
-                        <div class="card-price-new">${{price}}</div>
-                    </div>
-                </div>
-                <div class="card-score ${{scoreClass}}">${{scoreVal.toFixed(1)}}</div>
-                <div class="card-actions">
-                    <button class="card-action-btn delete" data-tooltip="Cancella" onclick="deleteItem(event)">🗑️</button>
-                    <button class="card-action-btn sold" data-tooltip="Segna venduto" onclick="markSold(event)">✓</button>
-                    <button class="card-action-btn" data-tooltip="Dettagli" onclick="showDetails(event)">📋</button>
-                </div>
-            `;
+            card.className = 'card' + (isSold ? ' sold' : '');
+            card.innerHTML =
+                '<div class="card-header">' +
+                    (thumb && thumb.tagName === 'IMG'
+                        ? '<img src="' + thumb.src + '" alt="" class="card-image" referrerpolicy="no-referrer">'
+                        : '<div class="card-image card-image-none">📷</div>') +
+                    '<div class="card-cond ' + cond.toLowerCase() + '">' + cond + '</div>' +
+                    '<div class="card-heart' + (isFav ? ' fav' : '') + '" title="Preferito">' + (isFav ? '♥' : '♡') + '</div>' +
+                    '<div class="card-score ' + scoreClass + '">' + scoreVal.toFixed(0) + '</div>' +
+                    '<div class="card-sold">✓ Non più disponibile</div>' +
+                '</div>' +
+                '<div class="card-body">' +
+                    '<div class="card-title">' + title + '</div>' +
+                    '<div class="card-row"><span class="card-category">' + portal + '</span><span class="card-id">#' + row.dataset.numericId + '</span></div>' +
+                    '<div class="card-row"><span>' + motor + '</span><span>' + battery + '</span></div>' +
+                    '<div class="card-row"><span>Taglia: ' + size + '</span><span>' + year + '</span></div>' +
+                    '<div class="card-row"><span>' + (place ? '📍 ' + place : '') + '</span><span>' + dist + '</span></div>' +
+                    '<div class="card-price-section">' +
+                        '<div>' + renderPrice(tds[2]) + '</div>' +
+                        '<div class="card-buttons">' +
+                            '<button class="card-action danger" data-act="delete" title="Cancella dalla lista">' + ICON_TRASH + '</button>' +
+                            (isSold ? '' : '<button class="card-action sell" data-act="sold" title="Segna come venduta">' + ICON_SELL + '</button>') +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+
+            // Delegate every action to the row's own buttons, so the card view
+            // reuses the exact same backend calls as the table.
+            card.querySelector('.card-heart').addEventListener('click', e => {
+                e.stopPropagation();
+                row.querySelector('.icon-star')?.click();
+            });
+            card.querySelectorAll('.card-action').forEach(btn => btn.addEventListener('click', e => {
+                e.stopPropagation();
+                row.querySelector(btn.dataset.act === 'delete' ? '.icon-delete' : '.icon-success')?.click();
+            }));
+            card.addEventListener('click', () => row.querySelector('.icon-details')?.click());
+
             cardsContainer.appendChild(card);
-        }});
-    }}
+        });
+    }
 
-    // Initialize
-    if (savedView === 'card') {{
-        switchToCard();
-    }} else {{
-        switchToList();
-    }}
+    // Filters/sorting mutate the table directly; rebuild the grid after any of
+    // them fire (listeners were bound to the original applyFilters reference,
+    // so wrapping it would not catch them).
+    function rebuildIfCards() {
+        if (cardsContainer.classList.contains('active')) setTimeout(buildCards, 0);
+    }
+    document.querySelector('.filters')?.addEventListener('input', rebuildIfCards);
+    document.querySelector('.filters')?.addEventListener('change', rebuildIfCards);
+    document.querySelector('.filters')?.addEventListener('click', rebuildIfCards);
+    table.querySelector('thead')?.addEventListener('click', rebuildIfCards);
 
-    // Placeholder handlers
-    function toggleFavorite(e) {{ e.stopPropagation(); }}
-    function deleteItem(e) {{ e.stopPropagation(); }}
-    function markSold(e) {{ e.stopPropagation(); }}
-    function showDetails(e) {{ e.stopPropagation(); }}
+    const sortSelect = document.getElementById('sortSelect');
+    sortSelect.addEventListener('change', () => {
+        const [col, dir] = sortSelect.value.split(':').map(Number);
+        sortTable(col, dir);
+        rebuildIfCards();
+    });
+
+    // Rows arrive already ordered by ranking score desc, which is the select's
+    // first option — so only a different saved choice needs replaying.
+    const savedSort = localStorage.getItem('ebike-sort');
+    if (savedSort && savedSort !== '0:-1' && [...sortSelect.options].some(o => o.value === savedSort)) {
+        sortSelect.value = savedSort;
+        const [col, dir] = savedSort.split(':').map(Number);
+        sortTable(col, dir);
+    }
+
+    if (savedView === 'card') { switchToCard(); } else { switchToList(); }
     </script>
 </body>
 </html>

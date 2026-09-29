@@ -98,6 +98,16 @@ def test_shopify_check_uses_product_js():
     print("✅ Shopify availability check")
 
 
+def test_upway_check_reads_shop_domain_not_storefront():
+    connector = UpwayConnector({"portals": {"upway": {
+        "base_url": "https://upway.ch", "shop_domain": "x.myshopify.com", "brands": []}}})
+    requested = []
+    connector._raw_get = lambda url: requested.append(url) or SimpleNamespace(
+        status_code=200, json=lambda: {"available": True})
+    assert connector.check_availability("1", "https://upway.ch/products/cube-rk1?v=2") is True
+    assert requested == ["https://x.myshopify.com/products/cube-rk1.js"]
+
+
 def test_registry_covers_every_portal():
     assert set(CONNECTOR_CLASSES) == set(PORTALS)
     assert portal_country("subito") == "IT" and portal_country("tutti") == "CH"
@@ -115,5 +125,6 @@ if __name__ == "__main__":
     test_shopify_variant_flags()
     test_shop_feeds_carry_availability()
     test_shopify_check_uses_product_js()
+    test_upway_check_reads_shop_domain_not_storefront()
     test_registry_covers_every_portal()
     print("\n✅ All availability tests passed!")

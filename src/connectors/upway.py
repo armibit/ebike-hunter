@@ -126,7 +126,11 @@ class UpwayConnector(BaseConnector):
         return ""
 
     def check_availability(self, listing_id: str, url: str) -> Optional[bool]:
-        return self.shopify_availability(url)
+        # upway.ch is a storefront in front of Shopify: its /products/<h>.js
+        # answers 404 for EVERY product (live ones too), so read the JSON
+        # from the shop's own domain, the same one search() uses.
+        handle = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+        return self.shopify_availability(f"https://{self.shop_domain}/products/{handle}")
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
         """Fetch the product page for the structured spec table and the
@@ -143,7 +147,7 @@ class UpwayConnector(BaseConnector):
             description_raw = " ".join(p for p in parts if p)
             return {"description_raw": description_raw} if description_raw else {}
         except Exception as e:
-            logger.exception("Error fetching Upway details %s: %s", listing_id, e)
+            logger.warning("Error fetching Upway details %s: %s", listing_id, e)
             return {}
 
     def search_all(self) -> List[Dict[str, Any]]:
