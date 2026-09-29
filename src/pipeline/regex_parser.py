@@ -45,7 +45,7 @@ class RegexParser:
         specs = {
             "brand": None,
             "model": None,
-            "suspension_type": self._detect_suspension_type(text, travel_rear),
+            "suspension_type": self._detect_suspension_type(text, travel_rear, title),
             "frame_size": self._detect_frame_size(text),
             "motor_brand": None,
             "motor_model": None,
@@ -197,7 +197,7 @@ class RegexParser:
                     return wh
         return None
 
-    def _detect_suspension_type(self, text: str, travel_rear: Optional[int] = None) -> str:
+    def _detect_suspension_type(self, text: str, travel_rear: Optional[int] = None, title: str = "") -> str:
         # If rear travel >= 50mm, it's definitively a full suspension
         if travel_rear is not None and travel_rear >= 50:
             return "full_suspension"
@@ -211,6 +211,12 @@ class RegexParser:
         for kw in self.suspension_types["full_keywords"]:
             if re.search(rf"\b{kw}\b", text, re.IGNORECASE):
                 return "full_suspension"
+
+        # Model lines that are hardtail by design (Haibike/Moustache "Trekking"):
+        # title only, and only when nothing above said full suspension.
+        for kw in self.suspension_types.get("hardtail_title_hints", []):
+            if re.search(rf"\b{kw}\b", title, re.IGNORECASE):
+                return "hardtail"
 
         return "unknown"
 

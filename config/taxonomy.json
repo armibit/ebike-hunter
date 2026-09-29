@@ -171,12 +171,15 @@
       "full-suspension", "doppia sospensione", "all-mountain", "enduro",
       "escursione posteriore", "ammortizzatore posteriore", "ammortizzatore centrale",
       "ammo centrale", "shock centrale", "rear travel",
-      "rear shock", "federweg hinten", "hinterbau"
+      "rear shock", "federweg hinten", "hinterbau",
+      "float dps", "float x", "float x2", "dhx2", "rockshox deluxe", "super deluxe",
+      "deluxe select", "monarch", "fox dps"
     ],
     "hardtail_disallowed": [
       "hardtail", "monoammortizzata", "front suspended", "hard tail",
       "front-suspension", "hard-tail"
-    ]
+    ],
+    "hardtail_title_hints": ["trekking"]
   },
   "red_flags": [
     "senza caricatore", "senza chiave", "chiave persa", "caricatore non disponibile",

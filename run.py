@@ -57,6 +57,11 @@ def setup_logging(config: Dict[str, Any]) -> None:
 
     logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler], force=True)
 
+    # Connectors log every HTTP call at INFO — verbose for console. Keep DEBUG
+    # in file for debugging, but mute on console to avoid spam.
+    logging.getLogger("connectors").setLevel(logging.WARNING)
+    logging.getLogger("pipeline").setLevel(logging.WARNING)
+
 
 def verify_unseen_listings(db: Database, connectors: Dict[str, Any], config: Dict[str, Any],
                            scan_started: str) -> int:
@@ -78,30 +83,67 @@ def verify_unseen_listings(db: Database, connectors: Dict[str, Any], config: Dic
         if listing["portal"] in PORTALS:
             by_portal[listing["portal"]].append(listing)
 
-    def check_portal(portal: str) -> List[tuple]:
+    if not by_portal:
+        return 0
+
+    total_to_check = sum(len(listings) for listings in by_portal.values())
+    status.update("verify", f"Checking {total_to_check} listings (capped at {cap})...")
+
+    def check_portal(portal: str) -> tuple[str, List[tuple], int]:
         connector = connectors.get(portal) or PORTALS[portal].cls(config)
         verdicts = []
-        for listing in by_portal[portal]:
+        sold_count = 0
+        for i, listing in enumerate(by_portal[portal], 1):
             try:
                 available = connector.check_availability(listing["portal_id"], listing["url"])
+                if available is False:
+                    sold_count += 1
             except Exception:
                 logger.debug("Availability check crashed for %s", listing["id"], exc_info=True)
                 available = None
             verdicts.append((listing["id"], available))
-        status.finish(connector.portal_name)
-        return verdicts
+        return portal, verdicts, sold_count
 
     sold = 0
     with ThreadPoolExecutor(max_workers=max(1, min(len(by_portal), 5))) as pool:
         for future in as_completed([pool.submit(check_portal, p) for p in by_portal]):
-            for listing_id, available in future.result():
+            portal, verdicts, portal_sold = future.result()
+            for listing_id, available in verdicts:
                 # SQLite writes stay on this thread.
                 if available is False and db.mark_unavailable(listing_id):
                     sold += 1
-                    logger.info("Sold/removed on portal: %s", listing_id)
                 else:
                     db.mark_checked(listing_id)
+            # Per-portal summary
+            total = len(by_portal[portal])
+            if total > 0:
+                still_active = total - portal_sold
+                print(f"  {portal:20s} │ {total:3d} checked │ {portal_sold:3d} sold │ {still_active:3d} active")
+
+    status.finish("verify")
     return sold
+
+
+def search_and_enrich(connector: Any) -> List[Dict[str, Any]]:
+    """Runs on the portal's worker thread: search + per-listing detail fetch
+    (both pure network I/O, no DB access) so slow-to-enrich portals no longer
+    serialize behind each other on the main thread — see search_all's
+    ThreadPoolExecutor in main()."""
+    listings = connector.search_all()
+    enrich_key = f"{connector.portal_name}:enrich"
+    for idx, listing in enumerate(listings, 1):
+        if not listing.get("description_raw"):
+            status.update(enrich_key, f"[{connector.portal_name}] fetching detail {idx}/{len(listings)}")
+            try:
+                details = connector.get_listing_details(listing["portal_id"], listing["url"])
+                if details.get("description_raw"):
+                    listing["description_raw"] = details["description_raw"]
+                if details.get("is_available") is False:
+                    listing["is_available"] = False
+            except Exception as e:
+                logger.debug("Detail fetch failed for %s: %s", listing.get("url"), e, exc_info=True)
+    status.finish(enrich_key)
+    return listings
 
 
 def process_listing(
@@ -111,7 +153,6 @@ def process_listing(
     scorer: ScoringEngine,
     db: Database,
     config: Dict[str, Any],
-    connector: Any = None
 ) -> bool:
     """
     Process a single listing through the pipeline.
@@ -129,20 +170,6 @@ def process_listing(
     if listing_raw.get("is_available") is False:
         db.mark_unavailable(listing_id)
         return False
-
-    # Enrich with full listing-detail description when the search card gave none —
-    # spec regex (motor/battery) often only appears in the full ad body, not the card.
-    # The detail page can also say the item is no longer for sale.
-    if connector is not None and not listing_raw.get("description_raw"):
-        try:
-            details = connector.get_listing_details(listing_raw["portal_id"], listing_raw["url"])
-            if details.get("description_raw"):
-                listing_raw["description_raw"] = details["description_raw"]
-            if details.get("is_available") is False:
-                db.mark_unavailable(listing_id)
-                return False
-        except Exception as e:
-            logger.debug("Detail fetch failed for %s: %s", listing_raw.get("url"), e, exc_info=True)
 
     # Seller left the portal's price field empty but wrote it in the text.
     if not listing_raw.get("price_raw") or listing_raw["price_raw"] <= 0:
@@ -275,18 +302,28 @@ def main():
 
     status.start()
     try:
-        print(f"Scanning {len(connectors)} portals ({max_parallel} in parallel)...")
-        print("-" * 80)
+        print()
+        print("=" * 80)
+        print(f"🔍 Scanning {len(connectors)} portals ({max_parallel} in parallel)...")
+        print("=" * 80)
+
+        portals_done = 0
 
         with ThreadPoolExecutor(max_workers=max_parallel) as pool:
+            # search_and_enrich runs search + per-listing detail fetch inside
+            # the same worker thread, so portals overlap on BOTH phases —
+            # previously detail fetches ran one portal at a time on the main
+            # thread after its search finished, serializing everyone behind
+            # each portal's own rate limit.
             future_to_portal = {
-                pool.submit(connector.search_all): (portal_name, connector)
+                pool.submit(search_and_enrich, connector): (portal_name, connector)
                 for portal_name, connector in connectors
             }
 
             for future in as_completed(future_to_portal):
                 portal_name, connector = future_to_portal[future]
                 status.finish(connector.portal_name)
+                portals_done += 1
 
                 try:
                     listings = future.result()
@@ -295,22 +332,14 @@ def main():
                     logger.exception("[%s] Error during scan: %s", portal_name, e)
                     continue
 
-                logger.info("✓ [%s] scan done — %d listing(s) found, processing...", portal_name, len(listings))
+                status.update("scan_progress", f"[{portals_done}/{len(connectors)}] Processing {portal_name}...")
 
                 total_found += len(listings)
                 accepted = 0
                 rejected = 0
-                enrich_key = f"{connector.portal_name}:enrich"
 
-                for idx, listing in enumerate(listings, 1):
-                    # Only listings missing a description trigger a live detail
-                    # fetch (base.get() re-updates connector.portal_name's own
-                    # status line while it runs) — label that sub-phase under
-                    # its own key so it reads as "still working" rather than a
-                    # stale scan line resurrecting after status.finish() above.
-                    if not listing.get("description_raw"):
-                        status.update(enrich_key, f"[{portal_name}] fetching detail {idx}/{len(listings)}")
-                    is_accepted = process_listing(listing, parser, normalizer, scorer, db, config, connector)
+                for listing in listings:
+                    is_accepted = process_listing(listing, parser, normalizer, scorer, db, config)
                     if is_accepted:
                         accepted += 1
                         total_accepted += 1
@@ -318,12 +347,18 @@ def main():
                         rejected += 1
                         total_rejected += 1
 
-                status.finish(enrich_key)
                 status.clear()
-                print(f"[{portal_name}] Found: {len(listings)} | Accepted: {accepted} | Rejected: {rejected}")
+                # Prettier summary: emoji to indicate acceptance rate
+                rate = (accepted / len(listings) * 100) if listings else 0
+                bar = "🟢" if rate > 50 else "🟡" if rate > 20 else "🔴"
+                print(f"  {bar} {portal_name:20s} │ {len(listings):3d} found │ {accepted:3d} ✓ │ {rejected:3d} ✗")
         # Listings this scan didn't find anymore: sold, expired or removed?
-        print("-" * 80)
+        status.finish("scan_progress")
+        status.clear()
+        print()
+        print("=" * 80)
         print("Checking listings no longer in search results (sold / expired / removed)...")
+        print("=" * 80)
         sold_count = verify_unseen_listings(
             db, {connector.portal_name: connector for _, connector in connectors}, config, scan_started,
         )
@@ -336,11 +371,12 @@ def main():
 
     # Summary
     print("=" * 80)
-    print("SCAN SUMMARY")
+    print("✓ SCAN COMPLETE")
     print("=" * 80)
-    print(f"Total listings found: {total_found}")
-    print(f"Accepted: {total_accepted}")
-    print(f"Rejected: {total_rejected}")
+    acceptance_rate = (total_accepted / total_found * 100) if total_found else 0
+    print(f"  Found:    {total_found:4d}")
+    print(f"  ✓ Pass:   {total_accepted:4d} ({acceptance_rate:5.1f}%)")
+    print(f"  ✗ Reject: {total_rejected:4d}")
     print()
 
     # Show top deals

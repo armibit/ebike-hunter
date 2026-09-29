@@ -200,6 +200,21 @@ def test_suspension_type():
     )
     assert specs4["suspension_type"] == "full_suspension"
 
+    # Regression: Haibike "Trekking" line is hardtail by design but listings
+    # never say so — they came out "unknown", passed the filter and ranked
+    # top. A full-suspension trekking bike that says so must stay full.
+    specs5 = parser.parse("E-Bike Haibike Trekking Cross 6 Low", "Come nuova: solo 153km")
+    assert specs5["suspension_type"] == "hardtail"
+    specs6 = parser.parse("Brinke explorer tg S - trekking full suspended", "")
+    assert specs6["suspension_type"] == "full_suspension"
+    # Naming only the rear shock model (no "full") still means full — even
+    # on a "trekking" title, which must not be forced to hardtail then.
+    specs7 = parser.parse("E-bike trekking Bosch CX", "ammortizzatore Fox Float DPS")
+    assert specs7["suspension_type"] == "full_suspension"
+    # Saying nothing about suspension stays unknown (kept, not rejected).
+    specs8 = parser.parse("Cube Stereo Hybrid 140", "Bosch CX 625Wh")
+    assert specs8["suspension_type"] == "unknown"
+
     print("✅ Suspension type tests passed")
 
 

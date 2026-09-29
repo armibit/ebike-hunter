@@ -740,8 +740,10 @@ class Database:
             where_parts.append("l.status = 'REJECTED'")
         elif status == 'sold':
             where_parts.append("l.status = 'SOLD'")
-        else:
+        elif filters.get('show_rejected'):
             where_parts.append("l.status IN ('ACTIVE', 'PRICE_DROP', 'REJECTED', 'SOLD', 'DELISTED')")
+        else:
+            where_parts.append("l.status IN ('ACTIVE', 'PRICE_DROP', 'SOLD', 'DELISTED')")
 
         if fav_only:
             where_parts.append("l.is_favorite = 1")

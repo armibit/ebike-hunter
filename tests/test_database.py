@@ -1047,3 +1047,28 @@ if __name__ == "__main__":
     test_price_history_records_increases_and_currency_switches()
     test_cross_currency_increase_is_not_a_drop()
     print("\n✅ All database tests passed!")
+
+
+def test_filtered_top_deals_hides_rejected_unless_asked():
+    """Regression: "Tutti" in the Top 10 used to include REJECTED listings;
+    now they're hidden unless show_rejected (or status='rejected') is set."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+    score = {"score_total": 80.0, "score_price_value": 80.0, "score_component_quality": 80.0,
+             "score_condition_mileage": 80.0, "score_location_proximity": 80.0,
+             "score_fit_geometry": 80.0, "is_deal_target": True}
+    ids = {}
+    for pid in ("ok", "ko"):
+        ids[pid], _, _ = db.upsert_listing({
+            "portal": "tutti", "portal_id": pid, "url": f"https://tutti.ch/{pid}", "title": f"Bike {pid}",
+            "price_raw": 1900, "currency": "CHF", "price_chf": 1900, "price_eur": 1800,
+            "distance_km": 10.0, "status": "ACTIVE"})
+        db.save_score(ids[pid], score)
+    db.set_manual_status(ids["ko"], "REJECTED")
+
+    assert {d["id"] for d in db.get_filtered_top_deals()} == {ids["ok"]}
+    assert {d["id"] for d in db.get_filtered_top_deals(show_rejected=True)} == set(ids.values())
+    assert {d["id"] for d in db.get_filtered_top_deals(status="rejected")} == {ids["ko"]}
+    db.close()
+    Path(db_path).unlink()

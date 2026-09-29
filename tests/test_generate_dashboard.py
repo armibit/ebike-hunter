@@ -234,14 +234,16 @@ def test_render_dashboard_thumbnail_and_image_kept_on_rescan():
             "price_chf": 2000, "price_eur": 1900, "distance_km": 10, "status": "ACTIVE"}
     db.upsert_listing({**base, "portal_id": "a", "image_url": "https://cdn.example.com/a.jpg"})
     db.upsert_listing({**base, "portal_id": "a"})  # rescan, card without image
-    db.upsert_listing({**base, "portal_id": "b", "image_url": "javascript:alert(1)"})
+    db.upsert_listing({**base, "portal_id": "b", "title": "Other", "image_url": "javascript:alert(1)"})
     db.close()
 
     html = render_dashboard_html(tmp, interactive=True)
     os.remove(tmp)
     assert '<img class="thumb" src="https://cdn.example.com/a.jpg"' in html
     assert "javascript:alert" not in html
-    assert html.count('class="thumb"') == 1
+    assert html.count('<img class="thumb"') == 1
+    # No image (or unsafe one) -> placeholder, so rows stay aligned
+    assert html.count('class="thumb none"') == 1
 
 
 if __name__ == "__main__":

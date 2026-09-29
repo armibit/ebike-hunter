@@ -156,6 +156,7 @@ def get_top_deals_dynamic():
         'status': request.args.get('status'),
         'fav_only': request.args.get('fav_only', default=False, type=lambda x: x.lower() == 'true'),
         'ai_only': request.args.get('ai_only', default=False, type=lambda x: x.lower() == 'true'),
+        'show_rejected': request.args.get('show_rejected', default=False, type=lambda x: x.lower() == 'true'),
         'limit': request.args.get('limit', default=10, type=int),
     }
 

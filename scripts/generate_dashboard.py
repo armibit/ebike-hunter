@@ -432,7 +432,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         tbody tr.sold {{ opacity: .45; }}
 
         .title-link {{ font-weight: 600; color: var(--text); }}
-        .thumb {{ float: left; width: 64px; height: 44px; object-fit: cover; border-radius: 4px; margin-right: 8px; background: var(--border, #ddd); }}
+        .thumb {{ display: block; width: 160px; height: 107px; object-fit: cover; border-radius: 6px; margin-bottom: 6px; background: var(--border, #ddd); transition: transform .15s; transform-origin: left top; }}
+        .thumb:hover {{ transform: scale(2.2); position: relative; z-index: 10; box-shadow: 0 8px 24px rgba(0,0,0,.3); }}
+        .thumb.none {{ display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: 12px; }}
         .title-meta {{ color: var(--text-muted); font-size: 12px; margin-top: 3px; }}
         .ai-icon {{ font-size: 11px; cursor: default; }}
         .new-icon {{ font-size: 11px; cursor: default; }}
@@ -633,6 +635,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <label>&nbsp;</label>
                     <label class="filter-checkbox"><input type="checkbox" id="aiOnly"> 🤖 Solo con analisi AI</label>
                 </div>
+                <div class="filter-group">
+                    <label>&nbsp;</label>
+                    <label class="filter-checkbox"><input type="checkbox" id="showRejected"> 🚫 Mostra scartati</label>
+                </div>
                 <div class="filter-group brand-filter">
                     <label>Marca</label>
                     <details class="brand-dropdown">
@@ -773,7 +779,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         thumb_src = _safe_url(bike.get("image_url"))
         thumb = (
             f'<img class="thumb" src="{thumb_src}" alt="" loading="lazy" referrerpolicy="no-referrer">'
-            if thumb_src != "#" else ""
+            if thumb_src != "#" else '<div class="thumb none">📷 nessuna foto</div>'
         )
         units_icon = (
             '<span class="dup-icon" title="Altre unità identiche: '
@@ -1161,6 +1167,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 status: document.getElementById('statusFilter').value || undefined,
                 fav_only: document.getElementById('favOnly').checked,
                 ai_only: document.getElementById('aiOnly').checked,
+                show_rejected: document.getElementById('showRejected').checked,
                 limit: 10
             });
 
@@ -1233,6 +1240,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         document.getElementById('scoreMin').addEventListener('input', applyFilters);
         document.getElementById('favOnly').addEventListener('change', applyFilters);
         document.getElementById('aiOnly').addEventListener('change', applyFilters);
+        document.getElementById('showRejected').addEventListener('change', applyFilters);
         document.getElementById('statusFilter').addEventListener('change', applyFilters);
 
         // Text filter with debounce
@@ -1254,6 +1262,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const favOnly = document.getElementById('favOnly').checked;
             const aiOnly = document.getElementById('aiOnly').checked;
             const statusFilter = document.getElementById('statusFilter').value;
+            const showRejected = document.getElementById('showRejected').checked;
             const textFilter = document.getElementById('textFilter').value.toLowerCase();
             const brands = checkedBrands();
             const brandTotal = document.querySelectorAll('.brand-cb').length;
@@ -1289,6 +1298,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 if (favOnly && !favorite) show = false;
                 if (aiOnly && !hasAi) show = false;
                 if (statusFilter && statusGroup !== statusFilter) show = false;
+                // Hidden by default; picking "Scartati" in Stato shows them anyway.
+                if (statusGroup === 'rejected' && !showRejected && statusFilter !== 'rejected') show = false;
                 if (textFilter && !titleText.includes(textFilter)) show = false;
                 if (brands.length && !brands.includes(row.dataset.brand)) show = false;
 
@@ -1356,6 +1367,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 scoreMin: document.getElementById('scoreMin').value,
                 favOnly: document.getElementById('favOnly').checked,
                 aiOnly: document.getElementById('aiOnly').checked,
+                showRejected: document.getElementById('showRejected').checked,
                 statusFilter: document.getElementById('statusFilter').value,
                 textFilter: document.getElementById('textFilter').value,
                 brands: checkedBrands()
@@ -1380,6 +1392,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 document.getElementById('scoreMin').value = filters.scoreMin;
                 document.getElementById('favOnly').checked = filters.favOnly;
                 document.getElementById('aiOnly').checked = filters.aiOnly;
+                document.getElementById('showRejected').checked = !!filters.showRejected;
                 document.getElementById('statusFilter').value = filters.statusFilter;
                 document.getElementById('textFilter').value = filters.textFilter || '';
                 const brands = filters.brands || [];
