@@ -456,6 +456,71 @@ def test_bike_brand_extraction():
     assert parser.parse("E-MTB full 150mm", "motore Bosch CX")["brand"] is None
 
 
+def test_brand_alias_in_prose_is_not_a_brand():
+    """Regression: buybestgear's Vakole EMT29 body says "known for EU
+    warehousing and e-mobility focus. The EMT29 12s ...", and the description
+    fallback turned every page carrying that blurb into a Focus."""
+    parser = RegexParser(TAXONOMY_PATH)
+    blurb = (
+        "Vakole distributes its E-MTBs via the BuyBestGear online platform, known for "
+        "EU warehousing and e-mobility focus. The EMT29 12s makes a bold statement."
+    )
+    specs = parser.parse('Vakole EMT29 29" 12s E-Mountain Bike 691Wh Full Suspension EMTB', blurb)
+    assert specs["brand"] == "Vakole"
+
+    # Nothing but the prose "focus" anywhere: no brand beats the wrong brand.
+    prose_only = "Sold via a platform known for EU warehousing and e-mobility focus. The bike ships fast."
+    assert parser.parse("E-Mountain Bike 691Wh", prose_only)["brand"] is None
+    # A real "Brand Model" mention later in the prose is still picked up.
+    assert parser.parse("E-MTB full", f"{prose_only} Vendo Focus Jam2 6.8")["brand"] == "Focus"
+    # Brand as the last meaningful word keeps working.
+    assert parser.parse("Vendo MTB elettrica Cube.", "")["brand"] == "Cube"
+
+
+def test_seo_keyword_dump_is_not_read_as_specs():
+    """Regression: subito sellers append a comma-separated keyword dump naming
+    bikes the ad isn't selling. Parsed as the ad body it invented specs — a
+    muscular Merida One-Twenty passed as an e-bike off its "e-bike, ebike",
+    and "150mm, 170mm" in the same list made it full suspension."""
+    from pipeline.regex_parser import strip_keyword_spam
+    parser = RegexParser(TAXONOMY_PATH)
+
+    spam = (
+        "mtb, mountain bike, mountainbike, mountain-bike, enduro, trail, all mountain, am, "
+        "enduro mtb, bici montagna, bicicletta, merida, team, specialized, stumpjumper, "
+        "turbo levo, kenevo, commencal meta am, clash, orbea rallon, occam, wild, e-mtb, "
+        "emtb, e-bike, ebike, elettrica, carbonio, fox, rockshox, 150mm, 170mm, 180mm."
+    )
+    specs = parser.parse("Mtb full Merida One-Twenty 7.600 Carbon GX", f"Vendo la mia MTB. {spam}")
+    assert specs["motor_brand"] is None
+    assert specs["motor_torque_nm"] is None
+    assert specs["travel_rear_mm"] is None
+
+    # A real e-bike body keeps its motor even with the dump appended.
+    real = "Motore Bosch Performance CX, batteria 625Wh, escursione 150mm / 140mm."
+    specs_real = parser.parse("Cube Stereo Hybrid", f"{real} {spam}")
+    assert specs_real["motor_brand"] == "Bosch"
+    assert specs_real["battery_capacity_wh"] == 625
+
+    # A comma-separated spec sheet is fragmented too, but states measurements,
+    # so it must survive — it's where the motor/battery live.
+    sheet = "29”, batteria integrata, passaggio cavi interno, travel 160 mm, Boost 12x148 mm, UDH hanger"
+    assert strip_keyword_spam(sheet) == sheet
+    # A label-per-line sheet has no commas at all and must never be cut.
+    lines = "Motore Yamaha\nBatteria Yamaha\nCambio Shimano\nDoppio ammortizzatore\nReggisella telescopico"
+    assert strip_keyword_spam(lines) == lines
+    assert strip_keyword_spam("") == ""
+
+
+def test_battery_and_bosch_typo_from_labelled_fields():
+    """"batteria : 750w" (colon separator) and the seller typo "Bosh CX"."""
+    parser = RegexParser(TAXONOMY_PATH)
+    specs = parser.parse("Focus Jam2 8.9 - Tg L", "Motore : Bosh CX \nbatteria : 750w eterna !!!")
+    assert specs["motor_brand"] == "Bosch"
+    assert specs["motor_torque_nm"] == 85
+    assert specs["battery_capacity_wh"] == 750
+
+
 def test_price_from_text_and_folding_excluded():
     from pipeline.regex_parser import price_from_text
     assert price_from_text("Batteria 625Wh\nprezzo € 2450 \nconsegna a mano") == 2450

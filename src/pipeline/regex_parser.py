@@ -19,6 +19,53 @@ def price_from_text(text: str) -> float:
     return 0.0
 
 
+# Subito/tutti sellers pad an ad with a trailing SEO keyword dump naming
+# dozens of bikes the ad isn't selling: "... orbea rallon, occam, wild, e-mtb,
+# emtb, e-bike, ebike, elettrica, carbonio, ... 150mm, 170mm, 180mm.". Parsed
+# as if it described the bike for sale, it invents specs out of thin air — a
+# muscular Merida One-Twenty became an e-bike off the "e-bike, ebike" in that
+# list, and its "150mm, 170mm" made any hardtail full-suspension. The list is
+# always a run of comma/newline-separated fragments too short to be prose.
+# Commas only, never newlines: a label-per-line spec sheet ("Ammortizzatore\n
+# RockShox Deluxe\nSerie Sterzo\n...") is just as fragmented as a keyword dump,
+# and it holds the motor/battery this project exists to read.
+_SPAM_SEPARATOR = re.compile(r",")
+_SPAM_MIN_RUN = 8
+_SPAM_MAX_WORDS = 3
+# A comma-separated spec sheet ("29”, batteria integrata, travel 160 mm, Boost
+# 12x148 mm") looks just as fragmented as a keyword dump, and cutting it throws
+# away the real specs. What a dump never has is measurements: a fragment
+# carrying a number with a unit, or a "label: value", ends the run.
+_SPAM_SPEC_FRAGMENT = re.compile(
+    r"""\d\s*(?:mm|cm|kg|wh|nm|v\b|ah|tpi|zoll|pollici|["”']|x\s*\d)|:""", re.IGNORECASE
+)
+
+
+def strip_keyword_spam(text: str) -> str:
+    """Cut a trailing SEO keyword list off an ad body, at the start of the
+    first run of >= _SPAM_MIN_RUN fragments that are each at most
+    _SPAM_MAX_WORDS words long and state no measurement. Text with no such
+    run is returned unchanged."""
+    if not text:
+        return text
+    bounds = [m.start() for m in _SPAM_SEPARATOR.finditer(text)]
+    run_start, run = None, 0
+    for start, end in zip([0] + [b + 1 for b in bounds], bounds + [len(text)]):
+        fragment = text[start:end]
+        words = fragment.split()
+        if not words:
+            continue  # ",\n" and friends: separator noise, not a fragment
+        if len(words) <= _SPAM_MAX_WORDS and not _SPAM_SPEC_FRAGMENT.search(fragment):
+            if run_start is None:
+                run_start = start
+            run += 1
+            if run >= _SPAM_MIN_RUN:
+                return text[:run_start].rstrip(" \t\r\n,;.")
+        else:
+            run_start, run = None, 0
+    return text
+
+
 class RegexParser:
     def __init__(self, taxonomy_path: str):
         with open(taxonomy_path, "r", encoding="utf-8") as f:
@@ -37,6 +84,8 @@ class RegexParser:
         )
 
     def parse(self, title: str, description: str) -> Dict[str, Any]:
+        # The title is the seller's own words; only the body carries the dump.
+        description = strip_keyword_spam(description)
         text = f"{title} {description}".lower()
 
         # Travel detection early, needed to infer suspension type
@@ -183,11 +232,13 @@ class RegexParser:
         return None
 
     def _extract_battery_wh(self, text: str) -> Optional[int]:
+        # The labelled forms allow a ":"/"-" separator: sellers write
+        # "batteria : 750w" as often as "batteria 750wh".
         patterns = [
             r"(\d{3,4})\s*wh",
-            r"batteria\s*(?:da|di)?\s*(\d{3,4})",
-            r"akku\s*(\d{3,4})",
-            r"battery\s*(\d{3,4})"
+            r"batteria\s*[:\-]?\s*(?:da|di)?\s*(\d{3,4})",
+            r"akku\s*[:\-]?\s*(\d{3,4})",
+            r"battery\s*[:\-]?\s*(\d{3,4})"
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -436,15 +487,43 @@ class RegexParser:
                 return year
         return None
 
+    # Words that can follow a brand alias in ordinary prose but never start a
+    # model name. Several aliases are also everyday words ("focus", "giant",
+    # "ghost", "rose"), and the description fallback below scans a whole
+    # marketing body: buybestgear's Vakole EMT29 text reads "known for EU
+    # warehousing and e-mobility focus. The EMT29 12s ...", which made that
+    # (and every other page carrying the blurb) a Focus.
+    _PROSE_STOPWORDS = frozenset("""
+        the a an and or of on in for to with at by from as is was are has have be been
+        this that these those its it their our also can will very more most
+        il lo la le gli un una uno e di da per con su che non ha sono come del della al alla
+        der die das und ist mit für auf zu ein eine den dem im von sind hat als auch sehr
+        les du pour avec sur est
+    """.split())
+
+    def _is_brand_mention(self, text: str, end: int) -> bool:
+        """True when what follows an alias match looks like a model name (or
+        nothing), i.e. the alias is used as a brand and not as a plain word."""
+        rest = text[end:]
+        if not rest.strip(" \t\r\n.,;:!?-–—/|()[]\"'"):
+            return True  # brand is the last meaningful word ("Vendo MTB Cube.")
+        if rest[0] in ".,;:!?":
+            return False  # ends a sentence mid-text -> prose, not "Brand Model"
+        word = re.match(r"[^a-z0-9]*([a-z0-9][a-z0-9\-\.]*)", rest)
+        return word is None or word.group(1) not in self._PROSE_STOPWORDS
+
     def _extract_brand_model(self, title: str) -> Optional[Tuple[str, str]]:
         """Frame brand named earliest in the text, plus up to 3 following
         words as the model. Whole words only: "TREKKING" is not Trek."""
         title_lower = (title or "").lower()
         best = None
         for alias, name in self.bike_brands:
-            match = re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", title_lower)
-            if match and (best is None or match.start() < best[0].start()):
-                best = (match, name)
+            for match in re.finditer(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", title_lower):
+                if not self._is_brand_mention(title_lower, match.end()):
+                    continue
+                if best is None or match.start() < best[0].start():
+                    best = (match, name)
+                break
         if not best:
             return None
         match, name = best

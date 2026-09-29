@@ -6,9 +6,9 @@
       "torque_nm": 85,
       "tier": "top",
       "patterns": [
-        "bosch cx", "perfor?mance line cx", "perfor?mance cx", "cx gen4", "cx gen 4",
-        "cx smart system", "bosch 85nm",
-        "bosch 85 nm", "cx gen5"
+        "bosc?h cx", "perfor?mance line cx", "perfor?mance cx", "cx gen4", "cx gen 4",
+        "cx smart system", "bosc?h 85nm",
+        "bosc?h 85 nm", "cx gen5"
       ]
     },
     "specialized_brose": {
@@ -75,7 +75,7 @@
       "torque_nm": 65,
       "tier": "mid",
       "patterns": [
-        "bosch perfor?mance (?!cx)", "perfor?mance line (?!cx)", "bosch 65nm"
+        "bosc?h perfor?mance (?!cx)", "perfor?mance line (?!cx)", "bosc?h 65nm"
       ]
     },
     "yamaha_pwst": {
@@ -111,9 +111,9 @@
       "torque_nm": 50,
       "tier": "disallowed",
       "patterns": [
-        "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosch active line",
+        "fazua", "mahle", "specialized sl 1.1", "sl 1.2", "bosc?h active line",
         "tq hpr50", "tq-hpr50", "hpr50", "tq hpr40", "hpr40", "\\btq\\b",
-        "bosch sx", "perfor?mance line sx", "performance sx", "sx 55nm", "bosch 55nm"
+        "bosc?h sx", "perfor?mance line sx", "performance sx", "sx 55nm", "bosc?h 55nm"
       ]
     }
   },
@@ -291,6 +291,13 @@
     "Berria": ["berria"],
     "Colnago": ["colnago"],
     "Wheeler": ["wheeler"],
-    "Cilo": ["cilo"]
+    "Cilo": ["cilo"],
+    "Vakole": ["vakole"],
+    "Lankeleisi": ["lankeleisi"],
+    "CMACEWHEEL": ["cmacewheel"],
+    "Fafrees": ["fafrees"],
+    "Dukawey": ["dukawey"],
+    "Hidoes": ["hidoes"],
+    "DUOTTS": ["duotts"]
   }
 }
