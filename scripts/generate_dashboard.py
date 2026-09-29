@@ -837,6 +837,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     <td>
                         {thumb}<a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
                         <div class="title-meta">{new_icon}{ai_icon}{dup_icon}{units_icon}{_attr(bike['portal'])} · {meta_text}</div>
+                        {f'<div class="ai-summary">{_attr(bike.get("ai_analysis", "")[:120])}{("..." if len(bike.get("ai_analysis", "")) > 120 else "")}</div>' if bike.get('ai_analysis') else ''}
                     </td>
                     <td>{price_text}</td>
                     <td><span class="status {status_class}">{status}</span></td>
