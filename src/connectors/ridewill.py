@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector
+from .base import BaseConnector, card_image
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,7 @@ class RidewillConnector(BaseConnector):
             "price_raw": price_raw,
             "currency": "EUR",
             "location_raw": "Italy",
+            "image_url": card_image(card, "/public/imgprod"),
         }
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:

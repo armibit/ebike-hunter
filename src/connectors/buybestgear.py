@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector, shopify_variants_available
+from .base import BaseConnector, product_image, shopify_variants_available
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,7 @@ class BuybestgearConnector(BaseConnector):
                 # symbol anywhere on-page) — the shop's base currency is EUR.
                 "currency": "EUR",
                 "location_raw": "Europe",
+                "image_url": product_image(product),
                 "is_available": shopify_variants_available(variants),
             }
         except Exception:

@@ -184,7 +184,20 @@ class ScoringEngine:
 
         return min(100.0, score)
 
+    # Gear count -> 0-100. 12-speed is preferred over 10/11.
+    GEARS_SCORE = {12: 100.0, 13: 100.0, 11: 70.0, 10: 40.0}
+    GEARS_WEIGHT = 0.15
+
     def _score_condition(self, specs: Dict[str, Any]) -> float:
+        """Wear (km / year) blended with drivetrain gear count when known."""
+        wear = self._score_wear(specs)
+        gears = specs.get("gears")
+        if not gears:
+            return wear
+        gear_score = self.GEARS_SCORE.get(gears, 20.0)
+        return (1 - self.GEARS_WEIGHT) * wear + self.GEARS_WEIGHT * gear_score
+
+    def _score_wear(self, specs: Dict[str, Any]) -> float:
         """
         Score based on odometer km and model year.
         """

@@ -107,6 +107,7 @@ class RegexParser:
             "brakes_tier": self._detect_brakes_tier(text),
             "fork_tier": self._detect_fork_tier(text),
             "odometer_km": self._extract_odometer(text),
+            "gears": self._extract_gears(text),
             "model_year": self._extract_year(text),
             "has_red_flag": False,
             "red_flag_details": [],
@@ -422,6 +423,21 @@ class RegexParser:
                 return "entry"
 
         return "unknown"
+
+    # "12 speed", "12v", "12s", "12 rapporti", "12-fach", "1x12". "12v" is also
+    # a battery-voltage spelling, but no e-bike has 12 V — and the count is
+    # bounded to real drivetrains (7-13) so "24s"/"36v" never match.
+    _GEARS_RE = re.compile(
+        r"\b(\d{1,2})\s*-?\s*(?:speeds?|rapporti|velocit[àa]|gang|gänge|fach|vitesses|v|s)\b"
+        r"|\b1\s*x\s*(\d{1,2})\b"
+    )
+
+    def _extract_gears(self, text: str) -> Optional[int]:
+        for match in self._GEARS_RE.finditer(text):
+            gears = int(match.group(1) or match.group(2))
+            if 7 <= gears <= 13:
+                return gears
+        return None
 
     def _extract_odometer(self, text: str) -> Optional[int]:
         # Number capture that also accepts a European thousands-separator

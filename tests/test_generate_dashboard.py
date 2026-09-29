@@ -297,6 +297,26 @@ def test_hide_sold_filter_checked_by_default_and_wired():
     print("✅ Hide-sold filter test passed")
 
 
+def test_dashboard_defaults_applied_actions_in_place_and_no_storage_key_clash():
+    import tempfile, os
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+
+    tmp = tempfile.mktemp(suffix=".db")
+    Database(tmp).close()
+    html = render_dashboard_html(tmp, interactive=True)
+    os.remove(tmp)
+
+    # first visit (nothing saved) must still run the filters
+    assert "if (!saved) { filterTable(); return; }" in html
+    # row actions update the DOM; only the spec-edit path may reload
+    assert html.count("location.reload()") == 2  # closeAnalysis + saveSpecs
+    assert "applyRowAction(" in html
+    # filter panel toggle must not overwrite the saved-filters JSON
+    assert "'ebike-filters-panel'" in html
+    assert "localStorage.setItem('ebike-filters', hidden" not in html
+
+
 if __name__ == "__main__":
     test_format_price_shows_original_currency_not_converted()
     test_format_price_falls_back_without_raw_price()
@@ -313,4 +333,5 @@ if __name__ == "__main__":
     test_render_dashboard_thumbnail_and_image_kept_on_rescan()
     test_sort_select_options_match_sortable_columns()
     test_hide_sold_filter_checked_by_default_and_wired()
+    test_dashboard_defaults_applied_actions_in_place_and_no_storage_key_clash()
     print("\n✅ All generate_dashboard tests passed!")

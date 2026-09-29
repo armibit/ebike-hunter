@@ -19,6 +19,30 @@ def test_database_init():
     print("✅ Database initialization test passed")
 
 
+def test_ai_analysis_written_without_description_is_dropped_when_description_arrives():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        db_path = tmp.name
+    db = Database(db_path)
+    listing = {"portal": "subito", "portal_id": "1", "url": "https://s/1", "title": "Cube",
+               "description_raw": "", "price_raw": 2000, "currency": "EUR", "price_chf": 1900,
+               "price_eur": 2000, "location_raw": "Brescia", "distance_km": 50.0, "region": "lombardia"}
+    listing_id, _, _ = db.upsert_listing(listing)
+    db.save_ai_analysis(listing_id, "motore non dichiarato", 40.0)
+
+    db.upsert_listing({**listing, "description_raw": "Bosch Performance Line CX Gen4 85 Nm, batteria 750 Wh"})
+
+    row = db.conn.execute("SELECT ai_analysis, ai_score FROM listings WHERE id = ?", (listing_id,)).fetchone()
+    assert row["ai_analysis"] is None and row["ai_score"] is None
+
+    # an analysis made WITH a description survives later rescans
+    db.save_ai_analysis(listing_id, "ok", 70.0)
+    db.upsert_listing({**listing, "description_raw": "Bosch Performance Line CX Gen4 85 Nm, batteria 750 Wh"})
+    assert db.conn.execute("SELECT ai_analysis FROM listings WHERE id = ?", (listing_id,)).fetchone()[0] == "ok"
+
+    db.close()
+    Path(db_path).unlink()
+
+
 def test_listing_insert():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = tmp.name

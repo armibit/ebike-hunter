@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import SHOP_SOLD_MARKERS, BaseConnector
+from .base import SHOP_SOLD_MARKERS, BaseConnector, card_image
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,7 @@ class EbikestorebresciaConnector(BaseConnector):
             "price_raw": price_raw,
             "currency": "EUR",
             "location_raw": "Brescia",
+            "image_url": card_image(card, "ebikestore.shop"),
         }
 
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:

@@ -25,6 +25,16 @@ def card_image(tag, host: str) -> Optional[str]:
     return None
 
 
+def product_image(product: Dict[str, Any]) -> Optional[str]:
+    """First image of a Shopify / WooCommerce Store API product, with
+    protocol-relative URLs ("//cdn.shopify.com/...") made absolute."""
+    images = product.get("images") or []
+    src = images[0].get("src") if images and isinstance(images[0], dict) else None
+    if not src:
+        return None
+    return "https:" + src if src.startswith("//") else src
+
+
 MAX_RETRY_AFTER_SECONDS = 300
 
 

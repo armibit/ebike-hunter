@@ -638,7 +638,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     </style>
     <script>
     if ((localStorage.getItem('ebike-view') || 'card') === 'card') document.documentElement.classList.add('view-card');
-    if (localStorage.getItem('ebike-filters') === 'hidden') document.documentElement.classList.add('filters-hidden');
+    if (localStorage.getItem('ebike-filters-panel') === 'hidden') document.documentElement.classList.add('filters-hidden');
     </script>
 </head>
 <body>
@@ -1089,6 +1089,25 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             }
         }
 
+        // Reflect a server-side action in the DOM instead of reloading, which
+        // would drop scroll position and view state. Filters run again so a
+        // row that no longer matches (discarded, sold) disappears.
+        function applyRowAction(row, path, data) {
+            if (!row) return;
+            if (path === 'delete') row.remove();
+            else if (path === 'reject') row.dataset.statusGroup = 'rejected';
+            else if (path === 'sold') row.dataset.statusGroup = 'sold';
+            else if (path === 'restore') row.dataset.statusGroup = 'active';
+            else if (path === 'favorite') {
+                const fav = !!(data && data.is_favorite);
+                row.dataset.favorite = fav ? '1' : '0';
+                const star = row.querySelector('.icon-star');
+                if (star) star.textContent = fav ? '⭐' : '☆';
+            }
+            filterTable();
+            if (typeof rebuildIfCards === 'function') rebuildIfCards();
+        }
+
         // Status/state-changing actions — POST to server.py's API and reload
         // so the page reflects the new DB state (status change, deletion, etc).
         async function postAction(path, body) {
@@ -1099,7 +1118,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     body: JSON.stringify(body || {})
                 });
                 if (!resp.ok) throw new Error(await resp.text());
-                location.reload();
+                applyRowAction(document.querySelector(`#tbody tr[data-id="${CSS.escape(currentListingId)}"]`), path, await resp.json());
+                closeAnalysis();
             } catch (e) {
                 alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py) e di aver aperto http://127.0.0.1:5050 — non il file index.html.\\n\\n' + e.message);
             }
@@ -1125,7 +1145,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             try {
                 const resp = await fetch(`/api/listings/${listingId}/${path}`, {method: 'POST'});
                 if (!resp.ok) throw new Error(await resp.text());
-                location.reload();
+                applyRowAction(button.closest('tr'), path, await resp.json());
             } catch (e) {
                 alert('Azione non riuscita. Assicurati di aver avviato il server locale (python3 server.py).\\n\\n' + e.message);
             }
@@ -1505,7 +1525,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         function restoreFilters() {
             const saved = localStorage.getItem('ebike-filters');
-            if (!saved) return;
+            // First visit: nothing to restore, but the defaults (hide sold)
+            // still have to be applied to the rows.
+            if (!saved) { filterTable(); return; }
             try {
                 const filters = JSON.parse(saved);
                 priceMinInput.value = filters.priceMin;
@@ -1529,6 +1551,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 filterTable();
             } catch (e) {
                 console.error('Errore ripristino filtri:', e);
+                filterTable();
             }
         }
 
@@ -1625,7 +1648,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     const filtersBtn = document.getElementById('filtersBtn');
     filtersBtn.addEventListener('click', () => {
         const hidden = document.documentElement.classList.toggle('filters-hidden');
-        localStorage.setItem('ebike-filters', hidden ? 'hidden' : 'shown');
+        localStorage.setItem('ebike-filters-panel', hidden ? 'hidden' : 'shown');
     });
 
     function switchToList() {
@@ -1742,6 +1765,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     function rebuildIfCards() {
         if (cardsContainer.classList.contains('active')) setTimeout(buildCards, 0);
     }
+    // The initial filter pass (restoreFilters, on DOMContentLoaded) runs after
+    // the grid was first built from the unfiltered rows.
+    window.addEventListener('DOMContentLoaded', rebuildIfCards);
     document.querySelector('.filters')?.addEventListener('input', rebuildIfCards);
     document.querySelector('.filters')?.addEventListener('change', rebuildIfCards);
     document.querySelector('.filters')?.addEventListener('click', rebuildIfCards);

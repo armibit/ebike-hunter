@@ -2,7 +2,7 @@ import html
 import logging
 import re
 from typing import Dict, List, Any, Optional
-from .base import BaseConnector, shopify_variants_available
+from .base import BaseConnector, product_image, shopify_variants_available
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class EcyclesShopConnector(BaseConnector):
             "price_raw": price_raw,
             "currency": "EUR",
             "location_raw": "Milano",
+            "image_url": product_image(product),
             # Sold-out one-off bikes stay in the collection feed.
             "is_available": shopify_variants_available(variants),
         }

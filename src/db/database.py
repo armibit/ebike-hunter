@@ -187,6 +187,9 @@ class Database:
         if "motor_verified" not in spec_columns:
             cursor.execute("ALTER TABLE specifications ADD COLUMN motor_verified INTEGER")
             self.conn.commit()
+        if "gears" not in spec_columns:
+            cursor.execute("ALTER TABLE specifications ADD COLUMN gears INTEGER")
+            self.conn.commit()
 
     @staticmethod
     def make_listing_id(portal: str, portal_id: Any) -> str:
@@ -270,6 +273,7 @@ class Database:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, (listing_id, item["price_raw"], item["currency"], item["price_chf"], new_status, now))
 
+            self._drop_blind_ai_analysis(listing_id, item.get("description_raw", ""))
             cursor.execute("""
             UPDATE listings SET
                 title = ?, description_raw = ?, price_raw = ?, currency = ?,
@@ -297,8 +301,8 @@ class Database:
             listing_id, brand, model, model_year, category, suspension_type,
             travel_front_mm, travel_rear_mm, frame_size, motor_brand, motor_model,
             motor_torque_nm, motor_verified, battery_capacity_wh, odometer_km, brakes_model,
-            brakes_tier, fork_tier, has_red_flag, red_flag_details
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            brakes_tier, fork_tier, has_red_flag, red_flag_details, gears
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             listing_id, specs.get("brand"), specs.get("model"), specs.get("model_year"),
             specs.get("category"), specs.get("suspension_type"), specs.get("travel_front_mm"),
@@ -308,7 +312,7 @@ class Database:
             specs.get("battery_capacity_wh"),
             specs.get("odometer_km"), specs.get("brakes_model"), specs.get("brakes_tier"),
             specs.get("fork_tier"), 1 if specs.get("has_red_flag") else 0,
-            json.dumps(specs.get("red_flag_details", []))
+            json.dumps(specs.get("red_flag_details", [])), specs.get("gears")
         ))
         self.conn.commit()
 
@@ -499,10 +503,25 @@ class Database:
             excluded.append(row)
         return excluded
 
+    MIN_DESCRIPTION_CHARS = 40
+
+    def _drop_blind_ai_analysis(self, listing_id: str, new_description: str):
+        """An AI verdict written while the description was missing ("motore non
+        dichiarato", ...) is worthless once the real text arrives — clear it so
+        the next analyze run redoes it."""
+        if len((new_description or "").strip()) < self.MIN_DESCRIPTION_CHARS:
+            return
+        self.conn.execute(
+            "UPDATE listings SET ai_analysis = NULL, ai_score = NULL, ai_analyzed_at = NULL "
+            "WHERE id = ? AND ai_analysis IS NOT NULL AND length(trim(coalesce(description_raw, ''))) < ?",
+            (listing_id, self.MIN_DESCRIPTION_CHARS),
+        )
+
     def update_description_raw(self, listing_id: str, description_raw: str):
         """Persist a description fetched live during the AI pass (analyze.py)
         when the stored one was missing or too thin — so the enrichment
         survives beyond this one run instead of being re-fetched every time."""
+        self._drop_blind_ai_analysis(listing_id, description_raw)
         cursor = self.conn.cursor()
         cursor.execute(
             "UPDATE listings SET description_raw = ? WHERE id = ?",

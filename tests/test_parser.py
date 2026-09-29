@@ -558,3 +558,13 @@ if __name__ == "__main__":
     test_frame_size_cm_ranges()
     test_disallowed_frame_size_remembers_what_was_written()
     print("\n✅ All parser tests passed!")
+
+
+def test_gears_extracted_and_bounded():
+    parser = RegexParser(TAXONOMY_PATH)
+    assert parser._extract_gears("sram gx eagle 12 speed") == 12
+    assert parser._extract_gears("bosch cx 12v 600wh") == 12
+    assert parser._extract_gears("cassetta 1x11") == 11
+    assert parser._extract_gears("10 rapporti shimano") == 10
+    assert parser._extract_gears("batteria 36v 24s 625wh") is None
+    assert parser._extract_gears("nessun dato") is None

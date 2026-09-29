@@ -306,3 +306,17 @@ def test_age_penalty():
     assert ScoringEngine._age_penalty(date.today().year - 3) == 0
     assert ScoringEngine._age_penalty(date.today().year - 5) == 6
     assert ScoringEngine._age_penalty(2010) == 20
+
+
+def test_condition_prefers_12_gears_over_10():
+    engine = ScoringEngine({
+        "buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}},
+        "scoring_weights": {"price_value": 0.35, "component_quality": 0.25, "condition_mileage": 0.15,
+                            "location_proximity": 0.15, "fit_geometry": 0.10},
+    })
+    base = {"odometer_km": 300}
+    unknown = engine._score_condition(base)
+    g12 = engine._score_condition({**base, "gears": 12})
+    g10 = engine._score_condition({**base, "gears": 10})
+    assert g12 > g10
+    assert g12 == unknown == 100.0

@@ -2,7 +2,7 @@ import html
 import logging
 import re
 from typing import Dict, List, Any, Optional
-from .base import BaseConnector
+from .base import BaseConnector, product_image
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,7 @@ class ZbikeConnector(BaseConnector):
             "price_raw": price_raw,
             "currency": prices.get("currency_code", "CHF"),
             "location_raw": "Mendrisio, Ticino",
+            "image_url": product_image(product),
             # Sold used bikes stay listed as out of stock in the Store API.
             "is_available": bool(product["is_in_stock"]) if "is_in_stock" in product else None,
         }
