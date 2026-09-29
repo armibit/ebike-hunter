@@ -542,6 +542,55 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .back-to-top {{ display: none; position: fixed; bottom: 24px; right: 24px; z-index: 500; width: 44px; height: 44px; border: none; border-radius: 50%; background: var(--primary); color: white; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }}
         .back-to-top.visible {{ display: block; }}
         .back-to-top:hover {{ opacity: 0.85; }}
+
+        /* CARD VIEW */
+        .view-toggle {{ display: flex; gap: 8px; align-items: center; margin: 14px 0; }}
+        .view-toggle button {{ width: 36px; height: 36px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 16px; transition: all .15s; }}
+        .view-toggle button.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
+        .view-toggle button:hover {{ border-color: var(--primary); }}
+
+        .cards-container {{ display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }}
+        .cards-container.active {{ display: grid; }}
+
+        .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform .15s, box-shadow .15s; position: relative; display: flex; flex-direction: column; }}
+        .card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.12); }}
+
+        .card-badge {{ position: absolute; top: 8px; left: 8px; background: rgba(255,255,255,0.95); padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; z-index: 2; }}
+        .card-badge.new {{ background: #dbeafe; color: #1e40af; }}
+        .card-badge.used {{ background: #f3f4f6; color: #6b7280; }}
+
+        .card-heart {{ position: absolute; top: 8px; right: 8px; font-size: 20px; cursor: pointer; z-index: 2; transition: transform .15s; }}
+        .card-heart:hover {{ transform: scale(1.2); }}
+
+        .card-image {{ width: 100%; height: 200px; object-fit: cover; background: var(--border); }}
+        .card-body {{ padding: 14px; flex: 1; display: flex; flex-direction: column; }}
+
+        .card-title {{ font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 6px; line-height: 1.3; }}
+        .card-type {{ font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }}
+        .card-brand {{ font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }}
+
+        .card-specs {{ font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; }}
+        .card-location {{ font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }}
+        .card-date {{ font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }}
+
+        .card-price-section {{ margin: 8px 0; padding-top: 10px; border-top: 1px solid var(--border); }}
+        .card-price-old {{ font-size: 11px; color: var(--text-muted); text-decoration: line-through; margin-bottom: 2px; }}
+        .card-price-new {{ font-size: 18px; font-weight: 700; color: var(--primary); }}
+
+        .card-score {{ position: absolute; bottom: 60px; right: 8px; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; color: white; }}
+        .card-score.high {{ background: #16a34a; }}
+        .card-score.mid {{ background: #d97706; }}
+        .card-score.low {{ background: #dc2626; }}
+
+        .card-actions {{ display: flex; gap: 6px; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--border); }}
+        .card-action-btn {{ width: 36px; height: 36px; border-radius: 50%; border: none; background: var(--primary-light); color: var(--primary); cursor: pointer; font-size: 16px; transition: all .15s; position: relative; display: flex; align-items: center; justify-content: center; }}
+        .card-action-btn:hover {{ background: var(--primary); color: white; }}
+        .card-action-btn.delete {{ background: #fee2e2; color: #dc2626; }}
+        .card-action-btn.delete:hover {{ background: #dc2626; color: white; }}
+        .card-action-btn.sold {{ background: #f3f4f6; color: #6b7280; }}
+        .card-action-btn.sold:hover {{ background: #6b7280; color: white; }}
+        .card-action-btn::after {{ content: attr(data-tooltip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 4px 8px; border-radius: 4px; font-size: 11px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s; margin-bottom: 6px; }}
+        .card-action-btn:hover::after {{ opacity: 1; }}
     </style>
 </head>
 <body>
@@ -715,6 +764,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         </div>
 
         <h2 class="section-title">📋 Tutti gli annunci</h2>
+        <div class="view-toggle">
+            <button id="viewListBtn" class="active" title="Vista Lista">☰</button>
+            <button id="viewCardBtn" title="Vista Card">⊞</button>
+        </div>
+        <div id="cardsContainer" class="cards-container"></div>
         <table id="table">
             <thead>
                 <tr>
@@ -1474,6 +1528,112 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         backToTopBtn.addEventListener('click', () => {
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
+    </script>
+    <script>
+    // VIEW TOGGLE: List vs Card
+    const viewListBtn = document.getElementById('viewListBtn');
+    const viewCardBtn = document.getElementById('viewCardBtn');
+    const table = document.getElementById('table');
+    const cardsContainer = document.getElementById('cardsContainer');
+
+    const savedView = localStorage.getItem('ebike-view') || 'list';
+
+    function switchToList() {{
+        table.style.display = 'table';
+        cardsContainer.classList.remove('active');
+        viewListBtn.classList.add('active');
+        viewCardBtn.classList.remove('active');
+        localStorage.setItem('ebike-view', 'list');
+    }}
+
+    function switchToCard() {{
+        table.style.display = 'none';
+        cardsContainer.classList.add('active');
+        viewListBtn.classList.remove('active');
+        viewCardBtn.classList.add('active');
+        localStorage.setItem('ebike-view', 'card');
+        buildCards();
+    }}
+
+    viewListBtn.addEventListener('click', switchToList);
+    viewCardBtn.addEventListener('click', switchToCard);
+
+    function buildCards() {{
+        const tbody = table.querySelector('tbody');
+        if (!tbody) return;
+
+        cardsContainer.innerHTML = '';
+        const rows = tbody.querySelectorAll('tr');
+
+        rows.forEach(row => {{
+            const tds = row.querySelectorAll('td');
+            if (tds.length < 5) return;
+
+            // Extract data
+            const scoreSpan = tds[0].querySelector('.score');
+            const scoreVal = parseFloat(scoreSpan?.textContent) || 0;
+            const scoreClass = scoreSpan?.classList.contains('high') ? 'high' : scoreSpan?.classList.contains('mid') ? 'mid' : 'low';
+
+            const titleCell = tds[1];
+            const thumb = titleCell.querySelector('.thumb');
+            const titleLink = titleCell.querySelector('.title-link');
+            const title = titleLink?.textContent?.trim() || 'N/A';
+            const titleMeta = titleCell.querySelector('.title-meta')?.textContent?.trim() || '';
+
+            const price = tds[2]?.innerHTML || 'N/A';
+            const status = tds[3]?.textContent?.trim() || '';
+            const motor = tds[4]?.textContent?.trim() || '';
+            const battery = tds[5]?.textContent?.trim() || '';
+
+            const thumbSrc = thumb?.src || '';
+
+            // Parse title meta: "PORTAL · META_TEXT"
+            const metaParts = titleMeta.split('·').map(p => p.trim());
+            const portal = metaParts[0] || '';
+            const metaFull = metaParts.slice(1).join(' · ') || '';
+
+            // Build card
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <div class="card-badge ${{status.includes('ACTIVE') ? 'used' : 'new'}}">${{status}}</div>
+                <div class="card-heart" onclick="toggleFavorite(event)">🤍</div>
+                <img src="${{thumbSrc}}" alt="Bike" class="card-image" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Crect fill=%22%23ddd%22 width=%22200%22 height=%22200%22/%3E%3C/svg%3E'">
+                <div class="card-body">
+                    <div class="card-title">${{title.substring(0, 60)}}</div>
+                    <div class="card-type">${{portal}}</div>
+                    <div class="card-brand">${{motor}}</div>
+                    <div class="card-specs">
+                        <div>${{battery}}</div>
+                    </div>
+                    <div class="card-location">${{metaFull}}</div>
+                    <div class="card-price-section">
+                        <div class="card-price-new">${{price}}</div>
+                    </div>
+                </div>
+                <div class="card-score ${{scoreClass}}">${{scoreVal.toFixed(1)}}</div>
+                <div class="card-actions">
+                    <button class="card-action-btn delete" data-tooltip="Cancella" onclick="deleteItem(event)">🗑️</button>
+                    <button class="card-action-btn sold" data-tooltip="Segna venduto" onclick="markSold(event)">✓</button>
+                    <button class="card-action-btn" data-tooltip="Dettagli" onclick="showDetails(event)">📋</button>
+                </div>
+            `;
+            cardsContainer.appendChild(card);
+        }});
+    }}
+
+    // Initialize
+    if (savedView === 'card') {{
+        switchToCard();
+    }} else {{
+        switchToList();
+    }}
+
+    // Placeholder handlers
+    function toggleFavorite(e) {{ e.stopPropagation(); }}
+    function deleteItem(e) {{ e.stopPropagation(); }}
+    function markSold(e) {{ e.stopPropagation(); }}
+    function showDetails(e) {{ e.stopPropagation(); }}
     </script>
 </body>
 </html>
