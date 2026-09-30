@@ -224,7 +224,7 @@ def main():
         sys.exit(1)
 
     config = load_config()
-    db = Database(config["app"]["db_path"])
+    db = Database(config["app"]["database_url"])
     scorer = ScoringEngine(config)
 
     listing_id = None
@@ -352,7 +352,7 @@ def main():
 
     from scripts.generate_dashboard import generate_dashboard
     dashboard_path = BASE_DIR / "index.html"
-    generate_dashboard(config["app"]["db_path"], str(dashboard_path))
+    generate_dashboard(config["app"]["database_url"], str(dashboard_path))
     print(f"✓ Dashboard refreshed: {dashboard_path}")
 
 

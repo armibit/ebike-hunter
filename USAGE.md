@@ -7,11 +7,11 @@ automation and troubleshooting.
 
 ```bash
 pip3 install -r requirements.txt
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env   # only for analyze.py
+cp .env.example .env   # set DATABASE_URL (Supabase Session pooler); ANTHROPIC_API_KEY only for analyze.py
 ```
 
-`app.db_path` in `config/config.yaml` is relative to the project folder
-(`data/emtb_hunter.db` by default), whatever directory you run from.
+Data lives in Supabase Postgres (`DATABASE_URL` in `.env`). Tests use a local
+Postgres (`TEST_DATABASE_URL`, default `postgresql:///postgres`).
 
 ## Everyday commands
 
@@ -79,8 +79,9 @@ so no list of towns needs maintaining.
   — then adjust `config/taxonomy.json`.
 - **A listing is placed at the wrong distance**: check its `location_raw`
   in the DB; add the missing alias to `src/pipeline/geo_data.py`.
-- **"database is locked"**: stop other running `run.py`/`server.py`
-  processes, then `sqlite3 data/emtb_hunter.db "PRAGMA wal_checkpoint(TRUNCATE);"`.
+- **Cannot connect to the DB**: use the Supabase *Session pooler* URL
+  (`...pooler.supabase.com`); the direct `db.<ref>.supabase.co` host is IPv6-only.
+  Check with `python3 scripts/validate_supabase.py`.
 
 ## Tests
 

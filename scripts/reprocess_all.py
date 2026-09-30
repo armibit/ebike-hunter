@@ -51,7 +51,7 @@ def main() -> None:
     dry_run = "--dry-run" in sys.argv
 
     config = load_config()
-    db = Database(config["app"]["db_path"])
+    db = Database(config["app"]["database_url"])
     parser = RegexParser(str(BASE_DIR / "config" / "taxonomy.json"))
     scorer = ScoringEngine(config)
 
@@ -85,8 +85,8 @@ def main() -> None:
                 price_chf, price_eur = normalizer.normalize_currency(text_price, row["currency"] or "EUR")
                 print(f"  PRICE   {listing_id}: 0 -> {price_chf} CHF (from text)")
                 if not dry_run:
-                    db.conn.execute(
-                        "UPDATE listings SET price_raw = ?, price_chf = ?, price_eur = ? WHERE id = ?",
+                    cursor.execute(
+                        "UPDATE listings SET price_raw = %s, price_chf = %s, price_eur = %s WHERE id = %s",
                         (text_price, price_chf, price_eur, listing_id),
                     )
 
@@ -99,9 +99,9 @@ def main() -> None:
         location = normalizer.resolve(row["location_raw"] or "", portal_country(row["portal"]))
         lat, lon, distance_km, region = location.as_tuple()
         if not dry_run:
-            db.conn.execute(
-                "UPDATE listings SET latitude = ?, longitude = ?, distance_km = ?, region = ?,"
-                " location_normalized = COALESCE(?, location_normalized), dedupe_signature = ? WHERE id = ?",
+            cursor.execute(
+                "UPDATE listings SET latitude = %s, longitude = %s, distance_km = %s, region = %s,"
+                " location_normalized = COALESCE(%s, location_normalized), dedupe_signature = %s WHERE id = %s",
                 (lat, lon, distance_km, region, location.place, dedupe_signature(row["title"], price_chf), listing_id),
             )
 
@@ -119,16 +119,16 @@ def main() -> None:
                 print(f"  REJECT  {listing_id}: {new_reason}")
                 newly_rejected += 1
                 if not dry_run:
-                    db.conn.execute(
-                        "UPDATE listings SET status = 'REJECTED', rejection_reason = ? WHERE id = ?",
+                    cursor.execute(
+                        "UPDATE listings SET status = 'REJECTED', rejection_reason = %s WHERE id = %s",
                         (new_reason, listing_id),
                     )
             elif new_reason != old_reason:
                 print(f"  REASON  {listing_id}: {old_reason!r} -> {new_reason!r}")
                 reason_text_fixed += 1
                 if not dry_run:
-                    db.conn.execute(
-                        "UPDATE listings SET rejection_reason = ? WHERE id = ?",
+                    cursor.execute(
+                        "UPDATE listings SET rejection_reason = %s WHERE id = %s",
                         (new_reason, listing_id),
                     )
         else:
@@ -139,8 +139,8 @@ def main() -> None:
                 print(f"  RESTORE {listing_id}: score {score_result['score_total']}")
                 restored += 1
                 if not dry_run:
-                    db.conn.execute(
-                        "UPDATE listings SET status = 'ACTIVE', rejection_reason = NULL WHERE id = ?",
+                    cursor.execute(
+                        "UPDATE listings SET status = 'ACTIVE', rejection_reason = NULL WHERE id = %s",
                         (listing_id,),
                     )
                     analysis = generate_user_analysis(score_result["score_total"], specs, listing_data)
@@ -157,6 +157,7 @@ def main() -> None:
             db.save_specifications(listing_id, specs)
             db.conn.commit()
 
+    cursor.close()
     print()
     print(f"{'[DRY RUN] ' if dry_run else ''}Processed {len(rows)} listings:")
     print(f"  Restored to ACTIVE:        {restored}")

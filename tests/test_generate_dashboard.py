@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from pgtest import new_test_url, drop_test_url
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.generate_dashboard import (
@@ -149,7 +150,7 @@ def test_render_dashboard_html_no_literal_backslash_n_end_to_end():
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from db.database import Database
 
-    tmp = tempfile.mktemp(suffix=".db")
+    tmp = new_test_url()
     db = Database(tmp)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
@@ -160,7 +161,7 @@ def test_render_dashboard_html_no_literal_backslash_n_end_to_end():
     db.close()
 
     html = render_dashboard_html(tmp, interactive=True)
-    os.remove(tmp)
+    drop_test_url(tmp)
 
     match = re.search(r'<template data-listing-id="x_1">.*?</template>', html, re.S)
     assert match, "expected a per-listing <template> block"
@@ -178,7 +179,7 @@ def test_render_dashboard_order_and_badge_follow_ranking_score():
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from db.database import Database
 
-    tmp = tempfile.mktemp(suffix=".db")
+    tmp = new_test_url()
     db = Database(tmp)
     scores = {"a": (89.5, None), "b": (88.0, 95.0), "c": (95.0, None)}
     for pid, (total, ai) in scores.items():
@@ -198,7 +199,7 @@ def test_render_dashboard_order_and_badge_follow_ranking_score():
     db.close()
 
     html = render_dashboard_html(tmp, interactive=True)
-    os.remove(tmp)
+    drop_test_url(tmp)
 
     tbody = html[html.index('<tbody id="tbody">'):]
     rows = re.findall(r'<tr[^>]*data-id="(x_\w)"[^>]*data-score="([\d.]+)"', tbody)
@@ -228,7 +229,7 @@ def test_render_dashboard_thumbnail_and_image_kept_on_rescan():
     assert card_image(card, "ik.imagekit.io") == "https://ik.imagekit.io/q-80/a.jpg"
     assert card_image(card, "img.velocorner.ch") is None
 
-    tmp = tempfile.mktemp(suffix=".db")
+    tmp = new_test_url()
     db = Database(tmp)
     base = {"portal": "x", "url": "https://example.com/", "title": "Bike", "price_raw": 2000, "currency": "CHF",
             "price_chf": 2000, "price_eur": 1900, "distance_km": 10, "status": "ACTIVE"}
@@ -238,7 +239,7 @@ def test_render_dashboard_thumbnail_and_image_kept_on_rescan():
     db.close()
 
     html = render_dashboard_html(tmp, interactive=True)
-    os.remove(tmp)
+    drop_test_url(tmp)
     assert '<img class="thumb" src="https://cdn.example.com/a.jpg"' in html
     assert "javascript:alert" not in html
     assert html.count('<img class="thumb"') == 1
@@ -255,7 +256,7 @@ def test_sort_select_options_match_sortable_columns():
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from db.database import Database
 
-    tmp = tempfile.mktemp(suffix=".db")
+    tmp = new_test_url()
     db = Database(tmp)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
@@ -265,7 +266,7 @@ def test_sort_select_options_match_sortable_columns():
     db.close()
 
     html = render_dashboard_html(tmp, interactive=True)
-    os.remove(tmp)
+    drop_test_url(tmp)
 
     select = re.search(r'<select id="sortSelect".*?</select>', html, re.S)
     assert select, "expected the sort <select> in the toolbar"
@@ -287,10 +288,10 @@ def test_hide_sold_filter_checked_by_default_and_wired():
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from db.database import Database
 
-    tmp = tempfile.mktemp(suffix=".db")
+    tmp = new_test_url()
     Database(tmp).close()
     html = render_dashboard_html(tmp)
-    os.remove(tmp)
+    drop_test_url(tmp)
 
     assert 'id="hideSold" checked' in html
     assert "statusGroup === 'sold' && hideSold" in html
@@ -302,18 +303,18 @@ def test_dashboard_defaults_applied_actions_in_place_and_no_storage_key_clash():
     sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
     from db.database import Database
 
-    tmp = tempfile.mktemp(suffix=".db")
+    tmp = new_test_url()
     Database(tmp).close()
     html = render_dashboard_html(tmp, interactive=True)
-    os.remove(tmp)
+    drop_test_url(tmp)
 
     # first visit (nothing saved) must still run the filters
     assert "if (!saved) { filterTable(); return; }" in html
     # row actions update the DOM; only the spec-edit path may reload
     assert html.count("location.reload()") == 2  # closeAnalysis + saveSpecs
     assert "applyRowAction(" in html
-    # filter panel toggle must not overwrite the saved-filters JSON
-    assert "'ebike-filters-panel'" in html
+    # the filter panel toggle is gone (34d7be0): no panel key to clash with saved filters
+    assert "'ebike-filters-panel'" not in html
     assert "localStorage.setItem('ebike-filters', hidden" not in html
 
 

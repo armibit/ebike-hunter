@@ -254,6 +254,38 @@ def process_listing(
         return True
 
 
+def refresh_user_analyses(db):
+    """Regenerate user_analysis for every active listing, not just ones
+    missing it — it's a pure, cheap, local recomputation from specs/score
+    already in the DB (no network/API cost), so there's no reason to let
+    stale text survive a wording or language change (this is exactly how
+    a batch of listings ended up stuck showing English text after the
+    heuristic copy was translated to Italian — nothing re-ran it). This
+    also means a manual spec correction's new score shows consistent text
+    next scan, not a description that still reflects the old spec."""
+    cursor = db.conn.cursor()
+    cursor.execute("""
+    SELECT l.id, COALESCE(sc.score_total, 0) as score, l.price_chf, l.distance_km
+    FROM listings l
+    LEFT JOIN scores sc ON l.id = sc.listing_id
+    WHERE l.status IN ('ACTIVE', 'PRICE_DROP', 'NEW')
+    """)
+    active_listings = cursor.fetchall()
+
+    if not active_listings:
+        print("✓ No active listings to analyze")
+        return
+    print(f"Generating analysis for {len(active_listings)} listings...")
+    for row in active_listings:
+        cursor.execute("SELECT * FROM specifications WHERE listing_id = %s", (row["id"],))
+        spec_row = cursor.fetchone()
+        if spec_row:
+            listing_data = {"price_chf": row["price_chf"], "distance_km": row["distance_km"]}
+            analysis = generate_user_analysis(float(row["score"]), dict(spec_row), listing_data)
+            db.save_user_analysis(row["id"], analysis)
+    print(f"✓ Generated analysis for {len(active_listings)} listings")
+
+
 def main():
     # Load config and wire up logging before anything else runs, so every
     # subsequent line — including the banners below — is on the record.
@@ -266,7 +298,7 @@ def main():
     print()
 
     # Initialize components
-    db = Database(config["app"]["db_path"])
+    db = Database(config["app"]["database_url"])
     parser = RegexParser(str(BASE_DIR / "config" / "taxonomy.json"))
     location = config["buyer_profile"]["location"]
     normalizer = Normalizer(
@@ -277,7 +309,16 @@ def main():
     )
     scorer = ScoringEngine(config)
 
-    print(f"✓ Database: {config['app']['db_path']}")
+    # Mask password in connection string before printing
+    db_url = config["app"]["database_url"]
+    if "@" in db_url:
+        scheme, rest = db_url.split("://", 1)
+        creds, host = rest.rsplit("@", 1)
+        user = creds.split(":")[0]
+        masked_url = f"{scheme}://{user}:***@{host}"
+    else:
+        masked_url = db_url
+    print(f"✓ Database: {masked_url}")
     print(f"✓ Target: {config['buyer_profile']['location']['name']}")
     print(f"✓ Budget: {config['buyer_profile']['budget']['target_price']}-{config['buyer_profile']['budget']['hard_max_price']} CHF")
     print()
@@ -418,38 +459,7 @@ def main():
     print("=" * 80)
     print("REFRESHING ANALYSIS TEXT...")
     print("=" * 80)
-    cursor = db.conn.cursor()
-
-    # Regenerate user_analysis for every active listing, not just ones
-    # missing it — it's a pure, cheap, local recomputation from specs/score
-    # already in the DB (no network/API cost), so there's no reason to let
-    # stale text survive a wording or language change (this is exactly how
-    # a batch of listings ended up stuck showing English text after the
-    # heuristic copy was translated to Italian — nothing re-ran it). This
-    # also means a manual spec correction's new score shows consistent text
-    # next scan, not a description that still reflects the old spec.
-    cursor.execute("""
-    SELECT l.id, COALESCE(sc.score_total, 0) as score, l.price_chf, l.distance_km
-    FROM listings l
-    LEFT JOIN scores sc ON l.id = sc.listing_id
-    WHERE l.status IN ('ACTIVE', 'PRICE_DROP', 'NEW')
-    """)
-    active_listings = cursor.fetchall()
-
-    if active_listings:
-        print(f"Generating analysis for {len(active_listings)} listings...")
-        for listing_id, score, price, distance in active_listings:
-            # Fetch specs for this listing
-            cursor.execute("SELECT * FROM specifications WHERE listing_id = ?", (listing_id,))
-            spec_row = cursor.fetchone()
-            if spec_row:
-                specs = dict(spec_row)
-                listing_data = {"price_chf": price, "distance_km": distance}
-                analysis = generate_user_analysis(float(score), specs, listing_data)
-                db.save_user_analysis(listing_id, analysis)
-        print(f"✓ Generated analysis for {len(active_listings)} listings")
-    else:
-        print("✓ No active listings to analyze")
+    refresh_user_analyses(db)
 
     print()
 
@@ -461,7 +471,7 @@ def main():
     print("=" * 80)
     from scripts.generate_dashboard import generate_dashboard
     dashboard_path = BASE_DIR / "index.html"
-    generate_dashboard(config["app"]["db_path"], str(dashboard_path))
+    generate_dashboard(config["app"]["database_url"], str(dashboard_path))
     print(f"✓ Dashboard: {dashboard_path}")
     print()
     print("✓ Scan complete. Database saved.")

@@ -1,9 +1,12 @@
+import functools
 import json
 import logging
-import sqlite3
+import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import psycopg2
+import psycopg2.extras
 
 from pipeline.filters import is_correctable_rejection, spec_problems
 
@@ -19,29 +22,56 @@ logger = logging.getLogger(__name__)
 # alone.
 MANUAL_REJECT_REASON = "Scartata manualmente dall'utente"
 
+_VALID_SCHEMA_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _atomic(method):
+    """Run a multi-statement write as one transaction. The connection is
+    otherwise autocommit, so plain reads never leave the session "idle in
+    transaction" (holding locks/snapshots on Supabase for a whole scan)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        self.conn.autocommit = False
+        try:
+            result = method(self, *args, **kwargs)
+            self.conn.commit()
+            return result
+        except BaseException:
+            self.conn.rollback()
+            raise
+        finally:
+            self.conn.autocommit = True
+    return wrapper
+
 
 class Database:
-    def __init__(self, db_path: str):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._configure_db()
+    def __init__(self, database_url: str, schema: Optional[str] = None):
+        """database_url is a Postgres connection string (e.g. Supabase's
+        "Session pooler" URI). schema, when given, isolates everything in
+        its own Postgres schema instead of the default "public" one — used
+        by tests to get a fresh, disposable namespace per test on a shared
+        local Postgres, the same way each test used to get its own throwaway
+        SQLite file."""
+        self.database_url = database_url
+        self.schema = schema
+        self.conn = psycopg2.connect(database_url, cursor_factory=psycopg2.extras.RealDictCursor)
+        self.conn.autocommit = True
+        if schema:
+            if not _VALID_SCHEMA_NAME.match(schema):
+                raise ValueError(f"Invalid schema name: {schema!r}")
+            cursor = self.conn.cursor()
+            cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+            cursor.execute(f'SET search_path TO "{schema}"')
+            self.conn.commit()
         self._init_schema()
-
-    def _configure_db(self):
-        cursor = self.conn.cursor()
-        cursor.execute("PRAGMA journal_mode = WAL;")
-        cursor.execute("PRAGMA synchronous = NORMAL;")
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        self.conn.commit()
 
     def _init_schema(self):
         cursor = self.conn.cursor()
 
-        cursor.executescript("""
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS listings (
             id TEXT PRIMARY KEY,
+            numeric_id BIGSERIAL UNIQUE NOT NULL,
             portal TEXT NOT NULL,
             portal_id TEXT NOT NULL,
             url TEXT NOT NULL,
@@ -65,7 +95,11 @@ class Database:
             is_favorite INTEGER NOT NULL DEFAULT 0,
             dedupe_signature TEXT,
             image_phash TEXT,
+            image_url TEXT,
             user_analysis TEXT,
+            ai_analysis TEXT,
+            ai_score REAL,
+            ai_analyzed_at TIMESTAMP,
             first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             last_checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -74,7 +108,7 @@ class Database:
         );
 
         CREATE TABLE IF NOT EXISTS listing_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             listing_id TEXT NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
             price_raw REAL NOT NULL,
             currency TEXT NOT NULL,
@@ -104,6 +138,7 @@ class Database:
             fork_tier TEXT,
             has_red_flag INTEGER DEFAULT 0,
             red_flag_details TEXT,
+            gears INTEGER,
             extracted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -145,56 +180,53 @@ class Database:
         CREATE INDEX IF NOT EXISTS idx_scores_total ON scores(score_total DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_listing ON listing_snapshots(listing_id, captured_at DESC);
         """)
-        self.conn.commit()
 
-        # Migration: add user_analysis column if missing (for older databases)
-        cursor.execute("PRAGMA table_info(listings)")
-        columns = [row[1] for row in cursor.fetchall()]
-        if "user_analysis" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN user_analysis TEXT")
-            self.conn.commit()
+        # Migration: older DBs may predate a column added later. Postgres
+        # supports ADD COLUMN IF NOT EXISTS natively, so — unlike SQLite —
+        # there's no need to inspect the column list by hand first.
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS user_analysis TEXT")
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS ai_analysis TEXT")
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS ai_score REAL")
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS ai_analyzed_at TIMESTAMP")
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS is_favorite INTEGER NOT NULL DEFAULT 0")
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS image_url TEXT")
 
-        # Migration: add AI-analysis columns if missing (for older databases).
-        # Kept separate from score_total/user_analysis — ai_score is an
-        # informational second opinion, never used to filter get_top_deals().
-        if "ai_analysis" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN ai_analysis TEXT")
-        if "ai_score" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN ai_score REAL")
-        if "ai_analyzed_at" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN ai_analyzed_at TIMESTAMP")
-        if "is_favorite" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0")
-        if "image_url" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN image_url TEXT")
-        if "status_locked" not in columns:
-            cursor.execute("ALTER TABLE listings ADD COLUMN status_locked INTEGER NOT NULL DEFAULT 0")
-            # Older DBs: a manual "Scarta" is recognizable by its reason; lock
-            # those so the next scan stops flipping them back to ACTIVE. A
-            # manual SOLD can't be told apart from a 404-detected one, so
-            # those stay unlocked.
+        # status_locked: back-fill for DBs that predate it — a manual "Scarta"
+        # is recognizable by its reason; lock those so the next scan stops
+        # flipping them back to ACTIVE. A manual SOLD can't be told apart from
+        # a 404-detected one, so those stay unlocked. Only run the backfill
+        # the first time the column is actually added.
+        cursor.execute("""
+            SELECT NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'listings' AND column_name = 'status_locked'
+            )
+        """)
+        needs_lock_backfill = cursor.fetchone()["exists" if False else list(cursor.fetchone.__self__.description[0].name for _ in [0]) and None] if False else None
+        cursor.execute("""
+            SELECT NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'listings' AND column_name = 'status_locked'
+            ) AS missing
+        """)
+        needs_lock_backfill = cursor.fetchone()["missing"]
+        cursor.execute("ALTER TABLE listings ADD COLUMN IF NOT EXISTS status_locked INTEGER NOT NULL DEFAULT 0")
+        if needs_lock_backfill:
             cursor.execute(
-                "UPDATE listings SET status_locked = 1 WHERE status = 'REJECTED' AND rejection_reason = ?",
+                "UPDATE listings SET status_locked = 1 WHERE status = 'REJECTED' AND rejection_reason = %s",
                 (MANUAL_REJECT_REASON,),
             )
-        self.conn.commit()
 
-        # Migration: add motor_verified to specifications if missing (older DBs).
-        # NULL/1 = motor identified from an explicit model pattern; 0 = torque
-        # is a placeholder guessed from a generic "e-bike" keyword only.
-        cursor.execute("PRAGMA table_info(specifications)")
-        spec_columns = [row[1] for row in cursor.fetchall()]
-        if "motor_verified" not in spec_columns:
-            cursor.execute("ALTER TABLE specifications ADD COLUMN motor_verified INTEGER")
-            self.conn.commit()
-        if "gears" not in spec_columns:
-            cursor.execute("ALTER TABLE specifications ADD COLUMN gears INTEGER")
-            self.conn.commit()
+        cursor.execute("ALTER TABLE specifications ADD COLUMN IF NOT EXISTS motor_verified INTEGER")
+        cursor.execute("ALTER TABLE specifications ADD COLUMN IF NOT EXISTS gears INTEGER")
+
+        self.conn.commit()
 
     @staticmethod
     def make_listing_id(portal: str, portal_id: Any) -> str:
         return f"{portal}_{portal_id}"
 
+    @_atomic
     def upsert_listing(self, item: Dict[str, Any]) -> Tuple[str, bool, bool]:
         """
         Upserts listing.
@@ -208,7 +240,7 @@ class Database:
 
         cursor.execute(
             "SELECT id, price_raw, currency, price_chf, status, rejection_reason, status_locked"
-            " FROM listings WHERE portal = ? AND portal_id = ?",
+            " FROM listings WHERE portal = %s AND portal_id = %s",
             (portal, portal_id),
         )
         existing = cursor.fetchone()
@@ -223,7 +255,7 @@ class Database:
                 price_raw, currency, price_chf, price_eur, location_raw, location_normalized,
                 region, latitude, longitude, distance_km, status, rejection_reason,
                 dedupe_signature, image_phash, image_url, first_seen_at, last_seen_at, last_checked_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 listing_id, portal, portal_id, item["url"], item["title"],
                 item.get("description_raw", ""), item.get("seller_id"), item.get("seller_name"),
@@ -235,7 +267,7 @@ class Database:
             ))
             cursor.execute("""
             INSERT INTO listing_snapshots (listing_id, price_raw, currency, price_chf, status, captured_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """, (listing_id, item["price_raw"], item["currency"], item["price_chf"], item.get("status", "NEW"), now))
         else:
             old_status = existing["status"]
@@ -270,18 +302,18 @@ class Database:
             if price_changed and item["price_raw"] > 0:
                 cursor.execute("""
                 INSERT INTO listing_snapshots (listing_id, price_raw, currency, price_chf, status, captured_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """, (listing_id, item["price_raw"], item["currency"], item["price_chf"], new_status, now))
 
             self._drop_blind_ai_analysis(listing_id, item.get("description_raw", ""))
             cursor.execute("""
             UPDATE listings SET
-                title = ?, description_raw = ?, price_raw = ?, currency = ?,
-                price_chf = ?, price_eur = ?, location_raw = ?, location_normalized = ?,
-                region = ?, latitude = ?, longitude = ?, distance_km = ?,
-                status = ?, rejection_reason = ?, dedupe_signature = ?, last_seen_at = ?, last_checked_at = ?,
-                image_url = COALESCE(?, image_url)
-            WHERE id = ?
+                title = %s, description_raw = %s, price_raw = %s, currency = %s,
+                price_chf = %s, price_eur = %s, location_raw = %s, location_normalized = %s,
+                region = %s, latitude = %s, longitude = %s, distance_km = %s,
+                status = %s, rejection_reason = %s, dedupe_signature = %s, last_seen_at = %s, last_checked_at = %s,
+                image_url = COALESCE(%s, image_url)
+            WHERE id = %s
             """, (
                 item["title"], item.get("description_raw", ""), item["price_raw"], item["currency"],
                 item["price_chf"], item.get("price_eur", item["price_chf"]), item.get("location_raw", ""),
@@ -297,12 +329,23 @@ class Database:
         cursor = self.conn.cursor()
         motor_verified = specs.get("motor_verified")
         cursor.execute("""
-        INSERT OR REPLACE INTO specifications (
+        INSERT INTO specifications (
             listing_id, brand, model, model_year, category, suspension_type,
             travel_front_mm, travel_rear_mm, frame_size, motor_brand, motor_model,
             motor_torque_nm, motor_verified, battery_capacity_wh, odometer_km, brakes_model,
             brakes_tier, fork_tier, has_red_flag, red_flag_details, gears
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (listing_id) DO UPDATE SET
+            brand = EXCLUDED.brand, model = EXCLUDED.model, model_year = EXCLUDED.model_year,
+            category = EXCLUDED.category, suspension_type = EXCLUDED.suspension_type,
+            travel_front_mm = EXCLUDED.travel_front_mm, travel_rear_mm = EXCLUDED.travel_rear_mm,
+            frame_size = EXCLUDED.frame_size, motor_brand = EXCLUDED.motor_brand,
+            motor_model = EXCLUDED.motor_model, motor_torque_nm = EXCLUDED.motor_torque_nm,
+            motor_verified = EXCLUDED.motor_verified, battery_capacity_wh = EXCLUDED.battery_capacity_wh,
+            odometer_km = EXCLUDED.odometer_km, brakes_model = EXCLUDED.brakes_model,
+            brakes_tier = EXCLUDED.brakes_tier, fork_tier = EXCLUDED.fork_tier,
+            has_red_flag = EXCLUDED.has_red_flag, red_flag_details = EXCLUDED.red_flag_details,
+            gears = EXCLUDED.gears, extracted_at = CURRENT_TIMESTAMP
         """, (
             listing_id, specs.get("brand"), specs.get("model"), specs.get("model_year"),
             specs.get("category"), specs.get("suspension_type"), specs.get("travel_front_mm"),
@@ -319,11 +362,19 @@ class Database:
     def save_score(self, listing_id: str, score_data: Dict[str, Any]):
         cursor = self.conn.cursor()
         cursor.execute("""
-        INSERT OR REPLACE INTO scores (
+        INSERT INTO scores (
             listing_id, score_total, score_price_value, score_component_quality,
             score_condition_mileage, score_location_proximity, score_fit_geometry,
             is_deal_target, breakdown_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (listing_id) DO UPDATE SET
+            score_total = EXCLUDED.score_total, score_price_value = EXCLUDED.score_price_value,
+            score_component_quality = EXCLUDED.score_component_quality,
+            score_condition_mileage = EXCLUDED.score_condition_mileage,
+            score_location_proximity = EXCLUDED.score_location_proximity,
+            score_fit_geometry = EXCLUDED.score_fit_geometry,
+            is_deal_target = EXCLUDED.is_deal_target, breakdown_json = EXCLUDED.breakdown_json,
+            calculated_at = CURRENT_TIMESTAMP
         """, (
             listing_id, score_data["score_total"], score_data["score_price_value"],
             score_data["score_component_quality"], score_data["score_condition_mileage"],
@@ -337,7 +388,7 @@ class Database:
         """Save user's verdict/analysis for a listing."""
         cursor = self.conn.cursor()
         cursor.execute("""
-        UPDATE listings SET user_analysis = ? WHERE id = ?
+        UPDATE listings SET user_analysis = %s WHERE id = %s
         """, (analysis, listing_id))
         self.conn.commit()
 
@@ -375,13 +426,13 @@ class Database:
         return just those listings (any status) — for testing the AI pass
         against a hand-picked set without touching the rest. listing_id is
         a single already-resolved id; listing_ids is a list of already-
-        resolved ids; id_range is an inclusive (min, max) rowid range (the
-        numeric id shown in the dashboard) — the three are mutually
-        exclusive, listing_id taking priority if more than one is passed.
-        force: re-send every in-scope listing regardless of whether it was
-        already analyzed — for deliberately re-running the AI after a
-        prompt change, at the cost of one API call per listing it
-        processes."""
+        resolved ids; id_range is an inclusive (min, max) numeric_id range
+        (the short numeric id shown in the dashboard) — the three are
+        mutually exclusive, listing_id taking priority if more than one is
+        passed. force: re-send every in-scope listing regardless of
+        whether it was already analyzed — for deliberately re-running the
+        AI after a prompt change, at the cost of one API call per listing
+        it processes."""
         cursor = self.conn.cursor()
         base_select = """
         SELECT l.id, l.portal, l.portal_id, l.url, l.title, l.description_raw,
@@ -397,24 +448,24 @@ class Database:
         """
 
         if listing_id is not None:
-            cursor.execute(base_select + " WHERE l.id = ?", (listing_id,))
+            cursor.execute(base_select + " WHERE l.id = %s", (listing_id,))
             return [dict(row) for row in cursor.fetchall()]
 
         if listing_ids is not None:
             if not listing_ids:
                 return []
-            placeholders = ",".join("?" for _ in listing_ids)
+            placeholders = ",".join("%s" for _ in listing_ids)
             cursor.execute(base_select + f" WHERE l.id IN ({placeholders})", listing_ids)
             return [dict(row) for row in cursor.fetchall()]
 
         if id_range is not None:
             lo, hi = id_range
-            cursor.execute(base_select + " WHERE l.rowid BETWEEN ? AND ?", (lo, hi))
+            cursor.execute(base_select + " WHERE l.numeric_id BETWEEN %s AND %s", (lo, hi))
             return [dict(row) for row in cursor.fetchall()]
 
         scope_filter = (
             "WHERE l.status NOT IN ('SOLD', 'DELISTED')"
-            " AND NOT (l.status = 'REJECTED' AND l.rejection_reason = ?)"
+            " AND NOT (l.status = 'REJECTED' AND l.rejection_reason = %s)"
             " AND l.status_locked = 0"
         )
         params: List[Any] = [MANUAL_REJECT_REASON]
@@ -449,16 +500,16 @@ class Database:
 
     def resolve_listing_id(self, value: str) -> Optional[str]:
         """Accept either a listing's real id (e.g. "tutti_12345") or the
-        short numeric id shown in the dashboard (SQLite's own rowid — no
-        extra column needed) and return the real id, or None if neither
-        matches. Lets --id on the CLI take whichever one you can see."""
+        short numeric id shown in the dashboard (listings.numeric_id) and
+        return the real id, or None if neither matches. Lets --id on the
+        CLI take whichever one you can see."""
         cursor = self.conn.cursor()
         if value.isdigit():
-            cursor.execute("SELECT id FROM listings WHERE rowid = ?", (int(value),))
+            cursor.execute("SELECT id FROM listings WHERE numeric_id = %s", (int(value),))
             row = cursor.fetchone()
             if row:
                 return row["id"]
-        cursor.execute("SELECT id FROM listings WHERE id = ?", (value,))
+        cursor.execute("SELECT id FROM listings WHERE id = %s", (value,))
         row = cursor.fetchone()
         return row["id"] if row else None
 
@@ -473,12 +524,12 @@ class Database:
         status alone anymore — see get_listings_needing_ai_analysis."""
         cursor = self.conn.cursor()
         cursor.execute("""
-        SELECT l.id, l.rowid AS numeric_id, l.title, l.status, l.rejection_reason,
+        SELECT l.id, l.numeric_id AS numeric_id, l.title, l.status, l.rejection_reason,
                l.ai_analysis, l.ai_analyzed_at, l.last_seen_at,
                sc.score_total
         FROM listings l
         LEFT JOIN scores sc ON l.id = sc.listing_id
-        WHERE COALESCE(sc.score_total, 0) >= ?
+        WHERE COALESCE(sc.score_total, 0) >= %s
         ORDER BY sc.score_total DESC
         """, (min_score,))
 
@@ -512,9 +563,10 @@ class Database:
         the next analyze run redoes it."""
         if len((new_description or "").strip()) < self.MIN_DESCRIPTION_CHARS:
             return
-        self.conn.execute(
+        cursor = self.conn.cursor()
+        cursor.execute(
             "UPDATE listings SET ai_analysis = NULL, ai_score = NULL, ai_analyzed_at = NULL "
-            "WHERE id = ? AND ai_analysis IS NOT NULL AND length(trim(coalesce(description_raw, ''))) < ?",
+            "WHERE id = %s AND ai_analysis IS NOT NULL AND length(trim(coalesce(description_raw, ''))) < %s",
             (listing_id, self.MIN_DESCRIPTION_CHARS),
         )
 
@@ -525,7 +577,7 @@ class Database:
         self._drop_blind_ai_analysis(listing_id, description_raw)
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE listings SET description_raw = ? WHERE id = ?",
+            "UPDATE listings SET description_raw = %s WHERE id = %s",
             (description_raw, listing_id),
         )
         self.conn.commit()
@@ -536,7 +588,7 @@ class Database:
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute("""
-        UPDATE listings SET ai_analysis = ?, ai_score = ?, ai_analyzed_at = ? WHERE id = ?
+        UPDATE listings SET ai_analysis = %s, ai_score = %s, ai_analyzed_at = %s WHERE id = %s
         """, (ai_analysis, ai_score, now, listing_id))
         self.conn.commit()
 
@@ -545,7 +597,7 @@ class Database:
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute("""
-        UPDATE listings SET status = ?, delisted_at = ? WHERE id = ?
+        UPDATE listings SET status = %s, delisted_at = %s WHERE id = %s
         """, (status, now, listing_id))
         self.conn.commit()
 
@@ -566,21 +618,22 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         if status == "REJECTED":
             cursor.execute(
-                "UPDATE listings SET status = ?, rejection_reason = ?, delisted_at = ?, status_locked = ? WHERE id = ?",
+                "UPDATE listings SET status = %s, rejection_reason = %s, delisted_at = %s, status_locked = %s WHERE id = %s",
                 (status, reason or MANUAL_REJECT_REASON, now, 0 if reason else 1, listing_id),
             )
         elif status == "SOLD":
             cursor.execute(
-                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = ?, status_locked = 1 WHERE id = ?",
+                "UPDATE listings SET status = %s, rejection_reason = NULL, delisted_at = %s, status_locked = 1 WHERE id = %s",
                 (status, now, listing_id),
             )
         else:  # ACTIVE — undo a manual reject/sold
             cursor.execute(
-                "UPDATE listings SET status = ?, rejection_reason = NULL, delisted_at = NULL, status_locked = 0 WHERE id = ?",
+                "UPDATE listings SET status = %s, rejection_reason = NULL, delisted_at = NULL, status_locked = 0 WHERE id = %s",
                 (status, listing_id),
             )
         self.conn.commit()
 
+    @_atomic
     def save_spec_overrides(self, listing_id: str, fields: Dict[str, Any]) -> None:
         """Remember hand/AI-corrected spec values so the next scan applies them
         on top of the parser's output instead of overwriting them. A None/""
@@ -591,47 +644,50 @@ class Database:
         for field, value in fields.items():
             if value is None or value == "":
                 cursor.execute(
-                    "DELETE FROM spec_overrides WHERE listing_id = ? AND field = ?", (listing_id, field)
+                    "DELETE FROM spec_overrides WHERE listing_id = %s AND field = %s", (listing_id, field)
                 )
             else:
                 cursor.execute(
-                    "INSERT OR REPLACE INTO spec_overrides (listing_id, field, value_json, updated_at)"
-                    " VALUES (?, ?, ?, ?)",
+                    "INSERT INTO spec_overrides (listing_id, field, value_json, updated_at)"
+                    " VALUES (%s, %s, %s, %s)"
+                    " ON CONFLICT (listing_id, field) DO UPDATE SET value_json = EXCLUDED.value_json, updated_at = EXCLUDED.updated_at",
                     (listing_id, field, json.dumps(value), now),
                 )
         self.conn.commit()
 
     def get_spec_overrides(self, listing_id: str) -> Dict[str, Any]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT field, value_json FROM spec_overrides WHERE listing_id = ?", (listing_id,))
+        cursor.execute("SELECT field, value_json FROM spec_overrides WHERE listing_id = %s", (listing_id,))
         return {row["field"]: json.loads(row["value_json"]) for row in cursor.fetchall()}
 
+    @_atomic
     def toggle_favorite(self, listing_id: str) -> bool:
         """Flip is_favorite for a listing and return the new value. A
         favorite is independent of status (ACTIVE/REJECTED/SOLD/...) — a
         starred listing keeps its star even after being marked sold, so it
         isn't lost from view once you've flagged it as one you actually want."""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+        cursor.execute("SELECT is_favorite FROM listings WHERE id = %s", (listing_id,))
         row = cursor.fetchone()
         if row is None:
             raise ValueError(f"Unknown listing_id: {listing_id!r}")
         new_value = 0 if row["is_favorite"] else 1
-        cursor.execute("UPDATE listings SET is_favorite = ? WHERE id = ?", (new_value, listing_id))
+        cursor.execute("UPDATE listings SET is_favorite = %s WHERE id = %s", (new_value, listing_id))
         self.conn.commit()
         return bool(new_value)
 
+    @_atomic
     def delete_listing(self, listing_id: str) -> None:
         """Physically delete a listing and all its related data from the DB,
         and remember the id so the next scan doesn't bring it back as new."""
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM listings WHERE id = ?", (listing_id,))
-        cursor.execute("INSERT OR IGNORE INTO deleted_listings (listing_id) VALUES (?)", (listing_id,))
+        cursor.execute("DELETE FROM listings WHERE id = %s", (listing_id,))
+        cursor.execute("INSERT INTO deleted_listings (listing_id) VALUES (%s) ON CONFLICT DO NOTHING", (listing_id,))
         self.conn.commit()
 
     def is_deleted(self, listing_id: str) -> bool:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT 1 FROM deleted_listings WHERE listing_id = ?", (listing_id,))
+        cursor.execute("SELECT 1 FROM deleted_listings WHERE listing_id = %s", (listing_id,))
         return cursor.fetchone() is not None
 
     def mark_unavailable(self, listing_id: str) -> bool:
@@ -641,8 +697,8 @@ class Database:
         cursor = self.conn.cursor()
         now = datetime.now(timezone.utc).isoformat()
         cursor.execute(
-            "UPDATE listings SET status = 'SOLD', delisted_at = ?, last_checked_at = ?"
-            " WHERE id = ? AND status_locked = 0 AND status IN ('ACTIVE', 'PRICE_DROP', 'NEW', 'REJECTED')",
+            "UPDATE listings SET status = 'SOLD', delisted_at = %s, last_checked_at = %s"
+            " WHERE id = %s AND status_locked = 0 AND status IN ('ACTIVE', 'PRICE_DROP', 'NEW', 'REJECTED')",
             (now, now, listing_id),
         )
         self.conn.commit()
@@ -651,7 +707,7 @@ class Database:
     def mark_checked(self, listing_id: str) -> None:
         cursor = self.conn.cursor()
         cursor.execute(
-            "UPDATE listings SET last_checked_at = ? WHERE id = ?",
+            "UPDATE listings SET last_checked_at = %s WHERE id = %s",
             (datetime.now(timezone.utc).isoformat(), listing_id),
         )
         self.conn.commit()
@@ -664,9 +720,9 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("""
         SELECT id, portal, portal_id, url FROM listings
-        WHERE status IN ('ACTIVE', 'PRICE_DROP', 'NEW') AND last_seen_at < ?
+        WHERE status IN ('ACTIVE', 'PRICE_DROP', 'NEW') AND last_seen_at < %s
         ORDER BY last_checked_at ASC
-        LIMIT ?
+        LIMIT %s
         """, (not_seen_since, limit))
         return [dict(row) for row in cursor.fetchall()]
 
@@ -685,7 +741,7 @@ class Database:
                s.has_red_flag, s.red_flag_details
         FROM listings l
         LEFT JOIN specifications s ON l.id = s.listing_id
-        WHERE l.id = ?
+        WHERE l.id = %s
         """, (listing_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
@@ -706,9 +762,9 @@ class Database:
         FROM listings l
         JOIN scores sc ON l.id = sc.listing_id
         LEFT JOIN specifications s ON l.id = s.listing_id
-        WHERE l.status IN ('ACTIVE', 'PRICE_DROP') AND sc.score_total >= ?
+        WHERE l.status IN ('ACTIVE', 'PRICE_DROP') AND sc.score_total >= %s
         ORDER BY ranking_score DESC, l.price_chf ASC
-        LIMIT ?
+        LIMIT %s
         """, (min_score, limit))
         return [dict(row) for row in cursor.fetchall()]
 
@@ -731,32 +787,32 @@ class Database:
         ai_only = filters.get('ai_only', False)
         limit = filters.get('limit', 10)
 
-        where_parts = ["sc.score_total >= ?"]
+        where_parts = ["sc.score_total >= %s"]
         params = [score_min]
 
         if price_min is not None:
-            where_parts.append("l.price_chf >= ?")
+            where_parts.append("l.price_chf >= %s")
             params.append(price_min)
         if price_max is not None:
-            where_parts.append("l.price_chf <= ?")
+            where_parts.append("l.price_chf <= %s")
             params.append(price_max)
         if dist_max is not None:
-            where_parts.append("l.distance_km <= ?")
+            where_parts.append("l.distance_km <= %s")
             params.append(dist_max)
         if motor_brand:
-            where_parts.append("s.motor_brand = ?")
+            where_parts.append("s.motor_brand = %s")
             params.append(motor_brand)
         if battery_min is not None:
-            where_parts.append("s.battery_capacity_wh >= ?")
+            where_parts.append("s.battery_capacity_wh >= %s")
             params.append(battery_min)
         if frame_size:
-            where_parts.append("s.frame_size = ?")
+            where_parts.append("s.frame_size = %s")
             params.append(frame_size)
         if year_min is not None:
-            where_parts.append("s.model_year >= ?")
+            where_parts.append("s.model_year >= %s")
             params.append(year_min)
         if year_max is not None:
-            where_parts.append("s.model_year <= ?")
+            where_parts.append("s.model_year <= %s")
             params.append(year_max)
         if status == 'active':
             where_parts.append("l.status IN ('ACTIVE', 'PRICE_DROP')")
@@ -787,7 +843,7 @@ class Database:
         LEFT JOIN specifications s ON l.id = s.listing_id
         WHERE {where_clause}
         ORDER BY ranking_score DESC NULLS LAST, l.price_chf ASC
-        LIMIT ?
+        LIMIT %s
         """
         params.append(limit)
         cursor.execute(query, params)
@@ -802,7 +858,7 @@ class Database:
         LEFT JOIN scores sc ON l.id = sc.listing_id
         WHERE l.status = 'PRICE_DROP' AND l.rejection_reason IS NULL
         ORDER BY l.last_checked_at DESC
-        LIMIT ?
+        LIMIT %s
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 

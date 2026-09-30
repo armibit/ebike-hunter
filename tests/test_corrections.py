@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from pgtest import new_test_url, drop_test_url
 from db.database import Database
 from pipeline.corrections import apply_spec_correction
 from pipeline.scoring import ScoringEngine
@@ -22,7 +23,7 @@ CONFIG = {
 
 
 def _fresh_db_with_unverified_motor():
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     db = Database(db_path)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
@@ -47,7 +48,7 @@ def _fresh_db_with_auto_rejected_no_motor():
     # reject_reasons text run.py appends), and crucially never scored at
     # all (run.py only calls scorer.calculate_score() in the accepted
     # branch).
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     db = Database(db_path)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
@@ -77,7 +78,7 @@ def test_apply_spec_correction_marks_verified_and_rescores_higher():
     assert row["motor_verified"] == 1
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction verifies motor and rescores higher")
 
 
@@ -92,13 +93,13 @@ def test_apply_spec_correction_regenerates_user_analysis_text():
     apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85})
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT user_analysis FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT user_analysis FROM listings WHERE id = %s", ("x_1",))
     analysis = cursor.fetchone()["user_analysis"]
     assert analysis != "Vecchio testo obsoleto."
     assert "Raccomandazione" in analysis
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction regenerates user_analysis text")
 
 
@@ -110,13 +111,13 @@ def test_apply_spec_correction_rejects_out_of_target_frame_size():
 
     assert result is not None, "score must still be saved even though the listing gets rejected"
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert "XL" in row["rejection_reason"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction rejects out-of-target frame size")
 
 
@@ -127,11 +128,11 @@ def test_apply_spec_correction_keeps_active_for_in_target_frame_size():
     apply_spec_correction(db, scorer, "x_1", {"frame_size": "S2"}, config=CONFIG)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", ("x_1",))
     assert cursor.fetchone()["status"] == "ACTIVE"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction keeps in-target frame size active")
 
 
@@ -143,13 +144,13 @@ def test_apply_spec_correction_rejects_hardtail_on_active_listing():
 
     assert result is not None, "score must still be saved even though the listing gets rejected"
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert "Hardtail" in row["rejection_reason"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction rejects hardtail correction on active listing")
 
 
@@ -164,13 +165,13 @@ def test_apply_spec_correction_restores_auto_rejected_listing_stays_rejected_if_
     )
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED", "a real motor alone must not resurrect a hardtail"
     assert "Hardtail" in row["rejection_reason"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction keeps auto-rejected hardtail listing rejected even with a good motor")
 
 
@@ -181,13 +182,13 @@ def test_apply_spec_correction_rejects_weak_motor_below_minimum():
     apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Fazua", "motor_torque_nm": 50}, config=CONFIG)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert "50" in row["rejection_reason"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction rejects weak motor below minimum")
 
 
@@ -200,11 +201,11 @@ def test_apply_spec_correction_without_config_skips_reject_check():
     apply_spec_correction(db, scorer, "x_1", {"frame_size": "XL"})
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", ("x_1",))
     assert cursor.fetchone()["status"] == "ACTIVE"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction without config skips reject check")
 
 
@@ -217,7 +218,7 @@ def test_apply_spec_correction_ignores_unknown_fields():
     assert result is None, "no editable field present — nothing to apply or rescore"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction ignores non-editable fields")
 
 
@@ -230,7 +231,7 @@ def test_apply_spec_correction_unknown_listing_returns_none():
     assert result is None
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction unknown-listing test passed")
 
 
@@ -248,7 +249,7 @@ def test_apply_spec_correction_clearing_field_does_not_mark_verified():
     assert row["motor_verified"] == 0, "clearing the motor must not count as verifying it"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction clear-field test passed")
 
 
@@ -268,13 +269,13 @@ def test_apply_spec_correction_restores_auto_rejected_listing_when_criteria_now_
     assert result["score_total"] > 0, "a restored listing must actually get scored"
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "ACTIVE"
     assert row["rejection_reason"] is None
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction restores auto-rejected listing to ACTIVE")
 
 
@@ -287,13 +288,13 @@ def test_apply_spec_correction_keeps_auto_rejected_listing_rejected_if_still_fai
     apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Fazua", "motor_torque_nm": 40}, config=CONFIG)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert "40" in row["rejection_reason"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction keeps still-failing auto-rejected listing REJECTED")
 
 
@@ -308,18 +309,18 @@ def test_apply_spec_correction_does_not_restore_manually_rejected_listing():
     apply_spec_correction(db, scorer, "x_1", {"motor_brand": "Bosch", "motor_torque_nm": 85}, config=CONFIG)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert row["rejection_reason"] == "Scartata manualmente dall'utente"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ apply_spec_correction leaves a manually rejected listing alone")
 
 
 def _fresh_db_with_auto_rejected(rejection_reason, price_chf=2000, **spec_overrides):
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     db = Database(db_path)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Test Bike",
@@ -337,7 +338,7 @@ def _fresh_db_with_auto_rejected(rejection_reason, price_chf=2000, **spec_overri
 
 def _status_and_reason(db):
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", ("x_1",))
     row = cursor.fetchone()
     return row["status"], row["rejection_reason"]
 
@@ -355,7 +356,7 @@ def test_ai_motor_does_not_restore_over_budget_listing():
     assert "Over budget" in reason
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ AI motor correction does not restore over-budget listing")
 
 
@@ -371,7 +372,7 @@ def test_ai_motor_does_not_restore_red_flag_listing():
     assert "Red flags" in reason
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ AI motor correction does not restore red-flag listing")
 
 
@@ -388,7 +389,7 @@ def test_ai_motor_does_not_restore_wrong_category_listing():
     assert "Wrong category" in reason
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ AI motor correction does not restore wrong-category listing")
 
 
@@ -406,7 +407,7 @@ def test_restore_uses_stored_battery_not_only_corrected_fields():
     assert "400" in reason
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Restore re-checks the stored battery")
 
 
@@ -424,7 +425,7 @@ def test_ai_frame_size_outside_targets_does_not_restore():
     assert "XL" in reason
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ AI frame size outside targets does not restore")
 
 
@@ -440,7 +441,7 @@ def test_correction_never_changes_a_status_the_user_locked():
     assert status == "SOLD"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Correction leaves a user-locked status alone")
 
 
@@ -455,7 +456,7 @@ def test_correction_is_stored_as_override_and_cleared_by_null():
     assert db.get_spec_overrides("x_1") == {"motor_torque_nm": 85}
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Corrections are persisted as overrides")
 
 
@@ -472,7 +473,7 @@ def test_rescore_from_db_keeps_unverified_motor_penalty():
     assert verified["score_component_quality"] > unverified["score_component_quality"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Rescore from DB keeps the unverified-motor penalty")
 
 

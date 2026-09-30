@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-import sqlite3
+from db.database import Database
 from connectors.subito import SubitoConnector
 from utils.config import load_config
 
@@ -29,18 +29,19 @@ def main():
 
     # Resolve listing from database if dashboard ID provided
     if args.id:
-        db_path = config["app"]["db_path"]
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT portal, portal_id, url FROM listings WHERE rowid = ?", (args.id,))
-        row = cursor.fetchone()
-        conn.close()
+        with Database(config["app"]["database_url"]) as db:
+            cursor = db.conn.cursor()
+            cursor.execute("SELECT portal, portal_id, url FROM listings WHERE numeric_id = %s", (args.id,))
+            row = cursor.fetchone()
 
-        if not row:
-            print(f"❌ Listing {args.id} not found in database")
-            sys.exit(1)
+            if not row:
+                print(f"❌ Listing {args.id} not found in database")
+                sys.exit(1)
 
-        portal, portal_id, url = row
+            portal = row["portal"]
+            portal_id = row["portal_id"]
+            url = row["url"]
+
         print(f"✓ Found in DB: portal={portal}, portal_id={portal_id}")
         if portal != "subito":
             print(f"❌ Listing {args.id} is from {portal}, not Subito — cannot debug")
