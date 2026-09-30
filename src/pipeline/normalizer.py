@@ -1,7 +1,10 @@
+import csv
 import logging
 import math
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from pipeline.geo_data import (
@@ -72,6 +75,7 @@ class Location:
     region: str               # "ticino", "svizzera", an Italian region ("lombardia"…), "other", "unknown"
     country: Optional[str]    # "CH", "IT" or None
     area: Optional[str] = None  # canton / province code, when resolved at that level
+    place: Optional[str] = None  # town name, when a postcode pinned it down
 
     def as_tuple(self) -> Tuple[Optional[float], Optional[float], float, str]:
         return self.latitude, self.longitude, self.distance_km, self.region
@@ -87,6 +91,17 @@ def _alias_table() -> List[Tuple[str, str, str]]:
 
 
 _ALIASES = _alias_table()
+
+_POSTCODE_RE = {"IT": re.compile(r"(?<!\d)(\d{5})(?!\d)"), "CH": re.compile(r"(?<!\d)([1-9]\d{3})(?!\d)")}
+
+
+@lru_cache(maxsize=1)
+def _postcodes() -> Dict[Tuple[str, str], Tuple[str, float, float, str]]:
+    """(country, postcode) -> (place names joined by '|', lat, lon, province/canton code).
+    postcodes.csv is derived from GeoNames postal codes (CC-BY 4.0)."""
+    with open(Path(__file__).with_name("postcodes.csv"), encoding="utf-8", newline="") as f:
+        return {(r["country"], r["code"]): (r["place"], float(r["lat"]), float(r["lon"]), r["area"])
+                for r in csv.DictReader(f)}
 
 
 def _has_word(text: str, phrase: str) -> bool:
@@ -141,10 +156,31 @@ class Normalizer:
             return self._at(lat, lon, region, "IT", code)
         return None
 
+    def _by_postcode(self, text: str, country_hint: Optional[str]) -> Optional[Location]:
+        """Exact town from a CAP (IT, 5 digits) or PLZ (CH, 4 digits)."""
+        for country in ((country_hint,) if country_hint else ("IT", "CH")):
+            match = _POSTCODE_RE[country].search(text)
+            hit = match and _postcodes().get((country, match.group(1)))
+            if not hit:
+                continue
+            names, lat, lon, area = hit
+            names = names.split("|")
+            place = next((n for n in names if _has_word(text, n.lower())), names[0])
+            if country == "CH":
+                region = "ticino" if area == "TI" else "svizzera"
+            else:
+                province = self._province(area)
+                region = province.region if province else "italia"
+            loc = self._at(lat, lon, region, country, area)
+            loc.place = place
+            return loc
+        return None
+
     def resolve(self, location_raw: Optional[str], country_hint: Optional[str] = None) -> Location:
         """Place a listing's free-text location at province/canton level.
 
-        Tried in order, first hit wins: a few precise towns around Lugano;
+        Tried in order, first hit wins: a postcode (CAP/PLZ — the exact
+        town, also returned as `place`); a few precise towns around Lugano;
         a Swiss postcode ("9524 St. Gallen"); an Italian province code
         ("Gravellona Toce (VB)"); a province or canton name, in any of the
         languages portals use ("Zürich", "Ticino", "Bergamo"); an Italian
@@ -156,6 +192,10 @@ class Normalizer:
             return Location(None, None, DISTANCE_NO_LOCATION, "unknown", country_hint)
 
         text = location_raw.lower().strip()
+
+        by_postcode = self._by_postcode(text, country_hint)
+        if by_postcode:
+            return by_postcode
 
         for town, (lat, lon) in KNOWN_COORDINATES.items():
             if _has_word(text, town):

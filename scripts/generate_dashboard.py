@@ -376,6 +376,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>E-Bike Hunter Dashboard</title>
     <style>
+        /* Hide rejected/sold rows before filterTable() runs, so a large table
+           never flashes unfiltered on first paint. Scoped to html.pre-filter
+           (removed by filterTable() itself) so it never fights the real
+           filter logic once JS takes over — that logic clears the inline
+           style to show a row, which needs a plain (non-!important) rule to
+           actually win. */
+        html.pre-filter tr[data-status-group="rejected"],
+        html.pre-filter tr[data-status-group="sold"] {{ display: none; }}
+
         :root {{
             --bg: #f6f7f9;
             --surface: #ffffff;
@@ -407,6 +416,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .readonly-banner code {{ background: rgba(0,0,0,0.08); padding: 1px 6px; border-radius: 4px; font-size: 12px; }}
 
         .section-title {{ font-size: 15px; font-weight: 700; margin: 36px 0 14px; color: var(--text); }}
+        .section-collapsible {{ margin: 18px 0 0; }}
+        .section-collapsible > summary {{ cursor: pointer; user-select: none; padding: 0; }}
+        .section-collapsible > summary::marker {{ color: var(--primary); }}
+        .section-collapsible > summary::-webkit-details-marker {{ color: var(--primary); }}
 
         .filters {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin: 18px 0 10px; box-shadow: 0 1px 2px rgba(0,0,0,.04); overflow: hidden; }}
         .filters-header {{ display: flex; align-items: center; justify-content: space-between; padding: 13px 20px; border-bottom: 1px solid var(--border); background: #fafbfc; }}
@@ -448,6 +461,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         thead th.sorted-desc::after {{ content: " ▼"; color: var(--primary); }}
         tbody td {{ padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }}
         tbody tr:last-child td {{ border-bottom: none; }}
+        tbody tr {{ transition: opacity .3s ease-out; }}
+        tbody tr.deleting {{ opacity: 0 !important; }}
         tbody tr:hover {{ background: #fafbfc; }}
         tbody tr.sold {{ opacity: .45; }}
 
@@ -582,8 +597,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
            so a reload in card view never flashes the table first. */
         html.view-card #table {{ display: none; }}
 
-        .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform .2s, box-shadow .2s; position: relative; display: flex; flex-direction: column; cursor: pointer; }}
+        .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform .2s, box-shadow .2s, opacity .3s ease-out; position: relative; display: flex; flex-direction: column; cursor: pointer; }}
         .card:hover {{ transform: translateY(-4px); box-shadow: 0 8px 16px rgba(0,0,0,0.12); }}
+        .card.deleting {{ opacity: 0; }}
 
         .card-header {{ position: relative; overflow: hidden; }}
         .card-image {{ width: 100%; height: 220px; object-fit: cover; background: #f3f4f6; display: block; }}
@@ -613,6 +629,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .card-row > span {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .card-row > span:last-child {{ text-align: right; color: #6b7280; }}
         .card-category {{ font-weight: 500; }}
+        a.card-link {{ text-decoration: none; color: inherit; border-radius: 6px; margin: 0 -6px; padding: 0 6px; }}
+        a.card-link:hover {{ background: #eff6ff; }}
+        .card-link svg {{ width: 14px; height: 14px; vertical-align: -2px; margin-left: 6px; fill: none; stroke: #2563eb; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }}
+        .card-missing {{ background: #fef3c7; color: #b45309; border-radius: 4px; padding: 0 5px; font-weight: 600; }}
 
         /* margin-top:auto pins the price + buttons to the bottom of every card,
            so they line up across a row no matter how tall the title wraps. */
@@ -638,6 +658,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     </style>
     <script>
     if ((localStorage.getItem('ebike-view') || 'card') === 'card') document.documentElement.classList.add('view-card');
+    document.documentElement.classList.add('pre-filter');
     </script>
 </head>
 <body>
@@ -744,8 +765,9 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             </div>
         </div>
 
-        <h2 class="section-title">🏆 Top 10 Deals</h2>
-        <div class="top-10">
+        <details class="section-collapsible">
+            <summary class="section-title">🏆 Top 10 Deals</summary>
+            <div class="top-10">
 """
 
     for idx, bike in enumerate(top_10, 1):
@@ -760,6 +782,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 """
 
     html += """        </div>
+        </details>
 
         <!-- Analysis Modal -->
         <div id="analysisModal" class="modal">
@@ -1079,7 +1102,19 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         // row that no longer matches (discarded, sold) disappears.
         function applyRowAction(row, path, data) {
             if (!row) return;
-            if (path === 'delete') row.remove();
+            if (path === 'delete') {
+                // Force reflow so the opacity transition actually plays
+                // before the row leaves the DOM.
+                row.classList.add('deleting');
+                row.offsetHeight;
+                setTimeout(() => {
+                    row.remove();
+                    const remainingRows = document.querySelectorAll('#tbody tr:not(.filter-info)').length;
+                    if (remainingRows === 0) filterTable();
+                    if (typeof rebuildIfCards === 'function') rebuildIfCards();
+                }, 300);
+                return;
+            }
             else if (path === 'reject') row.dataset.statusGroup = 'rejected';
             else if (path === 'sold') row.dataset.statusGroup = 'sold';
             else if (path === 'restore') row.dataset.statusGroup = 'active';
@@ -1463,6 +1498,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 noResult.innerHTML = '<td colspan="13" style="text-align: center; padding: 20px; color: #999;">Nessun risultato con questi filtri</td>';
                 tbody.appendChild(noResult);
             }
+
+            // First real pass: hand visibility fully to the inline styles just
+            // set above, so the anti-FOUC CSS rule stops matching by attribute.
+            document.documentElement.classList.remove('pre-filter');
         }
 
         function checkedBrands() {
@@ -1640,6 +1679,13 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
     const savedView = localStorage.getItem('ebike-view') || 'card';
 
+    const ICON_LINK = '<svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>';
+    // Empty / N/A / unknown values are flagged so a missing spec stands out.
+    const MISSING = /^(|n\/a|-|—|unknown|non specificat[ao]|0|0wh|0 km)$/i;
+    function miss(text, label) {
+        text = (text || '').trim();
+        return MISSING.test(text) ? '<span class="card-missing">' + (label || 'N/A') + '</span>' : text;
+    }
     const ICON_TRASH = '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg>';
     const ICON_SELL = '<svg viewBox="0 0 24 24"><path d="M20 12V7a1 1 0 0 0-1-1h-5L3 17l4 4L18 10"/><circle cx="16.5" cy="9.5" r="1.3"/></svg>';
 
@@ -1705,6 +1751,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
             const isSold = row.dataset.statusGroup !== 'active';
             const isFav = row.dataset.favorite === '1';
+            const url = titleCell.querySelector('.title-link')?.href || '';
             const cond = row.dataset.condition || 'Usato';
             const place = row.dataset.location || '';
 
@@ -1722,10 +1769,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 '</div>' +
                 '<div class="card-body">' +
                     '<div class="card-title">' + title + '</div>' +
-                    '<div class="card-row"><span class="card-category">' + portal + '</span><span class="card-id">#' + row.dataset.numericId + '</span></div>' +
-                    '<div class="card-row"><span>' + motor + '</span><span>' + battery + '</span></div>' +
-                    '<div class="card-row"><span>Taglia: ' + size + '</span><span>' + year + '</span></div>' +
-                    '<div class="card-row"><span>' + (place ? '📍 ' + place : '') + '</span><span>' + dist + '</span></div>' +
+                    '<' + (url ? 'a class="card-row card-link" href="' + url + '" target="_blank" rel="noopener noreferrer" title="Apri annuncio"' : 'div class="card-row"') + '>' +
+                        '<span class="card-category">' + portal + '</span><span><span class="card-id">#' + row.dataset.numericId + '</span>' + (url ? ICON_LINK : '') + '</span>' +
+                    '</' + (url ? 'a' : 'div') + '>' +
+                    '<div class="card-row"><span>' + miss(motor, 'Motore N/A') + '</span><span>' + miss(battery, 'Batt. N/A') + '</span></div>' +
+                    '<div class="card-row"><span>Taglia: ' + miss(size) + '</span><span>' + miss(year, 'Anno N/A') + '</span></div>' +
+                    '<div class="card-row"><span>' + (place ? '📍 ' + place : miss('', 'Luogo N/A')) + '</span><span>' + miss(dist, 'Dist. N/A') + '</span></div>' +
                     '<div class="card-price-section">' +
                         '<div>' + renderPrice(tds[2]) + '</div>' +
                         '<div class="card-buttons">' +
@@ -1744,11 +1793,19 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             card.querySelectorAll('.card-action').forEach(btn => btn.addEventListener('click', e => {
                 e.stopPropagation();
                 if (btn.dataset.act === 'delete') {
-                    confirmTwice(btn, () => postRowAction(row.querySelector('.icon-delete'), 'delete'));
+                    // Fade the visible card in step with the underlying row's
+                    // own 300ms fade (applyRowAction), so card view isn't left
+                    // showing a stale card while the row already faded out
+                    // off-screen in the hidden table.
+                    confirmTwice(btn, () => {
+                        card.classList.add('deleting');
+                        postRowAction(row.querySelector('.icon-delete'), 'delete');
+                    });
                     return;
                 }
                 row.querySelector('.icon-success')?.click();
             }));
+            card.querySelector('.card-link')?.addEventListener('click', e => e.stopPropagation());
             card.addEventListener('click', () => row.querySelector('.icon-details')?.click());
 
             cardsContainer.appendChild(card);

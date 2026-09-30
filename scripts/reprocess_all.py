@@ -101,8 +101,8 @@ def main() -> None:
         if not dry_run:
             db.conn.execute(
                 "UPDATE listings SET latitude = ?, longitude = ?, distance_km = ?, region = ?,"
-                " dedupe_signature = ? WHERE id = ?",
-                (lat, lon, distance_km, region, dedupe_signature(row["title"], price_chf), listing_id),
+                " location_normalized = COALESCE(?, location_normalized), dedupe_signature = ? WHERE id = ?",
+                (lat, lon, distance_km, region, location.place, dedupe_signature(row["title"], price_chf), listing_id),
             )
 
         overrides = db.get_spec_overrides(listing_id)

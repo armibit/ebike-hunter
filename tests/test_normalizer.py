@@ -218,3 +218,17 @@ if __name__ == "__main__":
     test_country_only_and_unknown_locations_are_neutral()
     test_home_location_comes_from_config()
     print("\n✅ All normalizer tests passed!")
+
+
+def test_postcode_pins_exact_town():
+    norm = Normalizer()
+    # Tutti: PLZ + town; Pregassona is Lugano-side, not the Ticino centroid
+    loc = norm.resolve("6963 Pregassona, Ticino", "CH")
+    assert loc.place == "Pregassona" and loc.region == "ticino" and loc.distance_km < 5
+    # Subito-style: 5-digit CAP with only a province in the text
+    loc = norm.resolve("22100 Como (CO)", "IT")
+    assert loc.place == "Como" and loc.area == "CO" and loc.region == "lombardia"
+    # CAP alone, no hint
+    assert norm.resolve("28922").place is not None
+    # Unknown code falls back to the old text resolution
+    assert norm.resolve("Lugano, Ticino").place is None

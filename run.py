@@ -219,6 +219,7 @@ def process_listing(
         "longitude": lon,
         "distance_km": distance_km,
         "region": region,
+        "location_normalized": location.place or "",
         "dedupe_signature": dedupe_sig
     }
 

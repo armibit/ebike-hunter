@@ -184,7 +184,10 @@ class TuttiConnector(BaseConnector):
                 url = f"{self.base_url}/it/vi/{listing_id}"
 
             location_parts = [
-                p for p in (postcode.get("locationName", ""), canton_info.get("name", "")) if p
+                p for p in (
+                    f'{postcode.get("postcode", "")} {postcode.get("locationName", "")}'.strip(),
+                    canton_info.get("name", ""),
+                ) if p
             ]
 
             return {
