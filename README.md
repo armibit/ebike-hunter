@@ -39,7 +39,7 @@ Configured in `config/config.yaml` — current defaults:
 [Deterministic scoring 0-100]  src/pipeline/scoring.py
   price (35%) · components (25%) · condition/km (15%) · distance (15%) · fit (10%)
        ↓
-[SQLite]  src/db/database.py — listings, snapshots (price history), specifications, scores
+[Postgres/Supabase]  src/db/database.py — listings, snapshots (price history), specifications, scores
        ↓
 [Optional AI pass]  analyze.py → src/pipeline/ai_analyzer.py (Claude Haiku)
   Italian verdict, condition/seller-trust reading, spec corrections read (not guessed) from text
@@ -67,7 +67,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 python3 run.py
 ```
 
-Fetches listings from every enabled portal in `config/config.yaml`, parses specs, applies the hard filters, scores, and saves to SQLite (`config.app.db_path`). Prints accepted/rejected counts per portal and the top deals.
+Fetches listings from every enabled portal in `config/config.yaml`, parses specs, applies the hard filters, scores, and saves to Supabase Postgres (`DATABASE_URL` in `.env`). Prints accepted/rejected counts per portal and the top deals.
 
 ### 2. Interactive dashboard (recommended)
 
@@ -121,7 +121,7 @@ ebike-hunter/
 ├── src/
 │   ├── connectors/               # One file per portal (+ base.py)
 │   ├── db/
-│   │   └── database.py           # SQLite wrapper (WAL mode, snapshots, favorites, AI columns)
+│   │   └── database.py           # Postgres wrapper (snapshots, favorites, AI columns)
 │   └── pipeline/
 │       ├── regex_parser.py       # Zero-token spec extraction
 │       ├── normalizer.py         # Currency & geo normalization
@@ -132,12 +132,9 @@ ebike-hunter/
 ├── scripts/
 │   └── generate_dashboard.py     # Renders the dashboard HTML (used by both server.py and index.html)
 ├── tests/                        # One test file per connector, plus pipeline/DB/dashboard tests
-├── data/
-│   └── emtb_hunter.db            # SQLite database (gitignored)
 ├── run.py                        # Full scan: fetch → parse → filter → score → save
 ├── analyze.py                    # Optional AI second-opinion pass (--force / --id)
 ├── server.py                     # Interactive dashboard (Flask, app-mode window)
-├── demo.py                       # End-to-end demo with simulated data
 ├── requirements.txt
 ├── README.md
 └── USAGE.md                      # Extended usage notes, cron automation, troubleshooting
