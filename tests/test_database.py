@@ -889,3 +889,20 @@ def test_filtered_top_deals_hides_rejected_unless_asked(db):
     assert {d["id"] for d in db.get_filtered_top_deals(show_rejected=True)} == set(ids.values())
     assert {d["id"] for d in db.get_filtered_top_deals(status="rejected")} == {ids["ko"]}
     print("✅ Filtered top deals test passed")
+
+
+def test_reads_do_not_leave_session_idle_in_transaction(db):
+    # Regression: every SELECT opened a transaction that stayed open until
+    # the next write, holding locks on Supabase for a whole scan.
+    import psycopg2.extensions as ext
+    db.is_deleted("nope")
+    assert db.conn.get_transaction_status() == ext.TRANSACTION_STATUS_IDLE
+
+
+def test_delete_listing_is_atomic(db):
+    db.upsert_listing({"portal": "x", "portal_id": "1", "url": "https://e/1", "title": "B",
+                       "price_raw": 1, "currency": "CHF", "price_chf": 1, "price_eur": 1})
+    db.conn.cursor().execute("DROP TABLE deleted_listings")  # second statement will fail
+    with pytest.raises(Exception):
+        db.delete_listing("x_1")
+    assert db.get_listing_with_specs("x_1") is not None  # first DELETE rolled back

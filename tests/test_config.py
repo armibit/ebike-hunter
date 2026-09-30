@@ -36,3 +36,12 @@ def test_project_config_loads():
     assert "italy" in config["buyer_profile"]["max_radius_km"], \
         "buyer_profile.max_radius_km.italy required"
     print("✅ Project config loads with required keys")
+
+
+def test_no_entry_point_reads_removed_db_path():
+    """Regression: analyze.py still read config['app']['db_path'] after the
+    Postgres move and crashed with KeyError when refreshing the dashboard."""
+    root = Path(__file__).parent.parent
+    files = [*root.glob("*.py"), *(root / "scripts").glob("*.py"), *(root / "src").rglob("*.py")]
+    offenders = [f.name for f in files if '["db_path"]' in f.read_text()]
+    assert offenders == []

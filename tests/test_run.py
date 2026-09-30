@@ -381,3 +381,22 @@ if __name__ == "__main__":
     test_verify_unseen_listings_marks_sold_and_keeps_inconclusive()
     test_process_listing_stores_dedupe_signature()
     print("\n✅ All run.py tests passed!")
+
+
+def test_refresh_user_analyses_writes_text_for_active_listings():
+    # Regression: after the Postgres move, rows are dicts — the old tuple
+    # unpack got the column names and the "?" placeholder crashed every scan.
+    db_path, db = _fresh_db()
+    listing_id, _, _ = db.upsert_listing({
+        "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Bike",
+        "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+        "distance_km": 10, "status": "ACTIVE"})
+    db.save_specifications(listing_id, _specs())
+
+    run.refresh_user_analyses(db)
+
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT user_analysis FROM listings WHERE id = %s", (listing_id,))
+    assert cursor.fetchone()["user_analysis"]
+    db.close()
+    drop_test_url(db_path)

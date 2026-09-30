@@ -1,3 +1,4 @@
+import functools
 import json
 import logging
 import re
@@ -24,6 +25,25 @@ MANUAL_REJECT_REASON = "Scartata manualmente dall'utente"
 _VALID_SCHEMA_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
+def _atomic(method):
+    """Run a multi-statement write as one transaction. The connection is
+    otherwise autocommit, so plain reads never leave the session "idle in
+    transaction" (holding locks/snapshots on Supabase for a whole scan)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        self.conn.autocommit = False
+        try:
+            result = method(self, *args, **kwargs)
+            self.conn.commit()
+            return result
+        except BaseException:
+            self.conn.rollback()
+            raise
+        finally:
+            self.conn.autocommit = True
+    return wrapper
+
+
 class Database:
     def __init__(self, database_url: str, schema: Optional[str] = None):
         """database_url is a Postgres connection string (e.g. Supabase's
@@ -35,6 +55,7 @@ class Database:
         self.database_url = database_url
         self.schema = schema
         self.conn = psycopg2.connect(database_url, cursor_factory=psycopg2.extras.RealDictCursor)
+        self.conn.autocommit = True
         if schema:
             if not _VALID_SCHEMA_NAME.match(schema):
                 raise ValueError(f"Invalid schema name: {schema!r}")
@@ -205,6 +226,7 @@ class Database:
     def make_listing_id(portal: str, portal_id: Any) -> str:
         return f"{portal}_{portal_id}"
 
+    @_atomic
     def upsert_listing(self, item: Dict[str, Any]) -> Tuple[str, bool, bool]:
         """
         Upserts listing.
@@ -611,6 +633,7 @@ class Database:
             )
         self.conn.commit()
 
+    @_atomic
     def save_spec_overrides(self, listing_id: str, fields: Dict[str, Any]) -> None:
         """Remember hand/AI-corrected spec values so the next scan applies them
         on top of the parser's output instead of overwriting them. A None/""
@@ -637,6 +660,7 @@ class Database:
         cursor.execute("SELECT field, value_json FROM spec_overrides WHERE listing_id = %s", (listing_id,))
         return {row["field"]: json.loads(row["value_json"]) for row in cursor.fetchall()}
 
+    @_atomic
     def toggle_favorite(self, listing_id: str) -> bool:
         """Flip is_favorite for a listing and return the new value. A
         favorite is independent of status (ACTIVE/REJECTED/SOLD/...) — a
@@ -652,6 +676,7 @@ class Database:
         self.conn.commit()
         return bool(new_value)
 
+    @_atomic
     def delete_listing(self, listing_id: str) -> None:
         """Physically delete a listing and all its related data from the DB,
         and remember the id so the next scan doesn't bring it back as new."""
