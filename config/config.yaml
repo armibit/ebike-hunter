@@ -17,8 +17,19 @@ buyer_profile:
   max_radius_km:
     italy: 150
     # Shops that ship: distance only lowers their score, never rejects them.
-    exempt_portals: ["upway", "decathlon", "ridewill", "zbike", "godspeed", "ebikelab",
-                     "ecycles_shop", "ebikestorebrescia", "buybestgear", "buycycle"]
+    exempt_portals:
+      [
+        "upway",
+        "decathlon",
+        "ridewill",
+        "zbike",
+        "godspeed",
+        "ebikelab",
+        "ecycles_shop",
+        "ebikestorebrescia",
+        "buybestgear",
+        "buycycle",
+      ]
   budget:
     target_price: 2200
     hard_max_price: 3000
@@ -27,7 +38,18 @@ buyer_profile:
     suspicious_min_price: 900
   rider_specs:
     height_cm: 170
-    target_sizes: ["M", "S2", "S3", "42cm", "43cm", "44cm", "45cm", "46cm", "17inch", "18inch"]
+    target_sizes:
+      [
+        "M",
+        "S",
+        "42cm",
+        "43cm",
+        "44cm",
+        "45cm",
+        "46cm",
+        "17inch",
+        "18inch",
+      ]
 
 hardware_requirements:
   category: "full_suspension"
@@ -81,20 +103,47 @@ portals:
       - "/annunci-piemonte/vendita/biciclette/verbano-cusio-ossola"
     max_pages: 4
     search_queries:
+      # Generiche
       - "ebike full"
-      - "emtb biammortizzata"
+      - "e-bike full"
+      - "e bike full"
+      - "ebike full suspension"
+      - "e-bike full suspension"
+      - "e-mtb"
+      - "e mtb"
+      - "emtb"
+      - "e-mtb full"
+      - "emtb full"
+      - "mtb elettrica"
+      - "mtb elettrica full"
+      - "bici elettrica full"
+      - "bici elettrica biammortizzata"
+      - "e-bike biammortizzata"
+      - "ebike biammortizzata"
+      - "full suspension elettrica"
+      - "full suspended ebike"
+      - "enduro elettrica"
+      - "all mountain elettrica"
+      # Modelli
       - "turbo levo"
       - "stereo hybrid"
       - "trek rail"
-      - "haibike"
-      - "moustache"
-      - "cannondale"
+      - "canyon spectral:on"
+      - "canyon spectral on"
+      - "haibike allmtn"
+      - "haibike all mtb"
+      - "moustache samedi"
+      - "cannondale moterra"
+      - "orbea wild"
       - "orbea rise"
+      - "scott strike"
+      - "scott ransom"
       - "scott eride"
       - "ktm macina"
       - "focus jam2"
-      - "giant trance"
-      - "merida eone"
+      - "giant trance x"
+      - "merida eone sixty"
+      - "merida eone forty"
       - "lapierre overvolt"
       - "santa cruz heckler"
   buycycle:
@@ -107,7 +156,34 @@ portals:
     enabled: true
     base_url: "https://upway.ch"
     shop_domain: "upway-switzerland.myshopify.com"
-    brands: ["cube", "lapierre", "haibike", "trek", "specialized", "e-mountainbike"]
+    brands:
+      [
+        "cube",
+        "lapierre",
+        "haibike",
+        "trek",
+        "specialized",
+        "e-mountainbike",
+        "Pivot",
+        "Cube",
+        "Bulls",
+        "THOK",
+        "Ghost",
+        "Giant",
+        "BH",
+        "Megamo",
+        "Orbea",
+        "Canyon",
+        "Husqvarna Bicycles",
+        "Maxcycles",
+        "Rockrider",
+        "MÜSING",
+        "Focus",
+        "Moustache",
+        "Müsing",
+        "M1 Sporttechnik",
+        "Bionicon",
+      ]
     max_pages: 5
   decathlon:
     # Connector is a stub (Cloudflare Turnstile blocks automated access — see
@@ -128,13 +204,13 @@ portals:
   ridewill:
     enabled: true
     base_url: "https://www.ridewill.it"
-    category_id: "87"  # e-bike/ebike-usate-km0 (used/demo e-bikes)
-    type_id: "7"        # e-bike department
+    category_id: "87" # e-bike/ebike-usate-km0 (used/demo e-bikes)
+    type_id: "7" # e-bike department
     max_pages: 3
   zbike:
     enabled: true
     base_url: "https://z-bike.ch"
-    category_id: "528"  # WooCommerce "usato" category
+    category_id: "528" # WooCommerce "usato" category
   godspeed:
     enabled: true
     base_url: "https://www.godspeed.ch"
@@ -155,5 +231,5 @@ portals:
   buybestgear:
     enabled: true
     base_url: "https://www.buybestgear.com"
-    collection: "full-suspension-e-bikes"  # new bikes, not used — see connector docstring
+    collection: "full-suspension-e-bikes" # new bikes, not used — see connector docstring
     max_pages: 5
