@@ -1,8 +1,6 @@
 app:
   name: "lugano-emtb-hunter"
   log_level: "INFO"
-  # Relative paths are resolved against the project folder (src/utils/config.py).
-  db_path: "data/emtb_hunter.db"
   parallel_scans: 5
 
 buyer_profile:

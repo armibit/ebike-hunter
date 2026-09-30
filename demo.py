@@ -87,20 +87,29 @@ def main():
     print("=" * 70)
     print()
 
-    # Load config
-    with open("config/config.yaml", "r") as f:
-        config = yaml.safe_load(f)
+    # Load config using proper config loader to get DATABASE_URL from environment
+    from utils.config import load_config
+    config = load_config()
 
     # Initialize components
-    db = Database(config["app"]["db_path"])
-    parser = RegexParser("config/taxonomy.json")
+    db = Database(config["app"]["database_url"])
+    parser = RegexParser(str(Path(__file__).parent / "config" / "taxonomy.json"))
     normalizer = Normalizer(
         chf_to_eur=config["exchange_rates"]["chf_to_eur"],
         eur_to_chf=config["exchange_rates"]["eur_to_chf"]
     )
     scorer = ScoringEngine(config)
 
-    print(f"✓ Initialized database: {config['app']['db_path']}")
+    # Mask password in connection string before printing
+    db_url = config["app"]["database_url"]
+    if "@" in db_url:
+        scheme, rest = db_url.split("://", 1)
+        creds, host = rest.rsplit("@", 1)
+        user = creds.split(":")[0]
+        masked_url = f"{scheme}://{user}:***@{host}"
+    else:
+        masked_url = db_url
+    print(f"✓ Initialized database: {masked_url}")
     print(f"✓ Buyer location: {config['buyer_profile']['location']['name']}")
     print(f"✓ Budget: {config['buyer_profile']['budget']['target_price']} - {config['buyer_profile']['budget']['hard_max_price']} CHF")
     print()

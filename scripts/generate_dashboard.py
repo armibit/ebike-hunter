@@ -294,7 +294,7 @@ def _build_detail_html(bike: dict, history: list) -> str:
     return "".join(s for s in sections if s)
 
 
-def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
+def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
     """Build the dashboard HTML from the DB.
 
     interactive=True renders the reject/mark-sold/restore buttons and the
@@ -310,12 +310,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     among them, same as every other filter here. Nothing to toggle
     server-side, so there's no separate "show all" URL/mode to keep in sync.
     """
-    db = Database(db_path)
+    db = Database(database_url)
 
     cursor = db.conn.cursor()
     cursor.execute("""
     SELECT
-        l.rowid AS numeric_id,
+        l.numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url, l.image_url,
         l.latitude, l.longitude, l.location_normalized, l.region,
         l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
@@ -1851,10 +1851,10 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     return html
 
 
-def generate_dashboard(db_path: str, output_path: str = "index.html"):
+def generate_dashboard(database_url: str, output_path: str = "index.html"):
     """Write the (read-only, non-interactive) dashboard snapshot to disk.
     Used by run.py and analyze.py after each scan/analysis pass."""
-    html = render_dashboard_html(db_path, interactive=False)
+    html = render_dashboard_html(database_url, interactive=False)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"✓ Dashboard generated: {output_path}")
@@ -1864,7 +1864,7 @@ if __name__ == "__main__":
     from utils.config import load_config
     config = load_config()
 
-    db_path = config["app"]["db_path"]
+    database_url = config["app"]["database_url"]
     output = Path(__file__).parent.parent / "index.html"
 
-    generate_dashboard(db_path, str(output))
+    generate_dashboard(database_url, str(output))

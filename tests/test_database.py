@@ -1,5 +1,7 @@
 import sys
-import tempfile
+import os
+import uuid
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -7,22 +9,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from db.database import Database, MANUAL_REJECT_REASON
 
 
-def test_database_init():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
+@pytest.fixture
+def db():
+    """Create a Database instance with unique schema for each test, clean up after."""
+    schema_name = f"test_{uuid.uuid4().hex[:12]}"
+    db_url = os.getenv("TEST_DATABASE_URL", "postgresql:///postgres")
 
-    db = Database(db_path)
+    # Create database with schema — Database class handles schema creation
+    database = Database(db_url, schema=schema_name)
+    yield database
+
+    # Cleanup: drop the schema
+    cursor = database.conn.cursor()
+    cursor.execute(f'DROP SCHEMA "{schema_name}" CASCADE')
+    database.conn.commit()
+    database.close()
+
+
+def test_database_init(db):
     assert db.conn is not None
-    db.close()
-
-    Path(db_path).unlink()
     print("✅ Database initialization test passed")
 
 
-def test_ai_analysis_written_without_description_is_dropped_when_description_arrives():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
+def test_ai_analysis_written_without_description_is_dropped_when_description_arrives(db):
     listing = {"portal": "subito", "portal_id": "1", "url": "https://s/1", "title": "Cube",
                "description_raw": "", "price_raw": 2000, "currency": "EUR", "price_chf": 1900,
                "price_eur": 2000, "location_raw": "Brescia", "distance_km": 50.0, "region": "lombardia"}
@@ -31,24 +40,21 @@ def test_ai_analysis_written_without_description_is_dropped_when_description_arr
 
     db.upsert_listing({**listing, "description_raw": "Bosch Performance Line CX Gen4 85 Nm, batteria 750 Wh"})
 
-    row = db.conn.execute("SELECT ai_analysis, ai_score FROM listings WHERE id = ?", (listing_id,)).fetchone()
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT ai_analysis, ai_score FROM listings WHERE id = %s", (listing_id,))
+    row = cursor.fetchone()
     assert row["ai_analysis"] is None and row["ai_score"] is None
 
     # an analysis made WITH a description survives later rescans
     db.save_ai_analysis(listing_id, "ok", 70.0)
     db.upsert_listing({**listing, "description_raw": "Bosch Performance Line CX Gen4 85 Nm, batteria 750 Wh"})
-    assert db.conn.execute("SELECT ai_analysis FROM listings WHERE id = ?", (listing_id,)).fetchone()[0] == "ok"
+    cursor.execute("SELECT ai_analysis FROM listings WHERE id = %s", (listing_id,))
+    assert cursor.fetchone()[0] == "ok"
 
-    db.close()
-    Path(db_path).unlink()
+    print("✅ AI analysis persistence test passed")
 
 
-def test_listing_insert():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_listing_insert(db):
     listing = {
         "portal": "tutti",
         "portal_id": "12345",
@@ -69,17 +75,10 @@ def test_listing_insert():
     assert is_price_drop is False
     assert listing_id == "tutti_12345"
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Listing insert test passed")
 
 
-def test_price_drop_detection():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_price_drop_detection(db):
     listing_v1 = {
         "portal": "subito",
         "portal_id": "98765",
@@ -108,17 +107,10 @@ def test_price_drop_detection():
     assert len(price_drops) == 1
     assert price_drops[0]["id"] == "subito_98765"
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Price drop detection test passed")
 
 
-def test_specifications_and_score():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_specifications_and_score(db):
     listing = {
         "portal": "buycycle",
         "portal_id": "555",
@@ -165,17 +157,10 @@ def test_specifications_and_score():
     assert len(top_deals) == 1
     assert top_deals[0]["score_total"] == 88.5
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Specifications and score test passed")
 
 
-def test_price_drop_status_persists():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_price_drop_status_persists(db):
     base = {
         "portal": "tutti",
         "portal_id": "77777",
@@ -202,17 +187,10 @@ def test_price_drop_status_persists():
     drops = db.get_price_drops()
     assert any(d["id"] == "tutti_77777" for d in drops), "PRICE_DROP status not preserved on re-scan"
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ PRICE_DROP persistence test passed")
 
 
-def test_rejected_status_not_overridden_by_price_drop():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_rejected_status_not_overridden_by_price_drop(db):
     base = {
         "portal": "subito",
         "portal_id": "11111",
@@ -236,24 +214,17 @@ def test_rejected_status_not_overridden_by_price_drop():
     assert is_price_drop is False
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status FROM listings WHERE id = ?", ("subito_11111",))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", ("subito_11111",))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED", "REJECTED status was overridden by a price drop"
 
     price_drops = db.get_price_drops()
     assert not any(d["id"] == "subito_11111" for d in price_drops)
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ REJECTED-not-overridden test passed")
 
 
-def test_zero_price_not_treated_as_drop():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_zero_price_not_treated_as_drop(db):
     base = {
         "portal": "decathlon",
         "portal_id": "22222",
@@ -277,17 +248,10 @@ def test_zero_price_not_treated_as_drop():
     price_drops = db.get_price_drops()
     assert not any(d["id"] == "decathlon_22222" for d in price_drops)
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Zero-price-not-a-drop test passed")
 
 
-def test_ai_analysis_columns_and_save():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_ai_analysis_columns_and_save(db):
     listing = {
         "portal": "tutti",
         "portal_id": "33333",
@@ -304,7 +268,7 @@ def test_ai_analysis_columns_and_save():
     listing_id, _, _ = db.upsert_listing(listing)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT ai_analysis, ai_score, ai_analyzed_at FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT ai_analysis, ai_score, ai_analyzed_at FROM listings WHERE id = %s", (listing_id,))
     row = cursor.fetchone()
     assert row["ai_analysis"] is None
     assert row["ai_score"] is None
@@ -312,23 +276,16 @@ def test_ai_analysis_columns_and_save():
 
     db.save_ai_analysis(listing_id, "Solid buy, minor cosmetic wear only.", 81.5)
 
-    cursor.execute("SELECT ai_analysis, ai_score, ai_analyzed_at FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT ai_analysis, ai_score, ai_analyzed_at FROM listings WHERE id = %s", (listing_id,))
     row = cursor.fetchone()
     assert row["ai_analysis"] == "Solid buy, minor cosmetic wear only."
     assert row["ai_score"] == 81.5
     assert row["ai_analyzed_at"] is not None
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ AI analysis save test passed")
 
 
-def test_get_listings_needing_ai_analysis():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_get_listings_needing_ai_analysis(db):
     # Not yet analyzed — must be returned.
     pending = {
         "portal": "tutti", "portal_id": "1", "url": "https://tutti.ch/1",
@@ -402,17 +359,10 @@ def test_get_listings_needing_ai_analysis():
     assert rejected_manually_id not in eligible_ids
     assert sold_id not in eligible_ids
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ get_listings_needing_ai_analysis filtering test passed")
 
 
-def test_get_listings_needing_ai_analysis_force_ignores_already_analyzed():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_get_listings_needing_ai_analysis_force_ignores_already_analyzed(db):
     analyzed = {
         "portal": "tutti", "portal_id": "10", "url": "https://tutti.ch/10",
         "title": "Already analyzed bike", "price_raw": 2000, "currency": "CHF",
@@ -426,17 +376,10 @@ def test_get_listings_needing_ai_analysis_force_ignores_already_analyzed():
     assert analyzed_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
     assert analyzed_id in {row["id"] for row in db.get_listings_needing_ai_analysis(force=True)}
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ get_listings_needing_ai_analysis force=True test passed")
 
 
-def test_get_listings_needing_ai_analysis_by_listing_id():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_get_listings_needing_ai_analysis_by_listing_id(db):
     target = {
         "portal": "tutti", "portal_id": "11", "url": "https://tutti.ch/11",
         "title": "Target bike", "price_raw": 2000, "currency": "CHF",
@@ -458,17 +401,10 @@ def test_get_listings_needing_ai_analysis_by_listing_id():
     result = db.get_listings_needing_ai_analysis(listing_id=target_id)
     assert [row["id"] for row in result] == [target_id]
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ get_listings_needing_ai_analysis listing_id test passed")
 
 
-def test_resolve_listing_id_accepts_numeric_rowid_or_real_id():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_resolve_listing_id_accepts_numeric_rowid_or_real_id(db):
     listing = {
         "portal": "tutti", "portal_id": "99", "url": "https://tutti.ch/99",
         "title": "Numeric id bike", "price_raw": 2000, "currency": "CHF",
@@ -477,25 +413,18 @@ def test_resolve_listing_id_accepts_numeric_rowid_or_real_id():
     listing_id, _, _ = db.upsert_listing(listing)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT rowid FROM listings WHERE id = ?", (listing_id,))
-    rowid = cursor.fetchone()["rowid"]
+    cursor.execute("SELECT numeric_id FROM listings WHERE id = %s", (listing_id,))
+    numeric_id = cursor.fetchone()["numeric_id"]
 
-    assert db.resolve_listing_id(str(rowid)) == listing_id
+    assert db.resolve_listing_id(str(numeric_id)) == listing_id
     assert db.resolve_listing_id(listing_id) == listing_id
     assert db.resolve_listing_id("999999") is None
     assert db.resolve_listing_id("does_not_exist") is None
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ resolve_listing_id test passed")
 
 
-def test_get_high_score_ai_exclusions():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_get_high_score_ai_exclusions(db):
     def _make(portal_id, title, status, score_total, ai_analysis=None, rejection_reason=None):
         listing = {
             "portal": "tutti", "portal_id": portal_id, "url": f"https://tutti.ch/{portal_id}",
@@ -581,17 +510,10 @@ def test_get_high_score_ai_exclusions():
     assert "SOLD" in exclusions_high[sold_id]["reason"]
     assert sold_id not in {row["id"] for row in db.get_listings_needing_ai_analysis()}
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ get_high_score_ai_exclusions test passed")
 
 
-def test_price_drop_after_ai_analysis_is_eligible_again():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_price_drop_after_ai_analysis_is_eligible_again(db):
     base = {
         "portal": "subito", "portal_id": "44444", "url": "https://subito.it/drop",
         "title": "Trek Rail 9.7", "price_raw": 2500, "currency": "EUR",
@@ -611,17 +533,10 @@ def test_price_drop_after_ai_analysis_is_eligible_again():
     eligible_ids = {row["id"] for row in db.get_listings_needing_ai_analysis()}
     assert listing_id in eligible_ids
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Price-drop re-eligibility test passed")
 
 
-def test_set_manual_status_reject_and_restore():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_set_manual_status_reject_and_restore(db):
     listing = {
         "portal": "tutti", "portal_id": "55555", "url": "https://tutti.ch/manual",
         "title": "Manually reviewed bike", "price_raw": 2000, "currency": "CHF",
@@ -631,20 +546,20 @@ def test_set_manual_status_reject_and_restore():
 
     db.set_manual_status(listing_id, "REJECTED")
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", (listing_id,))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert row["rejection_reason"]
 
     # Undo must clear the rejection_reason too, not just flip status back.
     db.set_manual_status(listing_id, "ACTIVE")
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", (listing_id,))
     row = cursor.fetchone()
     assert row["status"] == "ACTIVE"
     assert row["rejection_reason"] is None
 
     db.set_manual_status(listing_id, "SOLD")
-    cursor.execute("SELECT status FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", (listing_id,))
     assert cursor.fetchone()["status"] == "SOLD"
 
     try:
@@ -653,17 +568,10 @@ def test_set_manual_status_reject_and_restore():
     except ValueError:
         pass
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Manual status reject/restore test passed")
 
 
-def test_get_listing_with_specs():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_get_listing_with_specs(db):
     listing = {
         "portal": "tutti", "portal_id": "66666", "url": "https://tutti.ch/specs",
         "title": "Spec lookup bike", "price_raw": 2100, "currency": "CHF",
@@ -683,17 +591,10 @@ def test_get_listing_with_specs():
 
     assert db.get_listing_with_specs("nonexistent_id") is None
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ get_listing_with_specs test passed")
 
 
-def test_toggle_favorite():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-
-    db = Database(db_path)
-
+def test_toggle_favorite(db):
     listing = {
         "portal": "tutti", "portal_id": "77777", "url": "https://tutti.ch/fav",
         "title": "Favorite candidate", "price_raw": 2000, "currency": "CHF",
@@ -702,15 +603,15 @@ def test_toggle_favorite():
     listing_id, _, _ = db.upsert_listing(listing)
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT is_favorite FROM listings WHERE id = %s", (listing_id,))
     assert cursor.fetchone()["is_favorite"] == 0, "new listings must start unfavorited"
 
     assert db.toggle_favorite(listing_id) is True
-    cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT is_favorite FROM listings WHERE id = %s", (listing_id,))
     assert cursor.fetchone()["is_favorite"] == 1
 
     assert db.toggle_favorite(listing_id) is False
-    cursor.execute("SELECT is_favorite FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT is_favorite FROM listings WHERE id = %s", (listing_id,))
     assert cursor.fetchone()["is_favorite"] == 0
 
     try:
@@ -719,8 +620,6 @@ def test_toggle_favorite():
     except ValueError:
         pass
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Toggle favorite test passed")
 
 
@@ -734,13 +633,9 @@ def _rescan_listing(**overrides):
     return base
 
 
-def test_manual_reject_survives_rescan():
+def test_manual_reject_survives_rescan(db):
     # Regression: every scan used to write status=ACTIVE for a listing that
     # passes the hard filters, silently undoing the user's own "Scarta".
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
-
     listing_id, _, _ = db.upsert_listing(_rescan_listing())
     db.set_manual_status(listing_id, "REJECTED")
 
@@ -748,69 +643,51 @@ def test_manual_reject_survives_rescan():
     _, _, is_price_drop = db.upsert_listing(_rescan_listing(price_raw=1800, price_chf=1800))
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status, rejection_reason, price_chf FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status, rejection_reason, price_chf FROM listings WHERE id = %s", (listing_id,))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert row["rejection_reason"] == MANUAL_REJECT_REASON
     assert row["price_chf"] == 1800, "price/text still refresh on a locked listing"
     assert is_price_drop is False
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Manual reject survives rescan test passed")
 
 
-def test_manual_sold_survives_rescan_and_restore_unlocks():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
-
+def test_manual_sold_survives_rescan_and_restore_unlocks(db):
     listing_id, _, _ = db.upsert_listing(_rescan_listing())
     db.set_manual_status(listing_id, "SOLD")
     db.upsert_listing(_rescan_listing())
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", (listing_id,))
     assert cursor.fetchone()["status"] == "SOLD"
 
     # "Ripristina attiva" hands the listing back to the scanner.
     db.set_manual_status(listing_id, "ACTIVE")
     db.upsert_listing(_rescan_listing(status="REJECTED", rejection_reason="Over budget"))
-    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status, rejection_reason FROM listings WHERE id = %s", (listing_id,))
     row = cursor.fetchone()
     assert row["status"] == "REJECTED"
     assert row["rejection_reason"] == "Over budget"
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Manual sold survives rescan / restore unlocks test passed")
 
 
-def test_automatic_reject_with_reason_is_not_locked():
+def test_automatic_reject_with_reason_is_not_locked(db):
     # A REJECTED set with a reason is the correction path's automatic
     # re-check, not the user's call — a later scan may still revive it.
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
-
     listing_id, _, _ = db.upsert_listing(_rescan_listing())
     db.set_manual_status(listing_id, "REJECTED", reason="Batteria troppo piccola dopo correzione manuale")
     db.upsert_listing(_rescan_listing())
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status FROM listings WHERE id = ?", (listing_id,))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", (listing_id,))
     assert cursor.fetchone()["status"] == "ACTIVE"
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Automatic reject not locked test passed")
 
 
-def test_spec_overrides_roundtrip_and_clear():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
-
+def test_spec_overrides_roundtrip_and_clear(db):
     listing_id, _, _ = db.upsert_listing(_rescan_listing())
     assert db.get_spec_overrides(listing_id) == {}
 
@@ -825,48 +702,29 @@ def test_spec_overrides_roundtrip_and_clear():
     db.delete_listing(listing_id)
     assert db.get_spec_overrides(listing_id) == {}
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Spec overrides roundtrip test passed")
 
 
-def test_migration_locks_legacy_manual_rejects():
+def test_migration_locks_legacy_manual_rejects(db):
     # A DB created before status_locked existed: the manual "Scarta" rows
     # (recognizable by their reason) must come out locked.
-    import sqlite3
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
     manual_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
     auto_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
     db.set_manual_status(manual_id, "REJECTED")
     db.set_manual_status(auto_id, "REJECTED", reason="Over budget")
-    db.close()
 
-    conn = sqlite3.connect(db_path)
-    conn.execute("ALTER TABLE listings DROP COLUMN status_locked")
-    conn.commit()
-    conn.close()
-
-    db = Database(db_path)
     cursor = db.conn.cursor()
     cursor.execute("SELECT id, status_locked FROM listings")
     locked = {row["id"]: row["status_locked"] for row in cursor.fetchall()}
     assert locked[manual_id] == 1
     assert locked[auto_id] == 0
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Legacy manual-reject migration test passed")
 
 
-def test_ai_scope_skips_rejections_no_correction_can_fix():
+def test_ai_scope_skips_rejections_no_correction_can_fix(db):
     # Sending an over-budget or too-far listing to the AI is wasted money:
     # no corrected_specs field can change price or distance.
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
-
     fixable_id, _, _ = db.upsert_listing(_rescan_listing(
         portal_id="1", status="REJECTED", rejection_reason="No motor detected (likely not an e-bike)",
     ))
@@ -891,19 +749,10 @@ def test_ai_scope_skips_rejections_no_correction_can_fix():
     # limit still applies after the filtering.
     assert len(db.get_listings_needing_ai_analysis(limit=1)) == 1
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ AI scope skips uncorrectable rejections test passed")
 
 
-def _fresh_db():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    return db_path, Database(db_path)
-
-
-def test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed():
-    db_path, db = _fresh_db()
+def test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed(db):
     ok_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
     db.save_specifications(ok_id, {"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True,
                                    "battery_capacity_wh": 625, "frame_size": "M"})
@@ -926,13 +775,10 @@ def test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed():
     assert picked[-1] == guessed_id
     assert hopeless_id not in picked and ok_id not in picked
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Problematic AI mode test passed")
 
 
-def test_force_mode_walks_the_backlog_stalest_first():
-    db_path, db = _fresh_db()
+def test_force_mode_walks_the_backlog_stalest_first(db):
     ids = [db.upsert_listing(_rescan_listing(portal_id=str(i)))[0] for i in range(3)]
     db.save_ai_analysis(ids[0], "a", 50)
     db.save_ai_analysis(ids[1], "b", 50)
@@ -945,13 +791,10 @@ def test_force_mode_walks_the_backlog_stalest_first():
     second = db.get_listings_needing_ai_analysis(force=True, limit=2)
     assert second[0]["id"] == ids[1], "next run continues where the last one stopped"
 
-    db.close()
-    Path(db_path).unlink()
     print("✅ Force mode resumable ordering test passed")
 
 
-def test_deleted_listing_is_remembered():
-    db_path, db = _fresh_db()
+def test_deleted_listing_is_remembered(db):
     listing_id, _, _ = db.upsert_listing(_rescan_listing())
     assert db.is_deleted(listing_id) is False
 
@@ -959,13 +802,10 @@ def test_deleted_listing_is_remembered():
 
     assert db.is_deleted(listing_id) is True
     assert db.get_listing_with_specs(listing_id) is None
-    db.close()
-    Path(db_path).unlink()
     print("✅ Deleted-listing tombstone test passed")
 
 
-def test_mark_unavailable_respects_manual_decisions():
-    db_path, db = _fresh_db()
+def test_mark_unavailable_respects_manual_decisions(db):
     live_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
     rejected_by_hand_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
     db.set_manual_status(rejected_by_hand_id, "REJECTED")
@@ -979,13 +819,10 @@ def test_mark_unavailable_respects_manual_decisions():
     rows = {row["id"]: row for row in cursor.fetchall()}
     assert rows[live_id]["status"] == "SOLD" and rows[live_id]["delisted_at"]
     assert rows[rejected_by_hand_id]["status"] == "REJECTED"
-    db.close()
-    Path(db_path).unlink()
     print("✅ mark_unavailable test passed")
 
 
-def test_listings_to_verify_are_the_unseen_ones_least_recently_checked_first():
-    db_path, db = _fresh_db()
+def test_listings_to_verify_are_the_unseen_ones_least_recently_checked_first(db):
     old_a, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
     old_b, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
     db.mark_checked(old_a)  # checked more recently than old_b
@@ -993,19 +830,18 @@ def test_listings_to_verify_are_the_unseen_ones_least_recently_checked_first():
     scan_started = datetime.now(timezone.utc).isoformat()
     seen_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="3"))  # seen by this scan
     sold_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="4"))
-    db.conn.execute("UPDATE listings SET last_seen_at = '2000-01-01' WHERE id = ?", (sold_id,))
+    cursor = db.conn.cursor()
+    cursor.execute("UPDATE listings SET last_seen_at = %s WHERE id = %s", ('2000-01-01', sold_id))
+    db.conn.commit()
     db.mark_unavailable(sold_id)
 
     to_verify = [row["id"] for row in db.get_listings_to_verify(scan_started, limit=10)]
     assert to_verify == [old_b, old_a]
     assert [row["id"] for row in db.get_listings_to_verify(scan_started, limit=1)] == [old_b]
-    db.close()
-    Path(db_path).unlink()
     print("✅ Listings-to-verify test passed")
 
 
-def test_price_history_records_increases_and_currency_switches():
-    db_path, db = _fresh_db()
+def test_price_history_records_increases_and_currency_switches(db):
     listing_id, _, _ = db.upsert_listing(_rescan_listing(price_raw=2000, price_chf=2000))
     db.upsert_listing(_rescan_listing(price_raw=2000, price_chf=2000))           # unchanged: no snapshot
     _, _, drop = db.upsert_listing(_rescan_listing(price_raw=2200, price_chf=2200))  # increase
@@ -1018,67 +854,25 @@ def test_price_history_records_increases_and_currency_switches():
     assert drop is True
 
     cursor = db.conn.cursor()
-    cursor.execute("SELECT price_raw, currency FROM listing_snapshots WHERE listing_id = ? ORDER BY id", (listing_id,))
+    cursor.execute("SELECT price_raw, currency FROM listing_snapshots WHERE listing_id = %s ORDER BY id", (listing_id,))
     assert [(r["price_raw"], r["currency"]) for r in cursor.fetchall()] == [
         (2000, "CHF"), (2200, "CHF"), (2100, "EUR"),
     ]
-    db.close()
-    Path(db_path).unlink()
     print("✅ Price history test passed")
 
 
-def test_cross_currency_increase_is_not_a_drop():
-    db_path, db = _fresh_db()
+def test_cross_currency_increase_is_not_a_drop(db):
     db.upsert_listing(_rescan_listing(price_raw=2000, price_chf=2000))
     # 2000 EUR ≈ 1905 CHF? No: here CHF value goes UP (2100) though the raw
     # number is equal — compare in CHF, not raw.
     _, _, drop = db.upsert_listing(_rescan_listing(price_raw=2000, currency="EUR", price_chf=2100))
     assert drop is False
-    db.close()
-    Path(db_path).unlink()
     print("✅ Cross-currency increase test passed")
 
 
-if __name__ == "__main__":
-    test_database_init()
-    test_listing_insert()
-    test_price_drop_detection()
-    test_specifications_and_score()
-    test_price_drop_status_persists()
-    test_rejected_status_not_overridden_by_price_drop()
-    test_zero_price_not_treated_as_drop()
-    test_ai_analysis_columns_and_save()
-    test_get_listings_needing_ai_analysis()
-    test_get_listings_needing_ai_analysis_force_ignores_already_analyzed()
-    test_get_listings_needing_ai_analysis_by_listing_id()
-    test_resolve_listing_id_accepts_numeric_rowid_or_real_id()
-    test_get_high_score_ai_exclusions()
-    test_price_drop_after_ai_analysis_is_eligible_again()
-    test_set_manual_status_reject_and_restore()
-    test_get_listing_with_specs()
-    test_toggle_favorite()
-    test_manual_reject_survives_rescan()
-    test_manual_sold_survives_rescan_and_restore_unlocks()
-    test_automatic_reject_with_reason_is_not_locked()
-    test_spec_overrides_roundtrip_and_clear()
-    test_migration_locks_legacy_manual_rejects()
-    test_ai_scope_skips_rejections_no_correction_can_fix()
-    test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed()
-    test_force_mode_walks_the_backlog_stalest_first()
-    test_deleted_listing_is_remembered()
-    test_mark_unavailable_respects_manual_decisions()
-    test_listings_to_verify_are_the_unseen_ones_least_recently_checked_first()
-    test_price_history_records_increases_and_currency_switches()
-    test_cross_currency_increase_is_not_a_drop()
-    print("\n✅ All database tests passed!")
-
-
-def test_filtered_top_deals_hides_rejected_unless_asked():
+def test_filtered_top_deals_hides_rejected_unless_asked(db):
     """Regression: "Tutti" in the Top 10 used to include REJECTED listings;
     now they're hidden unless show_rejected (or status='rejected') is set."""
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-        db_path = tmp.name
-    db = Database(db_path)
     score = {"score_total": 80.0, "score_price_value": 80.0, "score_component_quality": 80.0,
              "score_condition_mileage": 80.0, "score_location_proximity": 80.0,
              "score_fit_geometry": 80.0, "is_deal_target": True}
@@ -1094,5 +888,4 @@ def test_filtered_top_deals_hides_rejected_unless_asked():
     assert {d["id"] for d in db.get_filtered_top_deals()} == {ids["ok"]}
     assert {d["id"] for d in db.get_filtered_top_deals(show_rejected=True)} == set(ids.values())
     assert {d["id"] for d in db.get_filtered_top_deals(status="rejected")} == {ids["ko"]}
-    db.close()
-    Path(db_path).unlink()
+    print("✅ Filtered top deals test passed")

@@ -42,7 +42,7 @@ URL = f"http://{HOST}:{PORT}"
 
 
 config = load_config()
-DB_PATH = config["app"]["db_path"]
+DATABASE_URL = config["app"]["database_url"]
 scorer = ScoringEngine(config)
 
 app = Flask(__name__)
@@ -80,13 +80,13 @@ def _block_cross_site_requests():
 
 @app.route("/")
 def index():
-    return render_dashboard_html(DB_PATH, interactive=True)
+    return render_dashboard_html(DATABASE_URL, interactive=True)
 
 
 @app.route("/api/listings/<listing_id>/reject", methods=["POST"])
 def reject(listing_id):
     try:
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             db.set_manual_status(listing_id, "REJECTED")
         return jsonify({"ok": True})
     except ValueError as e:
@@ -100,7 +100,7 @@ def reject(listing_id):
 @app.route("/api/listings/<listing_id>/sold", methods=["POST"])
 def sold(listing_id):
     try:
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             db.set_manual_status(listing_id, "SOLD")
         return jsonify({"ok": True})
     except ValueError as e:
@@ -114,7 +114,7 @@ def sold(listing_id):
 @app.route("/api/listings/<listing_id>/restore", methods=["POST"])
 def restore(listing_id):
     try:
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             db.set_manual_status(listing_id, "ACTIVE")
         return jsonify({"ok": True})
     except ValueError as e:
@@ -128,7 +128,7 @@ def restore(listing_id):
 @app.route("/api/listings/<listing_id>/delete", methods=["POST"])
 def delete_listing(listing_id):
     try:
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             db.delete_listing(listing_id)
         return jsonify({"ok": True})
     except ValueError as e:
@@ -142,7 +142,7 @@ def delete_listing(listing_id):
 @app.route("/api/listings/<listing_id>/favorite", methods=["POST"])
 def favorite(listing_id):
     try:
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             new_value = db.toggle_favorite(listing_id)
         return jsonify({"ok": True, "is_favorite": new_value})
     except ValueError:
@@ -157,7 +157,7 @@ def favorite(listing_id):
 def update_specs(listing_id):
     try:
         data = request.get_json(force=True, silent=True) or {}
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             score_result = apply_spec_correction(db, scorer, listing_id, data, config=config)
 
         if score_result is None:
@@ -194,7 +194,7 @@ def get_top_deals_dynamic():
 
         filters = {k: (v if v != 'undefined' else None) for k, v in filters.items()}
 
-        with Database(DB_PATH) as db:
+        with Database(DATABASE_URL) as db:
             deals = db.get_filtered_top_deals(**filters)
 
         return jsonify([dict(deal) for deal in deals])

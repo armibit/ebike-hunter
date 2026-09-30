@@ -224,7 +224,7 @@ def main():
         sys.exit(1)
 
     config = load_config()
-    db = Database(config["app"]["db_path"])
+    db = Database(config["app"]["database_url"])
     scorer = ScoringEngine(config)
 
     listing_id = None

@@ -266,7 +266,7 @@ def main():
     print()
 
     # Initialize components
-    db = Database(config["app"]["db_path"])
+    db = Database(config["app"]["database_url"])
     parser = RegexParser(str(BASE_DIR / "config" / "taxonomy.json"))
     location = config["buyer_profile"]["location"]
     normalizer = Normalizer(
@@ -277,7 +277,16 @@ def main():
     )
     scorer = ScoringEngine(config)
 
-    print(f"✓ Database: {config['app']['db_path']}")
+    # Mask password in connection string before printing
+    db_url = config["app"]["database_url"]
+    if "@" in db_url:
+        scheme, rest = db_url.split("://", 1)
+        creds, host = rest.rsplit("@", 1)
+        user = creds.split(":")[0]
+        masked_url = f"{scheme}://{user}:***@{host}"
+    else:
+        masked_url = db_url
+    print(f"✓ Database: {masked_url}")
     print(f"✓ Target: {config['buyer_profile']['location']['name']}")
     print(f"✓ Budget: {config['buyer_profile']['budget']['target_price']}-{config['buyer_profile']['budget']['hard_max_price']} CHF")
     print()
@@ -461,7 +470,7 @@ def main():
     print("=" * 80)
     from scripts.generate_dashboard import generate_dashboard
     dashboard_path = BASE_DIR / "index.html"
-    generate_dashboard(config["app"]["db_path"], str(dashboard_path))
+    generate_dashboard(config["app"]["database_url"], str(dashboard_path))
     print(f"✓ Dashboard: {dashboard_path}")
     print()
     print("✓ Scan complete. Database saved.")
