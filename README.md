@@ -1,144 +1,38 @@
 # E-Bike Hunter
 
-Personal, local tool that scrapes full-suspension e-MTB classifieds — mostly used, plus a couple of new-bike budget retailers — across 14 portals (Switzerland + Northern Italy + EU), scores them against a buyer profile, flags AI-read spec corrections and red flags, and shows everything in an interactive dashboard.
+Personal tool that scrapes full-suspension e-MTB classifieds from 14 portals (Switzerland, Northern Italy, EU shops), filters and scores them against a buyer profile, and shows the results in a local interactive dashboard.
 
 ## Features
 
-- **12 working portal connectors**: Tutti.ch, Subito.it (Lombardia + Verbano, configurable via `search_paths`), Upway, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia, Buybestgear.com (new bikes, not used — see below). Buycycle and Decathlon.ch are stubs (no scriptable access) and disabled by default
-- **Location by province / canton**: any town is placed through its Italian province code ("Merone (CO)"), Swiss postcode ("9524 Zuzwil"), canton or province name ("Winterthur, Zürich") — distances are indicative (±20 km), enough to tell nearby from 400 km away. All of Switzerland is accepted (distance only lowers the score); Italian private listings beyond `max_radius_km.italy` are rejected; shops that ship (`exempt_portals`) never are
-- **Sold detection**: sold-out items in shop feeds (Shopify `available`, WooCommerce `is_in_stock`) are switched to SOLD; after each scan, live listings that dropped out of the search results are checked on the portal (404/410, redirect away from the ad, schema.org `OutOfStock`, "annuncio non più disponibile"…) and marked SOLD when gone
-- **Duplicate flag**: the same bike on two portals (or re-listed) is marked "🔁 anche su …" in the dashboard — pairwise match on title words, price (±8 %) and specs, where a conflicting frame size / battery / year / motor brand vetoes the match
-- **Zero-token parsing**: regex/taxonomy-based spec extraction (motor, battery, frame size, brakes, travel, odometer, model year) — no LLM calls in the main scan
-- **Deterministic scoring**: 0–100 score from price, components, condition/mileage, distance, fit
-- **Optional AI second opinion**: `analyze.py` sends listings to Claude Haiku for an independent Italian-language verdict, red-flag/condition reading from the raw description, and — only when the seller's own text names it — spec corrections the regex parser missed
-- **Interactive dashboard** (`server.py`): a local Flask app opened as a standalone app-mode browser window (no tabs/address bar). Reject, mark sold, favorite, and manually correct specs by hand — corrections that push a listing outside your own criteria (wrong frame size, motor/battery below the minimums) auto-reject it, same as if the scan had read that value in the first place
-- **Price tracking**: detects price drops and re-listings, keeps a price history per listing (shown in its original currency, not silently converted)
-- **Red flag detection**: missing charger/keys, broken parts, accident history mentioned in the description
+- **12 portal connectors**: Tutti.ch, Subito.it, Upway, Velomarkt, TCS Velocorner, Ridewill, Z-Bike, Godspeed, eBikeLab, eCycles Shop, eBikeStore Brescia, Buybestgear. Buycycle and Decathlon.ch are disabled stubs.
+- **Zero-token spec parsing**: regex/taxonomy extraction of motor, battery, frame size, brakes, travel, odometer and model year. The main scan makes no LLM calls.
+- **Hard filters + 0–100 score**: over budget, hardtail, weak motor, small battery and wrong size are rejected. Everything else is ranked on price, components, condition, distance and fit.
+- **Sold detection, price history, duplicate flag**: listings that disappear are checked on the portal and marked SOLD. Price drops are tracked. The same bike on two portals is flagged.
+- **Optional AI second opinion** (`analyze.py`, Claude Haiku): an Italian verdict, red flags, and spec corrections read from the seller's text.
+- **Interactive dashboard** (`server.py`): reject, mark sold, favorite, or correct specs by hand.
 
-## Target Profile
+## Quick start
 
-Configured in `config/config.yaml` — current defaults:
-
-- **Location**: Lugano, Ticino (CH); whole of Switzerland accepted, Italy up to 150 km (Lombardia, Verbano, Novara, Torino, Aosta, Piacenza)
-- **Category**: Full suspension e-MTB, 130–160mm travel front/rear
-- **Motor / battery hard minimums** (below these, a listing is rejected outright): ≥60Nm torque, ≥500Wh battery
-- **Frame size**: M, S2, S3, 42–46cm, 17"/18"
-- **Budget**: target 2200 CHF, hard max 3000 CHF (over this is rejected)
-
-## Architecture
-
-```
-[14 portal connectors]  src/connectors/*.py
-       ↓
-[Regex parser]  src/pipeline/regex_parser.py + config/taxonomy.json
-  motor · battery · frame size · brakes · suspension · travel · odometer · model year
-       ↓
-[Hard filters]  run.py: process_listing()
-  over budget · hardtail · no/weak motor · small battery · wrong size · red flags
-       ↓
-[Deterministic scoring 0-100]  src/pipeline/scoring.py
-  price (35%) · components (25%) · condition/km (15%) · distance (15%) · fit (10%)
-       ↓
-[Postgres/Supabase]  src/db/database.py — listings, snapshots (price history), specifications, scores
-       ↓
-[Optional AI pass]  analyze.py → src/pipeline/ai_analyzer.py (Claude Haiku)
-  Italian verdict, condition/seller-trust reading, spec corrections read (not guessed) from text
-       ↓
-[Dashboard]  server.py (live, interactive) or generate_dashboard.py → index.html (static snapshot)
-```
-
-## Setup
+Requires Python 3.11+ and a Supabase (Postgres) project.
 
 ```bash
 pip3 install -r requirements.txt
+cp .env.example .env                  # set DATABASE_URL (and ANTHROPIC_API_KEY for the AI pass)
+python3 scripts/validate_supabase.py  # checks the connection, creates the tables
+python3 run.py                        # scan all portals
+python3 server.py                     # open the dashboard at http://127.0.0.1:5050
 ```
 
-To use the optional AI pass (`analyze.py`), create a `.env` file in the project root:
+## Documentation
 
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-## Usage
-
-### 1. Scan portals
-
-```bash
-python3 run.py
-```
-
-Fetches listings from every enabled portal in `config/config.yaml`, parses specs, applies the hard filters, scores, and saves to Supabase Postgres (`DATABASE_URL` in `.env`). Prints accepted/rejected counts per portal and the top deals.
-
-### 2. Interactive dashboard (recommended)
-
-```bash
-python3 server.py
-```
-
-Opens a local Flask dashboard as a standalone app window, reading the database live on every page load. From here you can reject, mark sold/favorite, and correct specs by hand — no regeneration step needed.
-
-### 3. Optional AI second opinion
-
-```bash
-python3 analyze.py                          # listings never read by AI yet (or re-checked after a price drop)
-python3 analyze.py --problematic            # only listings with spec gaps the AI can fix (rejected for motor/battery/size,
-                                            #   unverified or missing motor, missing battery/size) — even if already analyzed
-python3 analyze.py --force                  # EVERYTHING in scope, rejected listings included (one API call per 15 listings)
-python3 analyze.py --force --limit 150      # ...in batches: each run continues from the never/least-recently analyzed
-python3 analyze.py --problematic --dry-run  # how many listings, how many API calls, and why — no API call, no key needed
-python3 analyze.py --id 42                  # just one listing — numeric # id from the dashboard, or the full id
-```
-
-Writes an Italian-language verdict (`ai_analysis`) and, when the seller's text explicitly names a spec the regex parser missed, a correction that's applied and rescored automatically. Also regenerates the static `index.html` snapshot.
-
-### 4. Static snapshot (optional)
-
-`run.py`/`analyze.py` both regenerate `index.html` (gitignored — local only) via `scripts/generate_dashboard.py`. It's a read-only copy for sharing; use `server.py` for anything interactive. Note that a running `server.py` process needs restarting to pick up code changes — editing `scripts/generate_dashboard.py` and reloading the browser isn't enough while the old process is still alive.
-
-## Configuration
-
-Edit `config/config.yaml` — buyer profile (location, budget, target sizes), `hardware_requirements` (hard-reject minimums), `scoring_weights`, and each portal's `enabled`/search settings.
-
-Edit `config/taxonomy.json` to add/adjust motor, brake, and frame-size detection patterns.
-
-## Scoring Formula
-
-Score (0–100) = weighted sum, weights configurable in `scoring_weights`:
-
-- **Price value (35%)**: exponential decay between target and hard-max price
-- **Component quality (25%)**: motor tier/torque, battery Wh, brakes, fork tier — an unverified motor guess is penalized vs. a confirmed one
-- **Condition/mileage (15%)**: odometer km
-- **Location proximity (15%)**: Haversine distance from Lugano
-- **Fit/geometry (10%)**: frame size + suspension travel range
-
-## File Structure
-
-```
-ebike-hunter/
-├── config/
-│   ├── config.yaml              # Buyer profile, hardware minimums, scoring weights, portals
-│   └── taxonomy.json            # Motor/brake/frame-size detection patterns
-├── src/
-│   ├── connectors/               # One file per portal (+ base.py)
-│   ├── db/
-│   │   └── database.py           # Postgres wrapper (snapshots, favorites, AI columns)
-│   └── pipeline/
-│       ├── regex_parser.py       # Zero-token spec extraction
-│       ├── normalizer.py         # Currency & geo normalization
-│       ├── scoring.py            # 0-100 ranking algorithm
-│       ├── ai_analyzer.py        # Claude Haiku batch analysis + spec-correction reading
-│       ├── corrections.py        # Shared apply-a-spec-correction-and-rescore logic
-│       └── analysis_text.py      # Deterministic Italian verdict text
-├── scripts/
-│   └── generate_dashboard.py     # Renders the dashboard HTML (used by both server.py and index.html)
-├── tests/                        # One test file per connector, plus pipeline/DB/dashboard tests
-├── run.py                        # Full scan: fetch → parse → filter → score → save
-├── analyze.py                    # Optional AI second-opinion pass (--force / --id)
-├── server.py                     # Interactive dashboard (Flask, app-mode window)
-├── requirements.txt
-├── README.md
-└── USAGE.md                      # Extended usage notes, cron automation, troubleshooting
-```
+| Doc | Contents |
+|-----|----------|
+| [Setup](docs/setup.md) | Install, `.env`, Supabase connection, migrating the old SQLite DB |
+| [Usage](docs/usage.md) | Scanning, dashboard, AI pass, reprocessing, automation |
+| [Configuration](docs/configuration.md) | `config.yaml`, buyer profile, filters, scoring formula, portals |
+| [Architecture](docs/architecture.md) | Pipeline, project layout, database tables |
+| [Development](docs/development.md) | Running tests, adding a portal connector |
+| [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
 
 ## License
 
