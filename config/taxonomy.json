@@ -177,7 +177,8 @@
     ],
     "hardtail_disallowed": [
       "hardtail", "monoammortizzata", "front suspended", "hard tail",
-      "front-suspension", "hard-tail"
+      "front-suspension", "hard-tail",
+      "e-bike front", "ebike front", "e-mtb front", "emtb front", "mtb front", "bici front"
     ],
     "hardtail_title_hints": ["trekking"]
   },

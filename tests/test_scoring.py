@@ -99,7 +99,7 @@ def test_component_scoring_unverified_motor_gets_flat_low_credit():
 
     # RegexParser's e-bike-keyword fallback sets motor_torque_nm=60 as a
     # placeholder with motor_verified=False — it must not score as if it
-    # were a confirmed 60Nm motor (15pts), only a flat, low credit (8pts),
+    # were a confirmed 60Nm motor (15pts) — it gets no motor credit at all,
     # so an unverified listing never outranks one with the same specs but
     # a genuinely identified motor.
     specs_unverified = {
@@ -120,7 +120,7 @@ def test_component_scoring_unverified_motor_gets_flat_low_credit():
     score_confirmed = engine._score_components(specs_confirmed)
 
     assert score_unverified < score_confirmed
-    assert score_confirmed - score_unverified == 7  # 15pts tier credit vs flat 8pts
+    assert score_confirmed - score_unverified == 15  # 15pts tier credit vs none
 
     # Specs read back from SQLite carry 0/1 instead of False/True — the
     # penalty must hold for those too; None (never set) is not "unverified".
@@ -320,3 +320,30 @@ def test_condition_prefers_12_gears_over_10():
     g10 = engine._score_condition({**base, "gears": 10})
     assert g12 > g10
     assert g12 == unknown == 100.0
+
+
+def test_high_mileage_keeps_penalizing_past_wear_floor():
+    # Regression: #1598 had 13,888 km yet scored 77.8 — _score_wear flattens
+    # at 4000 km, so 5000 and 14000 km used to score identically.
+    assert ScoringEngine._mileage_penalty(None) == 0.0
+    assert ScoringEngine._mileage_penalty(5000) == 0.0
+    assert ScoringEngine._mileage_penalty(8000) == 6.0
+    assert ScoringEngine._mileage_penalty(13888) == 15.0  # capped
+
+    config = {"buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}}}
+    engine = ScoringEngine(config)
+    listing = {"price_chf": 2000, "distance_km": 10}
+    base = {"battery_capacity_wh": 625, "motor_torque_nm": 85, "model_year": 2023}
+    low = engine.calculate_score(listing, {**base, "odometer_km": 5000})["score_total"]
+    high = engine.calculate_score(listing, {**base, "odometer_km": 14000})["score_total"]
+    assert round(low - high, 1) == 15.0
+
+
+def test_unknown_km_and_year_is_penalized():
+    config = {"buyer_profile": {"budget": {"target_price": 2200, "hard_max_price": 3000}}}
+    engine = ScoringEngine(config)
+    listing = {"price_chf": 2000, "distance_km": 10}
+    result = engine.calculate_score(listing, {"battery_capacity_wh": 625, "motor_torque_nm": 85})
+    assert result["breakdown"]["unknown_wear_penalty"] == 5.0
+    known = engine.calculate_score(listing, {"battery_capacity_wh": 625, "motor_torque_nm": 85, "odometer_km": 3000})
+    assert known["breakdown"]["unknown_wear_penalty"] == 0.0

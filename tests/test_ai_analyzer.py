@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE, DEFAULT_MODEL
+from pipeline.ai_analyzer import AIAnalyzer, MAX_BATCH_SIZE, DEFAULT_MODEL, compute_ai_score, compose_analysis
 
 BUYER_PROFILE = {
     "location": {"name": "Lugano, Ticino"},
@@ -34,6 +34,16 @@ def _listing(listing_id="tutti_1", **overrides):
         "brakes_tier": "four_piston",
         "odometer_km": 800,
         "score_total": 82.5,
+    }
+    base.update(overrides)
+    return base
+
+
+def _result(listing_id="tutti_1", **overrides):
+    base = {
+        "listing_id": listing_id, "evidence": ["800 km"], "requirements": "pass",
+        "condition": 4, "value_for_money": 4, "spec_quality": 4, "seller_trust": 4,
+        "information": "complete", "ai_analysis": "Fine.",
     }
     base.update(overrides)
     return base
@@ -72,18 +82,17 @@ def test_analyze_batch_happy_path_parses_results():
     try:
         client = MagicMock()
         client.messages.create.return_value = _tool_use_response([
-            {"listing_id": "tutti_1", "ai_analysis": "Good condition, minor cosmetic scratch noted.", "ai_score": 78.0},
+            _result("tutti_1", ai_analysis="Good condition, minor cosmetic scratch noted."),
         ])
         analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
         results = analyzer.analyze_batch([_listing("tutti_1")])
 
-        assert results == [{
-            "listing_id": "tutti_1",
-            "ai_analysis": "Good condition, minor cosmetic scratch noted.",
-            "ai_score": 78.0,
-            "corrected_specs": {},
-        }]
+        assert len(results) == 1
+        assert results[0]["listing_id"] == "tutti_1"
+        assert results[0]["ai_analysis"].startswith("Good condition, minor cosmetic scratch noted.")
+        assert results[0]["ai_score"] == 75.0  # all 4/5, complete info
+        assert results[0]["corrected_specs"] == {}
 
         call_kwargs = client.messages.create.call_args.kwargs
         assert call_kwargs["model"] == DEFAULT_MODEL
@@ -107,7 +116,7 @@ def test_analyze_batch_respects_anthropic_model_env_override():
     try:
         client = MagicMock()
         client.messages.create.return_value = _tool_use_response([
-            {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": 70.0},
+            _result("tutti_1", ai_analysis="Fine."),
         ])
         analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
@@ -137,8 +146,8 @@ def test_analyze_batch_api_error_returns_empty_list():
 def test_parse_response_skips_unknown_listing_id():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": 70},
-        {"listing_id": "hallucinated_999", "ai_analysis": "Should be dropped.", "ai_score": 99},
+        _result("tutti_1", ai_analysis="Fine."),
+        _result("hallucinated_999", ai_analysis="Should be dropped."),
     ])
     analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
@@ -152,7 +161,7 @@ def test_parse_response_skips_unknown_listing_id():
 def test_parse_response_skips_incomplete_result():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "", "ai_score": 70},
+        _result("tutti_1", ai_analysis=""),
     ])
     analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
@@ -162,23 +171,24 @@ def test_parse_response_skips_incomplete_result():
     print("✅ AI parse_response incomplete-result filtering test passed")
 
 
-def test_parse_response_clamps_out_of_range_score():
+def test_parse_response_skips_out_of_range_rating():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "Excellent.", "ai_score": 150},
+        _result("tutti_1", condition=7),
+        _result("tutti_2", requirements="maybe"),
     ])
     analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
-    results = analyzer.analyze_batch([_listing("tutti_1")])
+    results = analyzer.analyze_batch([_listing("tutti_1"), _listing("tutti_2")])
 
-    assert results[0]["ai_score"] == 100.0
-    print("✅ AI parse_response score-clamping test passed")
+    assert results == []
+    print("✅ AI parse_response invalid-rubric filtering test passed")
 
 
 def test_parse_response_skips_non_numeric_score():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": "not-a-number"},
+        _result("tutti_1", seller_trust="good"),
     ])
     analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
@@ -192,9 +202,7 @@ def test_parse_response_keeps_well_typed_corrected_specs():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
         {
-            "listing_id": "tutti_1",
-            "ai_analysis": "Text names the motor explicitly.",
-            "ai_score": 80,
+            **_result(),
             "corrected_specs": {
                 "motor_brand": "Bosch",
                 "motor_torque_nm": 85,
@@ -218,9 +226,7 @@ def test_parse_response_drops_malformed_corrected_specs_fields():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
         {
-            "listing_id": "tutti_1",
-            "ai_analysis": "Fine.",
-            "ai_score": 70,
+            **_result(),
             "corrected_specs": {
                 "motor_torque_nm": "eighty-five",  # wrong type — must be dropped, not crash
                 "motor_brand": "",  # blank — must be dropped
@@ -240,7 +246,7 @@ def test_parse_response_drops_malformed_corrected_specs_fields():
 def test_parse_response_missing_corrected_specs_defaults_to_empty():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": 70},
+        _result("tutti_1", ai_analysis="Fine."),
     ])
     analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
 
@@ -289,7 +295,7 @@ def test_build_prompt_description_cannot_close_its_own_block():
 def test_analyze_batch_truncated_response_still_parses_what_arrived():
     client = MagicMock()
     response = _tool_use_response([
-        {"listing_id": "tutti_1", "ai_analysis": "Fine.", "ai_score": 70},
+        _result("tutti_1", ai_analysis="Fine."),
     ])
     response.stop_reason = "max_tokens"
     client.messages.create.return_value = response
@@ -310,7 +316,7 @@ if __name__ == "__main__":
     test_analyze_batch_api_error_returns_empty_list()
     test_parse_response_skips_unknown_listing_id()
     test_parse_response_skips_incomplete_result()
-    test_parse_response_clamps_out_of_range_score()
+    test_parse_response_skips_out_of_range_rating()
     test_parse_response_skips_non_numeric_score()
     test_parse_response_keeps_well_typed_corrected_specs()
     test_parse_response_drops_malformed_corrected_specs_fields()
@@ -337,15 +343,17 @@ def test_prompt_states_full_suspension_hardware_requirements():
     assert "FULL-SUSPENSION" in prompt
     assert "fork 130–160 mm, rear 130–160 mm" in prompt
     assert ">= 60 Nm" in prompt and ">= 500 Wh" in prompt
-    assert "<= 30" in prompt
+    assert "'front'" in prompt  # hardtail model lines / wording => requirements fail
     assert "rear 140mm" in prompt and "year=2021" in prompt
-    assert "Da chiedere al venditore" in prompt
+    assert "Today is" in prompt
+    assert "You do NOT output a total score" in prompt
+    assert "82.5" not in prompt  # score_total withheld: it anchored the model
 
 
 def test_parse_response_keeps_suspension_travel_and_year_corrections():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([{
-        "listing_id": "tutti_1", "ai_analysis": "Ok.", "ai_score": 60,
+        **_result(),
         "corrected_specs": {"suspension_type": "hardtail", "travel_front_mm": 150,
                             "travel_rear_mm": 140, "model_year": 2021},
     }])
@@ -358,8 +366,73 @@ def test_parse_response_keeps_suspension_travel_and_year_corrections():
 def test_parse_response_drops_invalid_suspension_and_year():
     client = MagicMock()
     client.messages.create.return_value = _tool_use_response([{
-        "listing_id": "tutti_1", "ai_analysis": "Ok.", "ai_score": 60,
+        **_result(),
         "corrected_specs": {"suspension_type": "rigid", "model_year": 1985, "travel_rear_mm": "150mm"},
     }])
     results = AIAnalyzer(BUYER_PROFILE, client=client).analyze_batch([_listing("tutti_1")])
     assert results[0]["corrected_specs"] == {}
+
+
+def _rubric(**overrides):
+    base = {"condition": 5, "value_for_money": 5, "spec_quality": 5, "seller_trust": 5,
+            "requirements": "pass", "information": "complete"}
+    base.update(overrides)
+    return base
+
+
+def test_compute_ai_score_is_deterministic_from_rubric():
+    # Regression: the model used to emit a holistic 0-100 that swung with
+    # whichever model the gateway routed to. Now the program computes it.
+    assert compute_ai_score(_rubric()) == 100.0
+    assert compute_ai_score(_rubric(condition=1, value_for_money=1, spec_quality=1, seller_trust=1)) == 0.0
+    assert compute_ai_score(_rubric(condition=3, value_for_money=3, spec_quality=3, seller_trust=3)) == 50.0
+
+
+def test_compute_ai_score_caps_failed_or_uncertain_requirements():
+    # e.g. #520 "e-bike front": a hardtail must not rank on great condition.
+    assert compute_ai_score(_rubric(requirements="fail")) == 20.0
+    assert compute_ai_score(_rubric(requirements="uncertain")) == 60.0
+
+
+def test_compute_ai_score_shrinks_thin_listings_toward_40():
+    # "Not stated" is a risk: a vague listing can't score like a documented one.
+    assert compute_ai_score(_rubric(information="partial")) == 91.0
+    assert compute_ai_score(_rubric(information="poor")) == 76.0
+    low = _rubric(condition=2, value_for_money=2, spec_quality=2, seller_trust=2, information="poor")
+    assert compute_ai_score(low) == 25.0  # below 40: no shrink, no bonus
+
+
+def test_compose_analysis_structures_italian_text():
+    text = compose_analysis({
+        **_rubric(condition=4, requirements="uncertain"), "ai_analysis": "Da vedere.",
+        "requirements_note": "Taglia non indicata.", "evidence": ["2000 km", "tagliando 2025"],
+        "red_flags": ["batteria del 2019"], "questions_for_seller": ["Hai la fattura?"],
+        "fair_price_low_chf": 2000, "fair_price_high_chf": 2400,
+    })
+    assert text.startswith("Da vedere.")
+    assert "🚫 Requisiti: Taglia non indicata." in text
+    assert "✅ Letto nell'annuncio: 2000 km; tagliando 2025" in text
+    assert "💰 Prezzo equo stimato: 2000–2400 CHF" in text
+    assert "❓ Da chiedere al venditore: Hai la fattura?" in text
+    assert "📊 Condizione 4/5 · Prezzo 5/5 · Componenti 5/5 · Venditore 5/5 · Informazioni completa" in text
+
+
+def test_parse_response_keeps_odometer_correction():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([
+        {**_result(), "corrected_specs": {"odometer_km": 13888}},
+    ])
+    results = AIAnalyzer(BUYER_PROFILE, client=client).analyze_batch([_listing("tutti_1")])
+    assert results[0]["corrected_specs"] == {"odometer_km": 13888.0}
+
+
+def test_prompt_gives_seller_type_and_price_history():
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=MagicMock())
+    prompt = analyzer._build_prompt([
+        _listing("tutti_1", portal="tutti", original_price_chf=2500, first_seen_at="2026-01-01T00:00:00"),
+        _listing("upway_2", portal="upway"),
+    ])
+    assert "private seller, no warranty" in prompt
+    assert "refurbished with warranty" in prompt
+    assert "first seen at 2500 CHF (price dropped)" in prompt
+    assert "tracked for" in prompt

@@ -568,3 +568,14 @@ def test_gears_extracted_and_bounded():
     assert parser._extract_gears("10 rapporti shimano") == 10
     assert parser._extract_gears("batteria 36v 24s 625wh") is None
     assert parser._extract_gears("nessun dato") is None
+
+
+def test_suspension_front_ebike_is_hardtail():
+    # Regression: #520 "e-bike front" was stored as full suspension because
+    # "passaggio a full" in the text matched the full keyword.
+    parser = RegexParser(TAXONOMY_PATH)
+    specs = parser.parse("E-bike front Bosch CX", "Vendo per passaggio a full, ottime condizioni")
+    assert specs["suspension_type"] == "hardtail"
+    # FullSeven is a full-suspension line and must stay so.
+    specs = parser.parse("Haibike FullSeven 8", "Bosch CX, 625Wh, full suspension")
+    assert specs["suspension_type"] == "full_suspension"

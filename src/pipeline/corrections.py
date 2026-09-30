@@ -16,7 +16,7 @@ from pipeline.scoring import ScoringEngine
 
 EDITABLE_SPEC_FIELDS = [
     "motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size", "suspension_type",
-    "travel_front_mm", "travel_rear_mm", "model_year",
+    "travel_front_mm", "travel_rear_mm", "model_year", "odometer_km",
 ]
 
 # Rejection reasons a spec correction can never fix, because the value behind

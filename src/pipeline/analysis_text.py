@@ -9,6 +9,25 @@ plus the headline verdict and recommendation.
 """
 from typing import Any, Dict
 
+# Portals that only list brand-new stock, and the one that only sells
+# factory-refurbished bikes. Everything else is a private-seller marketplace.
+NEW_PORTALS = {
+    "buybestgear", "ebikelab", "ebikestorebrescia", "ecycles_shop",
+    "godspeed", "ridewill", "zbike", "tcs_velocorner",
+}
+REFURBISHED_PORTALS = {"upway"}
+
+
+def condition_label(portal: str) -> str:
+    """New / refurbished / used, inferred from the portal the listing came from
+    (no per-listing condition field exists in the DB)."""
+    portal = (portal or "").lower()
+    if portal in NEW_PORTALS:
+        return "Nuovo"
+    if portal in REFURBISHED_PORTALS:
+        return "Ricondizionato"
+    return "Usato"
+
 
 def generate_user_analysis(score: float, specs: Dict[str, Any], listing_data: Dict[str, Any]) -> str:
     odometer = specs.get("odometer_km")

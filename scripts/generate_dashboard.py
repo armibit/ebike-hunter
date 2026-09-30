@@ -11,7 +11,8 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from db.database import Database
+from db.database import Database, RANKING_SCORE_SQL
+from pipeline.analysis_text import condition_label as _condition_label
 from pipeline.dedupe import collapse_identical_units, find_duplicates
 
 
@@ -34,26 +35,6 @@ def _safe_url(url) -> str:
     if not url or not re.match(r"^https?://", str(url).strip(), re.IGNORECASE):
         return "#"
     return _attr(str(url).strip())
-
-
-# Portals that only list brand-new stock, and the one that only sells
-# factory-refurbished bikes. Everything else is a private-seller marketplace.
-_NEW_PORTALS = {
-    "buybestgear", "ebikelab", "ebikestorebrescia", "ecycles_shop",
-    "godspeed", "ridewill", "zbike", "tcs_velocorner",
-}
-_REFURBISHED_PORTALS = {"upway"}
-
-
-def _condition_label(portal: str) -> str:
-    """New / refurbished / used, inferred from the portal the listing came from
-    (no per-listing condition field exists in the DB)."""
-    portal = (portal or "").lower()
-    if portal in _NEW_PORTALS:
-        return "Nuovo"
-    if portal in _REFURBISHED_PORTALS:
-        return "Ricondizionato"
-    return "Usato"
 
 
 def _format_price(bike: dict, previous_price: str = None) -> str:
@@ -105,6 +86,33 @@ def _combine_analysis(bike: dict) -> str:
         score_note = f" (score: {ai_score:.0f}/100)" if ai_score is not None else ""
         parts.append(f"🤖 Verdetto AI{score_note}:\n{bike['ai_analysis']}")
     return "\n\n".join(parts)
+
+
+def pick_top(listings: list, n: int = 3) -> list:
+    """The consultant's shortlist: live listings with an AI verdict, best
+    ranking_score first. Ignores favorites — the Top 10 list floats those up,
+    this answers only "what should I buy"."""
+    live = [b for b in listings if b.get("status") in ("ACTIVE", "PRICE_DROP")
+            and b.get("ai_analysis") and b.get("ranking_score") is not None]
+    return sorted(live, key=lambda b: (-b["ranking_score"], b.get("price_chf") or 0))[:n]
+
+
+def _render_top_picks(picks: list) -> str:
+    if not picks:
+        return ""
+    cards = "".join(
+        f"""<div class="top-item">
+                <div><span class="top-rank">{idx}</span><a href="{_safe_url(b['url'])}" target="_blank" rel="noopener noreferrer">{_attr(b['title'])}</a> <span class="top-portal">({_attr(b['portal'])})</span></div>
+                <div class="pick-analysis">{_render_text_block(b['ai_analysis'])}</div>
+                <div class="top-meta">{b['ranking_score']:.1f} (regole {b['score_total'] or 0:.0f} · AI {b['ai_score']:.0f}) · {_format_price(b)} · {b['distance_km'] or 0:.1f} km</div>
+            </div>"""
+        for idx, b in enumerate(picks, 1)
+    )
+    return f"""        <details class="section-collapsible" open>
+            <summary class="section-title">🎯 I consigliati</summary>
+            <div class="top-picks">{cards}</div>
+        </details>
+"""
 
 
 def _render_text_block(text) -> str:
@@ -313,7 +321,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
     db = Database(database_url)
 
     cursor = db.conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
     SELECT
         l.numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url, l.image_url,
@@ -326,15 +334,13 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         s.has_red_flag, s.red_flag_details,
         sc.score_total, sc.score_price_value, sc.score_component_quality,
         sc.score_condition_mileage, sc.score_location_proximity, sc.score_fit_geometry,
-        CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
-             ELSE sc.score_total END AS ranking_score
+        {RANKING_SCORE_SQL} AS ranking_score
     FROM listings l
     LEFT JOIN specifications s ON l.id = s.listing_id
     LEFT JOIN scores sc ON l.id = sc.listing_id
     ORDER BY CASE WHEN l.status IN ('SOLD', 'REJECTED', 'DELISTED') THEN 1 ELSE 0 END,
              l.is_favorite DESC,
-             COALESCE(CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
-                      ELSE sc.score_total END, 0) DESC, l.price_chf ASC
+             COALESCE({RANKING_SCORE_SQL}, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
@@ -367,6 +373,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 
     # Top 10
     top_10 = listings[:10]
+    top_picks = pick_top(listings)
     ai_analyzed_count = sum(1 for bike in listings if bike.get("ai_analysis"))
 
     # Generate HTML
@@ -451,6 +458,9 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .top-item a {{ font-weight: 600; color: var(--text); }}
         .top-portal {{ color: var(--text-muted); font-size: 12px; }}
         .top-analysis {{ font-size: 12px; color: var(--text-muted); margin: 8px 0; line-height: 1.5; max-height: 4.5em; overflow: hidden; }}
+        .top-picks {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }}
+        .pick-analysis {{ font-size: 13px; line-height: 1.5; margin: 8px 0; }}
+        .pick-analysis p {{ margin: 0 0 6px; }}
         .top-meta {{ font-size: 12px; color: var(--text); font-weight: 600; padding-top: 8px; border-top: 1px solid var(--border); }}
 
         table {{ width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: visible; box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
@@ -766,6 +776,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             </div>
         </div>
 
+{_render_top_picks(top_picks)}
         <details class="section-collapsible">
             <summary class="section-title">🏆 Top 10 Deals</summary>
             <div class="top-10">
@@ -872,7 +883,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         score_val = bike["ranking_score"] if bike.get("ranking_score") is not None else (bike["score_total"] or 0)
         score_class = _score_class(score_val)
         score_title = (
-            f'Score {bike["score_total"] or 0:.1f} · AI {bike["ai_score"]:.0f} (60/40)'
+            f'Score {bike["score_total"] or 0:.1f} · AI {bike["ai_score"]:.0f} (50/50)'
             if bike.get("ai_score") is not None else "Score"
         )
 
@@ -1682,7 +1693,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 
     const ICON_LINK = '<svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>';
     // Empty / N/A / unknown values are flagged so a missing spec stands out.
-    const MISSING = /^(|n\/a|-|—|unknown|non specificat[ao]|0|0wh|0 km)$/i;
+    const MISSING = /^(|n\\/a|-|—|unknown|non specificat[ao]|0|0wh|0 km)$/i;
     function miss(text, label) {
         text = (text || '').trim();
         return MISSING.test(text) ? '<span class="card-missing">' + (label || 'N/A') + '</span>' : text;

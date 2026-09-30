@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 # alone.
 MANUAL_REJECT_REASON = "Scartata manualmente dall'utente"
 
+# Final ranking: rules score and AI rubric score weigh equally once a listing
+# is AI-analyzed; score_total alone otherwise. Shared with the dashboard.
+RANKING_SCORE_SQL = (
+    "CASE WHEN l.ai_score IS NOT NULL THEN 0.5 * sc.score_total + 0.5 * l.ai_score "
+    "ELSE sc.score_total END"
+)
+
 _VALID_SCHEMA_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -441,7 +448,9 @@ class Database:
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
                s.travel_rear_mm, s.model_year,
                s.brakes_tier, s.odometer_km, s.red_flag_details,
-               sc.score_total
+               sc.score_total, l.first_seen_at,
+               (SELECT price_chf FROM listing_snapshots WHERE listing_id = l.id
+                ORDER BY captured_at ASC LIMIT 1) AS original_price_chf
         FROM listings l
         LEFT JOIN specifications s ON l.id = s.listing_id
         LEFT JOIN scores sc ON l.id = sc.listing_id
@@ -749,16 +758,15 @@ class Database:
     def get_top_deals(self, min_score: float = 65.0, limit: int = 50) -> List[Dict[str, Any]]:
         """Entry into the list stays fully deterministic (score_total >= min_score)
         — the AI never rescues a listing that failed the heuristic bar. Order
-        within it blends in Claude's read: ranking_score = 0.6*score_total +
-        0.4*ai_score once a listing has been AI-analyzed, else score_total alone
+        within it blends in Claude's read: ranking_score = RANKING_SCORE_SQL
+        once a listing has been AI-analyzed, else score_total alone
         (a listing not yet analyzed isn't penalized for having no ai_score)."""
         cursor = self.conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
         SELECT l.*, s.motor_model, s.motor_torque_nm, s.battery_capacity_wh, s.frame_size,
                s.travel_front_mm, s.brakes_tier, sc.score_total, sc.score_price_value,
                sc.score_component_quality, sc.is_deal_target,
-               CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
-                    ELSE sc.score_total END AS ranking_score
+               {RANKING_SCORE_SQL} AS ranking_score
         FROM listings l
         JOIN scores sc ON l.id = sc.listing_id
         LEFT JOIN specifications s ON l.id = s.listing_id
@@ -836,8 +844,7 @@ class Database:
         SELECT l.*, s.motor_model, s.motor_brand, s.motor_torque_nm, s.battery_capacity_wh, s.frame_size,
                s.travel_front_mm, s.brakes_tier, s.model_year, sc.score_total, sc.score_price_value,
                sc.score_component_quality, sc.is_deal_target,
-               CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
-                    ELSE sc.score_total END AS ranking_score
+               {RANKING_SCORE_SQL} AS ranking_score
         FROM listings l
         LEFT JOIN scores sc ON l.id = sc.listing_id
         LEFT JOIN specifications s ON l.id = s.listing_id

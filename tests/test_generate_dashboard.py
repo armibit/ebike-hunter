@@ -203,9 +203,12 @@ def test_render_dashboard_order_and_badge_follow_ranking_score():
 
     tbody = html[html.index('<tbody id="tbody">'):]
     rows = re.findall(r'<tr[^>]*data-id="(x_\w)"[^>]*data-score="([\d.]+)"', tbody)
-    assert [r[0] for r in rows] == ["x_b", "x_a", "x_c"]  # b: .6*88+.4*95=90.8
-    assert dict(rows)["x_b"] == str(0.6 * 88.0 + 0.4 * 95.0)
-    assert "AI 95 (60/40)" in tbody
+    assert [r[0] for r in rows] == ["x_b", "x_a", "x_c"]  # b: .5*88+.5*95=91.5
+    assert dict(rows)["x_b"] == str(0.5 * 88.0 + 0.5 * 95.0)
+    assert "AI 95 (50/50)" in tbody
+    # "I consigliati": only live, AI-analyzed listings (x_c rejected, x_a no AI).
+    picks = html[html.index("🎯 I consigliati"):html.index("🏆 Top 10 Deals")]
+    assert "Bike b" in picks and "Bike a" not in picks and "Bike c" not in picks
     assert "if (specsChanged) location.reload()" in html
     # "Marca" checkbox filter: no brand parsed -> "Altro".
     assert 'class="brand-cb" value="Altro"> Altro (3)' in html

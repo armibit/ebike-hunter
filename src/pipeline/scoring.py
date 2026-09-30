@@ -67,7 +67,13 @@ class ScoringEngine:
         # geometry that low km alone doesn't reveal. Free up to 3 years old,
         # then -3 per year, capped at -20. Unknown year = no penalty.
         age_penalty = self._age_penalty(specs.get("model_year"))
-        score_total = max(0.0, score_total - age_penalty)
+        # Wear flattens at 4000 km in _score_wear, which made 5000 and 14000 km
+        # score the same; this keeps penalizing real high mileage.
+        mileage_penalty = self._mileage_penalty(specs.get("odometer_km"))
+        # Neither km nor year stated: wear is a pure guess, so don't let the
+        # neutral 50 rank it alongside a listing that proved low use.
+        unknown_wear_penalty = 5.0 if specs.get("odometer_km") is None and not specs.get("model_year") else 0.0
+        score_total = max(0.0, score_total - age_penalty - mileage_penalty - unknown_wear_penalty)
 
         is_deal_target = score_total >= 75.0 and price_chf <= self.hard_max_price
 
@@ -90,7 +96,9 @@ class ScoringEngine:
                 "fork": specs.get("fork_tier"),
                 "odometer_km": specs.get("odometer_km"),
                 "year": specs.get("model_year"),
-                "age_penalty": age_penalty
+                "age_penalty": age_penalty,
+                "mileage_penalty": mileage_penalty,
+                "unknown_wear_penalty": unknown_wear_penalty,
             }
         }
 
@@ -100,6 +108,13 @@ class ScoringEngine:
             return 0.0
         age = date.today().year - int(model_year)
         return float(min(20, max(0, age - 3) * 3))
+
+    @staticmethod
+    def _mileage_penalty(odometer_km) -> float:
+        """Free up to 5000 km, then -2 per 1000 km, capped at -15."""
+        if not odometer_km or odometer_km <= 5000:
+            return 0.0
+        return float(min(15.0, (odometer_km - 5000) / 1000 * 2))
 
     def _score_price(self, price_chf: float) -> float:
         """
@@ -141,7 +156,7 @@ class ScoringEngine:
 
         # Motor (max 30 points). An unverified motor (torque guessed from a
         # generic "e-bike" keyword, not an identified model — see
-        # RegexParser._detect_motor) gets a flat, low score instead of tier
+        # RegexParser._detect_motor) gets no credit instead of tier
         # credit: the torque_nm on these is a placeholder, not a real spec,
         # so it shouldn't score as if it were a confirmed entry-level motor.
         # It still passes the min-torque filter — a human can check photos —
@@ -152,7 +167,7 @@ class ScoringEngine:
         # rescore from the DB. None (never set) is not "unverified".
         motor_verified = specs.get("motor_verified")
         if motor_verified is not None and not motor_verified:
-            score += 8
+            score += 0
         elif motor_nm >= 90:
             score += 30
         elif motor_nm >= 85:
