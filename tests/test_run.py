@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
+from pgtest import new_test_url, drop_test_url
 sys.path.insert(0, str(ROOT / "src"))
 
 import run
@@ -118,9 +119,8 @@ def _process(db, parser):
 
 
 def _fresh_db():
-    import tempfile
     from db.database import Database
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     return db_path, Database(db_path)
 
 
@@ -149,7 +149,7 @@ def test_rescan_keeps_ai_corrected_motor_and_active_status():
     assert row["motor_verified"] == 1
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Rescan keeps AI-corrected motor test passed")
 
 
@@ -168,7 +168,7 @@ def test_rescan_rechecks_overridden_frame_size_strictly():
     assert "XL" in row["rejection_reason"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Rescan re-checks overridden frame size test passed")
 
 
@@ -183,7 +183,7 @@ def test_rescan_does_not_undo_manual_reject():
     assert db.get_listing_with_specs("tutti_42")["status"] == "REJECTED"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Rescan does not undo manual reject test passed")
 
 
@@ -200,7 +200,7 @@ def test_rejected_listing_still_gets_its_parsed_specs_saved():
     assert row["frame_size"] == "M"
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Rejected listing keeps parsed specs test passed")
 
 
@@ -229,7 +229,7 @@ def test_far_italian_listing_is_rejected_unless_the_portal_ships():
                         location_raw="Verona") is True
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Distance filter in process_listing test passed")
 
 
@@ -248,7 +248,7 @@ def test_all_of_switzerland_is_accepted_but_weighs_on_the_score():
     assert rows["tutti_2"]["score_location_proximity"] < rows["tutti_1"]["score_location_proximity"]
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Whole-Switzerland acceptance test passed")
 
 
@@ -269,7 +269,7 @@ def test_sold_out_listing_in_feed_switches_stored_listing_off():
     assert db.get_listing_with_specs("tutti_99") is None
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Sold-out feed item test passed")
 
 
@@ -297,7 +297,7 @@ def test_sold_flag_from_detail_page_switches_listing_off():
     assert accepted is False
     assert db.get_listing_with_specs("tutti_42")["status"] == "SOLD"
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Sold flag from detail page test passed")
 
 
@@ -310,7 +310,7 @@ def test_deleted_listing_is_not_reimported():
     assert _process_raw(db, parser, CONFIG) is False
     assert db.get_listing_with_specs("tutti_42") is None
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Deleted listing not re-imported test passed")
 
 
@@ -344,7 +344,7 @@ def test_verify_unseen_listings_marks_sold_and_keeps_inconclusive():
     assert statuses == {"1": "SOLD", "2": "ACTIVE", "3": "ACTIVE", "4": "ACTIVE"}
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ verify_unseen_listings test passed")
 
 
@@ -360,7 +360,7 @@ def test_process_listing_stores_dedupe_signature():
     assert row["dedupe_signature"] == dedupe_signature("Cube Stereo Hybrid", row["price_chf"])
 
     db.close()
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Dedupe signature stored test passed")
 
 

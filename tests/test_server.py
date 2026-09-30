@@ -6,6 +6,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
+from pgtest import new_test_url, drop_test_url
 from db.database import Database
 import server as server_module
 
@@ -15,7 +16,7 @@ def _fresh_db_with_listing():
     RegexParser fallback guess — exactly the case the /specs endpoint's
     manual correction is meant to fix. Points server_module.DB_PATH at it
     so the app's routes operate on this DB instead of config.yaml's."""
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     db = Database(db_path)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "https://example.com/1",
@@ -32,7 +33,7 @@ def _fresh_db_with_listing():
         "score_fit_geometry": 60.0, "is_deal_target": False, "breakdown": {},
     })
     db.close()
-    server_module.DB_PATH = db_path
+    server_module.DATABASE_URL = db_path
     return db_path
 
 
@@ -44,7 +45,7 @@ def test_index_lists_active_listing():
     assert resp.status_code == 200
     assert b'data-id="x_1"' in resp.data
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server index test passed")
 
 
@@ -67,7 +68,7 @@ def test_reject_keeps_listing_visible_greyed_then_restore_active():
     assert b'data-status-group="active"' in client.get("/").data
     assert b'data-id="x_1"' in client.get("/").data
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server reject/restore test passed")
 
 
@@ -80,11 +81,11 @@ def test_sold_marks_listing():
 
     db = Database(db_path)
     cursor = db.conn.cursor()
-    cursor.execute("SELECT status FROM listings WHERE id = ?", ("x_1",))
+    cursor.execute("SELECT status FROM listings WHERE id = %s", ("x_1",))
     assert cursor.fetchone()["status"] == "SOLD"
     db.close()
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server mark-sold test passed")
 
 
@@ -109,7 +110,7 @@ def test_specs_correction_marks_verified_and_rescores_higher():
     assert row["motor_verified"] == 1  # editing it by hand counts as verifying it
     db.close()
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server specs-correction test passed")
 
 
@@ -129,7 +130,7 @@ def test_favorite_toggle_persists_and_survives_reload():
     assert resp.get_json() == {"ok": True, "is_favorite": False}
     assert b'data-favorite="0"' in client.get("/").data
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server favorite-toggle test passed")
 
 
@@ -140,7 +141,7 @@ def test_favorite_unknown_listing_returns_404():
     resp = client.post("/api/listings/does_not_exist/favorite")
     assert resp.status_code == 404
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server favorite unknown-listing 404 test passed")
 
 
@@ -151,7 +152,7 @@ def test_specs_correction_unknown_listing_returns_404():
     resp = client.post("/api/listings/does_not_exist/specs", json={"motor_brand": "Bosch"})
     assert resp.status_code == 404
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server unknown-listing 404 test passed")
 
 
@@ -185,7 +186,7 @@ def test_cross_site_post_is_refused():
     )
     assert resp.status_code == 200
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server cross-site POST refusal test passed")
 
 
@@ -197,12 +198,12 @@ def test_foreign_host_header_is_refused():
     assert client.get("/", headers={"Host": "evil.example:5050"}).status_code == 403
     assert client.get("/", headers={"Host": "127.0.0.1:5050"}).status_code == 200
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Server foreign Host refusal test passed")
 
 
 def test_scraped_title_and_url_are_escaped_in_dashboard():
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     db = Database(db_path)
     db.upsert_listing({
         "portal": "x", "portal_id": "1", "url": "javascript:alert(1)",
@@ -219,7 +220,7 @@ def test_scraped_title_and_url_are_escaped_in_dashboard():
         "score_fit_geometry": 90.0, "is_deal_target": True, "breakdown": {},
     })
     db.close()
-    server_module.DB_PATH = db_path
+    server_module.DATABASE_URL = db_path
 
     page = server_module.app.test_client().get("/").data.decode()
 
@@ -229,12 +230,12 @@ def test_scraped_title_and_url_are_escaped_in_dashboard():
     assert 'href="javascript:' not in page
     assert '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;' in page
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Dashboard escaping test passed")
 
 
 def test_cross_portal_duplicate_is_flagged_in_dashboard():
-    db_path = tempfile.mktemp(suffix=".db")
+    db_path = new_test_url()
     db = Database(db_path)
     for portal, pid, title, price in (
         ("tutti", "1", "Trek Rail 9.7 2022", 2800),
@@ -247,7 +248,7 @@ def test_cross_portal_duplicate_is_flagged_in_dashboard():
             "distance_km": 10.0, "status": "ACTIVE",
         })
     db.close()
-    server_module.DB_PATH = db_path
+    server_module.DATABASE_URL = db_path
 
     page = server_module.app.test_client().get("/").data.decode()
 
@@ -255,7 +256,7 @@ def test_cross_portal_duplicate_is_flagged_in_dashboard():
     assert "🔁 anche su velomarkt" in page
     assert "🔁 anche su tutti" in page
 
-    Path(db_path).unlink()
+    drop_test_url(db_path)
     print("✅ Dashboard duplicate badge test passed")
 
 

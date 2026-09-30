@@ -49,7 +49,7 @@ def test_ai_analysis_written_without_description_is_dropped_when_description_arr
     db.save_ai_analysis(listing_id, "ok", 70.0)
     db.upsert_listing({**listing, "description_raw": "Bosch Performance Line CX Gen4 85 Nm, batteria 750 Wh"})
     cursor.execute("SELECT ai_analysis FROM listings WHERE id = %s", (listing_id,))
-    assert cursor.fetchone()[0] == "ok"
+    assert cursor.fetchone()["ai_analysis"] == "ok"
 
     print("✅ AI analysis persistence test passed")
 

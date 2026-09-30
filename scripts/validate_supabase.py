@@ -64,7 +64,7 @@ def validate():
             WHERE schemaname = 'public'
             ORDER BY tablename
         """)
-        tables = [row[0] for row in cursor.fetchall()]
+        tables = [row['tablename'] for row in cursor.fetchall()]
         cursor.close()
 
         expected_tables = [
@@ -94,7 +94,7 @@ def validate():
         # Check for existing data
         cursor = db.conn.cursor()
         cursor.execute("SELECT COUNT(*) as count FROM listings")
-        listing_count = cursor.fetchone()[0]
+        listing_count = cursor.fetchone()['count']
         cursor.close()
         db.close()
 

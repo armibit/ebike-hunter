@@ -333,7 +333,8 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
     LEFT JOIN scores sc ON l.id = sc.listing_id
     ORDER BY CASE WHEN l.status IN ('SOLD', 'REJECTED', 'DELISTED') THEN 1 ELSE 0 END,
              l.is_favorite DESC,
-             COALESCE(ranking_score, 0) DESC, l.price_chf ASC
+             COALESCE(CASE WHEN l.ai_score IS NOT NULL THEN 0.6 * sc.score_total + 0.4 * l.ai_score
+                      ELSE sc.score_total END, 0) DESC, l.price_chf ASC
     """)
 
     listings = [dict(row) for row in cursor.fetchall()]
