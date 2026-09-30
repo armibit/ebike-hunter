@@ -62,3 +62,54 @@ if __name__ == "__main__":
     test_force_and_problematic_are_exclusive()
     test_dry_run_summary_counts_calls_and_reasons()
     print("\n✅ All analyze tests passed!")
+
+
+def _full_listing(**overrides):
+    base = {
+        "id": "tutti_1", "portal": "tutti_ch", "portal_id": "1", "url": "https://www.tutti.ch/x/1",
+        "description_raw": "Descrizione lunga abbastanza per essere letta dall'AI senza problemi.",
+        "motor_torque_nm": 85, "motor_verified": 1, "battery_capacity_wh": 625, "frame_size": "M",
+        "suspension_type": "full_suspension", "travel_front_mm": 150, "travel_rear_mm": 140, "model_year": 2021,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_needs_page_fetch_when_key_spec_missing():
+    assert not analyze.needs_page_fetch(_full_listing())
+    assert analyze.needs_page_fetch(_full_listing(travel_rear_mm=None))
+    assert analyze.needs_page_fetch(_full_listing(model_year=None))
+    assert analyze.needs_page_fetch(_full_listing(frame_size="unknown"))
+    assert analyze.needs_page_fetch(_full_listing(motor_verified=0))
+    assert analyze.needs_page_fetch(_full_listing(description_raw="corta"))
+
+
+def test_enrich_fetches_page_for_missing_specs_and_saves_description(monkeypatch):
+    """A long description with a missing spec must still trigger a live page
+    fetch, and a fuller page text is persisted to the DB."""
+    page_text = "Testo completo dall'annuncio: anno 2021, ammortizzatore 140mm, forcella 150mm, taglia M."
+    calls = []
+
+    class FakeConnector:
+        def __init__(self, config):
+            pass
+
+        def get_listing_details(self, portal_id, url):
+            calls.append(url)
+            return {"description_raw": page_text}
+
+    class FakeDB:
+        saved = {}
+
+        def update_description_raw(self, listing_id, text):
+            self.saved[listing_id] = text
+
+    monkeypatch.setitem(analyze.CONNECTOR_CLASSES, "tutti_ch", FakeConnector)
+    db = FakeDB()
+    complete = _full_listing(id="tutti_2")
+    missing = _full_listing(travel_rear_mm=None)
+
+    assert analyze.enrich_thin_descriptions([complete, missing], db, {}) == 1
+    assert calls == ["https://www.tutti.ch/x/1"]
+    assert db.saved == {"tutti_1": page_text}
+    assert missing["description_raw"] == page_text

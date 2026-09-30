@@ -320,3 +320,46 @@ if __name__ == "__main__":
     test_build_prompt_description_cannot_close_its_own_block()
     test_analyze_batch_truncated_response_still_parses_what_arrived()
     print("\n✅ All AI analyzer tests passed!")
+
+
+def test_prompt_states_full_suspension_hardware_requirements():
+    """The AI must know the buyer wants a full-suspension eMTB in range —
+    otherwise a cheap hardtail/trekking bike can earn a high ai_score."""
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([])
+    hw = {"travel_front_range": [130, 160], "travel_rear_range": [130, 160],
+          "min_motor_torque_nm": 60, "min_battery_wh": 500}
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=client, hardware_requirements=hw)
+
+    analyzer.analyze_batch([_listing("tutti_1", travel_rear_mm=140, model_year=2021)])
+
+    prompt = client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert "FULL-SUSPENSION" in prompt
+    assert "fork 130–160 mm, rear 130–160 mm" in prompt
+    assert ">= 60 Nm" in prompt and ">= 500 Wh" in prompt
+    assert "<= 30" in prompt
+    assert "rear 140mm" in prompt and "year=2021" in prompt
+    assert "Da chiedere al venditore" in prompt
+
+
+def test_parse_response_keeps_suspension_travel_and_year_corrections():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([{
+        "listing_id": "tutti_1", "ai_analysis": "Ok.", "ai_score": 60,
+        "corrected_specs": {"suspension_type": "hardtail", "travel_front_mm": 150,
+                            "travel_rear_mm": 140, "model_year": 2021},
+    }])
+    results = AIAnalyzer(BUYER_PROFILE, client=client).analyze_batch([_listing("tutti_1")])
+    assert results[0]["corrected_specs"] == {
+        "suspension_type": "hardtail", "travel_front_mm": 150.0, "travel_rear_mm": 140.0, "model_year": 2021,
+    }
+
+
+def test_parse_response_drops_invalid_suspension_and_year():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([{
+        "listing_id": "tutti_1", "ai_analysis": "Ok.", "ai_score": 60,
+        "corrected_specs": {"suspension_type": "rigid", "model_year": 1985, "travel_rear_mm": "150mm"},
+    }])
+    results = AIAnalyzer(BUYER_PROFILE, client=client).analyze_batch([_listing("tutti_1")])
+    assert results[0]["corrected_specs"] == {}

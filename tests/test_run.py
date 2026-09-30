@@ -274,7 +274,14 @@ def test_sold_out_listing_in_feed_switches_stored_listing_off():
 
 
 def test_sold_flag_from_detail_page_switches_listing_off():
-    class _DetailSaysSold:
+    # search_and_enrich copies the detail page's is_available=False onto the
+    # raw listing; process_listing must then switch the stored one off.
+    class _Connector:
+        portal_name = "tutti_ch"
+
+        def search_all(self):
+            return [_raw_listing(description_raw="")]
+
         def get_listing_details(self, listing_id, url):
             return {"description_raw": "Bosch CX", "is_available": False}
 
@@ -284,8 +291,8 @@ def test_sold_flag_from_detail_page_switches_listing_off():
     parser = _FakeParser(motor_brand="Bosch", motor_torque_nm=85, motor_verified=True)
     _process_raw(db, parser, CONFIG)
 
-    accepted = run.process_listing(_raw_listing(description_raw=""), parser, Normalizer(), ScoringEngine(CONFIG),
-                                   db, CONFIG, connector=_DetailSaysSold())
+    listing = run.search_and_enrich(_Connector())[0]
+    accepted = run.process_listing(listing, parser, Normalizer(), ScoringEngine(CONFIG), db, CONFIG)
 
     assert accepted is False
     assert db.get_listing_with_specs("tutti_42")["status"] == "SOLD"

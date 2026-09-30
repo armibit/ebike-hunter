@@ -14,7 +14,10 @@ from pipeline.analysis_text import generate_user_analysis
 from pipeline.filters import TOO_FAR_PREFIX, hard_filter_reasons
 from pipeline.scoring import ScoringEngine
 
-EDITABLE_SPEC_FIELDS = ["motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size", "suspension_type"]
+EDITABLE_SPEC_FIELDS = [
+    "motor_brand", "motor_model", "motor_torque_nm", "battery_capacity_wh", "frame_size", "suspension_type",
+    "travel_front_mm", "travel_rear_mm", "model_year",
+]
 
 # Rejection reasons a spec correction can never fix, because the value behind
 # them isn't one of EDITABLE_SPEC_FIELDS and isn't stored in `specifications`

@@ -10,13 +10,14 @@ to the model purely as data to analyze, inside a clearly delimited block, and
 the prompt gives Claude no tool access and no instruction to act on anything
 it contains beyond producing the requested JSON verdict.
 
-ai_analysis/ai_score are additive only: they're written next to the existing
-deterministic score_total but never replace or influence it, so
-Database.get_top_deals()'s filtering stays fully deterministic.
+ai_analysis/ai_score are stored next to the deterministic score_total and
+never overwrite it: filtering stays fully deterministic, while ranking
+blends the two (0.6*score_total + 0.4*ai_score, see Database.get_top_deals).
 """
 import logging
 import os
-from typing import Any, Dict, List
+from datetime import date
+from typing import Any, Dict, List, Optional
 
 import anthropic
 
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 # takes effect.
 DEFAULT_MODEL = "claude-haiku-4-5"
 MAX_BATCH_SIZE = 10  # keeps one call's prompt + output comfortably in-budget
-# 15 Italian verdicts of 2–4 sentences plus JSON overhead can approach 4k
+# 10 Italian verdicts of 2–4 sentences plus JSON overhead can approach 4k
 # tokens on their own — a truncated tool call loses the whole batch.
 MAX_OUTPUT_TOKENS = 8192
 
@@ -88,8 +89,8 @@ _RESULT_TOOL = {
                         "corrected_specs": {
                             "type": "object",
                             "description": (
-                                "Include a field only if the seller's own description text explicitly states it "
-                                "explicitly names it (e.g. 'motore Bosch CX' or 'taglia L') in a way "
+                                "Include a field only if the seller's own description text explicitly "
+                                "names it (e.g. 'motore Bosch CX', 'taglia L', 'forcella 150mm', 'anno 2021') in a way "
                                 "the regex parser evidently missed — an unusual phrasing, a typo, "
                                 "text split across lines. Do not infer specs from general "
                                 "brand/model knowledge, reputation, or what a bike 'usually' comes "
@@ -102,6 +103,10 @@ _RESULT_TOOL = {
                                 "motor_torque_nm": {"type": "number"},
                                 "battery_capacity_wh": {"type": "number"},
                                 "frame_size": {"type": "string"},
+                                "suspension_type": {"type": "string", "enum": ["full_suspension", "hardtail"]},
+                                "travel_front_mm": {"type": "number"},
+                                "travel_rear_mm": {"type": "number"},
+                                "model_year": {"type": "number"},
                             },
                         },
                     },
@@ -115,8 +120,10 @@ _RESULT_TOOL = {
 
 
 class AIAnalyzer:
-    def __init__(self, buyer_profile: Dict[str, Any], client: Any = None):
+    def __init__(self, buyer_profile: Dict[str, Any], client: Any = None,
+                 hardware_requirements: Optional[Dict[str, Any]] = None):
         self.buyer_profile = buyer_profile
+        self.hardware = hardware_requirements or {}
         self.client = client or anthropic.Anthropic()
 
     def analyze_batch(self, listings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -158,6 +165,9 @@ class AIAnalyzer:
 
     def _build_prompt(self, listings: List[Dict[str, Any]]) -> str:
         profile = self.buyer_profile
+        hw = self.hardware
+        front = hw.get("travel_front_range") or ["?", "?"]
+        rear = hw.get("travel_rear_range") or ["?", "?"]
         lines = [
             "You are a professional e-mountain-bike consultant evaluating used listings for a buyer.",
             "",
@@ -171,6 +181,17 @@ class AIAnalyzer:
             f"hard max {profile.get('budget', {}).get('hard_max_price')} CHF",
             f"- Rider height: {profile.get('rider_specs', {}).get('height_cm')} cm, "
             f"target frame sizes: {', '.join(profile.get('rider_specs', {}).get('target_sizes', []))}",
+            f"- Prices below {profile.get('budget', {}).get('suspicious_min_price', 900)} CHF are suspicious "
+            "(possible scam or stolen bike).",
+            "",
+            "WHAT THE BUYER IS LOOKING FOR (hard requirements):",
+            "- A FULL-SUSPENSION e-MTB (trail/all-mountain). Not a hardtail, trekking, city, "
+            "gravel or fat bike, not a frame/parts-only sale.",
+            f"- Travel: fork {front[0]}–{front[1]} mm, rear {rear[0]}–{rear[1]} mm.",
+            f"- Motor >= {hw.get('min_motor_torque_nm', '?')} Nm, battery >= {hw.get('min_battery_wh', '?')} Wh.",
+            "If the listing clearly fails any of these (hardtail, wrong category, travel well "
+            "outside range, weak motor, small battery), ai_score must be <= 30 and ai_analysis "
+            "must say why in the first sentence, whatever the price or condition.",
             "",
             "SCORING MANDATE:",
             "Your ai_score (0–100) is an independent professional judgment, not a restatement of specs. "
@@ -178,6 +199,11 @@ class AIAnalyzer:
             "Where your expertise identifies issues the heuristic scoring (price/specs/fit alone) "
             "misses — unreliable brand, poor components, heavy wear, accident history, unfair pricing — "
             "deduct meaningfully. Diverge from score_total when you see real problems.",
+            "",
+            "Score anchors: 90+ = excellent match, buy/contact now; 70–89 = good candidate "
+            "worth a visit; 50–69 = acceptable but with clear compromises; 30–49 = weak "
+            "(overpriced, worn, dated); <30 = avoid or not what the buyer needs. Use the "
+            "whole range — don't cluster everything around 70.",
             "",
             "Evaluate on these dimensions:",
             "- Brand & motor reputation: Known reliability, warranty coverage, support ecosystem, "
@@ -190,6 +216,18 @@ class AIAnalyzer:
             "   Overpriced bikes with good specs, or cheap bikes with hidden issues, both merit penalty.",
             "- Seller credibility: Does the description sound honest? Are warnings transparent? "
             "   Does the seller know their bike, or are they hiding/minimizing known issues?",
+            "",
+            "Used e-MTB checklist — weigh these explicitly:",
+            "- Age and motor generation: model year matters a lot (e.g. Bosch CX Gen2 vs Gen4, "
+            "Shimano E8000 vs EP8/EP801, Brose/Specialized 2.1 motors with known belt/bearing issues). "
+            "Older than ~5 years = lower value and battery risk.",
+            "- Battery: age, charge cycles, range claims; a replacement costs 700–1000 CHF.",
+            "- Theft/scam signals: no receipt/invoice, missing charger or battery key, "
+            "'urgent sale', shipping-only, price far below market, stock photos.",
+            "- Service history: motor service, fork/shock service, brakes, drivetrain wear.",
+            "- Fit: only the target frame sizes above fit the rider; a size clearly outside them is a real problem.",
+            "In ai_analysis, when something important is unknown, end with a short "
+            "'Da chiedere al venditore:' list (e.g. fattura, anno, cicli batteria, tagliandi).",
             "",
             "Most listings below already passed automated spec filters and have a "
             "deterministic heuristic score_total (0-100, based on price/specs/mileage/"
@@ -239,7 +277,8 @@ class AIAnalyzer:
                 f"motor={listing.get('motor_brand')} {listing.get('motor_model')} "
                 f"({listing.get('motor_torque_nm')}Nm){motor_caveat}, battery={listing.get('battery_capacity_wh')}Wh, "
                 f"frame_size={listing.get('frame_size')}, suspension={listing.get('suspension_type')} "
-                f"({listing.get('travel_front_mm')}mm), brakes={listing.get('brakes_tier')}, "
+                f"(front {listing.get('travel_front_mm')}mm / rear {listing.get('travel_rear_mm')}mm), "
+                f"year={listing.get('model_year')}, brakes={listing.get('brakes_tier')}, "
                 f"odometer={listing.get('odometer_km')}km"
             )
             score_total = listing.get("score_total")
@@ -289,7 +328,7 @@ class AIAnalyzer:
         if not isinstance(raw, dict):
             return {}
         string_fields = ("motor_brand", "motor_model", "frame_size")
-        numeric_fields = ("motor_torque_nm", "battery_capacity_wh")
+        numeric_fields = ("motor_torque_nm", "battery_capacity_wh", "travel_front_mm", "travel_rear_mm")
         cleaned: Dict[str, Any] = {}
         for field in string_fields:
             value = raw.get(field)
@@ -301,4 +340,9 @@ class AIAnalyzer:
                 cleaned[field] = float(value)
             elif value is not None:
                 logger.warning("AI returned non-numeric %s for %s — dropping that field", field, listing_id)
+        if raw.get("suspension_type") in ("full_suspension", "hardtail"):
+            cleaned["suspension_type"] = raw["suspension_type"]
+        year = raw.get("model_year")
+        if isinstance(year, (int, float)) and not isinstance(year, bool) and 2010 <= year <= date.today().year + 1:
+            cleaned["model_year"] = int(year)
         return cleaned

@@ -485,6 +485,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
         .icon-danger {{ background: var(--danger-bg); border-color: #fecaca; color: var(--danger); }}
         .icon-success {{ background: var(--success-bg); border-color: #bbf7d0; color: var(--success); }}
         .icon-delete {{ background: #f5e6e8; border-color: #f5c6cc; color: #c41e3a; }}
+        .delete-armed {{ background: #c41e3a !important; border-color: #c41e3a !important; color: #fff !important; font-weight: 700; width: auto !important; padding: 0 10px !important; white-space: nowrap; }}
         .btn-details {{ padding: 6px 12px; background: var(--primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; }}
         .btn-details:hover {{ background: var(--primary-dark); }}
 
@@ -574,7 +575,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
            sortTable() the headers do. */
         .view-toggle select {{ height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; }}
         .view-toggle select:hover {{ border-color: var(--primary); }}
-        html.filters-hidden .filters {{ display: none; }}
 
         .cards-container {{ display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding: 10px 0; }}
         .cards-container.active {{ display: grid; }}
@@ -638,7 +638,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     </style>
     <script>
     if ((localStorage.getItem('ebike-view') || 'card') === 'card') document.documentElement.classList.add('view-card');
-    if (localStorage.getItem('ebike-filters-panel') === 'hidden') document.documentElement.classList.add('filters-hidden');
     </script>
 </head>
 <body>
@@ -656,18 +655,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             </div>
             <div class="filters-body">
                 <div class="filter-group">
-                    <label>Budget min (CHF)</label>
-                    <div class="range-row">
-                        <input type="range" id="priceMin" min="0" max="3000" step="100" value="0">
-                        <span class="range-value" id="priceMinVal">0</span>
-                    </div>
+                    <label>Budget da (CHF)</label>
+                    <input type="number" id="priceMin" min="0" step="50" placeholder="min">
                 </div>
                 <div class="filter-group">
-                    <label>Budget max (CHF)</label>
-                    <div class="range-row">
-                        <input type="range" id="priceMax" min="1500" max="3500" step="100" value="3000">
-                        <span class="range-value" id="priceMaxVal">3000</span>
-                    </div>
+                    <label>Budget a (CHF)</label>
+                    <input type="number" id="priceMax" min="0" step="50" value="3000" placeholder="max">
                 </div>
                 <div class="filter-group">
                     <label>Distanza km</label>
@@ -697,19 +690,12 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                     </select>
                 </div>
                 <div class="filter-group">
-                    <label>Anno</label>
-                    <select id="yearFilter">
-                        <option value="">Tutti</option>
-                        <option value="2026">2026</option>
-                        <option value="2025">2025</option>
-                        <option value="2024">2024</option>
-                        <option value="2023">2023</option>
-                        <option value="2022">2022</option>
-                        <option value="2021">2021</option>
-                        <option value="2020">2020</option>
-                        <option value="2019">2019</option>
-                        <option value="2018">2018</option>
-                    </select>
+                    <label>Anno da</label>
+                    <input type="number" id="yearMin" min="2000" max="2100" step="1" placeholder="es. 2020">
+                </div>
+                <div class="filter-group">
+                    <label>Anno a</label>
+                    <input type="number" id="yearMax" min="2000" max="2100" step="1" placeholder="es. 2024">
                 </div>
                 <div class="filter-group">
                     <label>Score min</label>
@@ -734,7 +720,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 </div>
                 <div class="filter-group">
                     <label>&nbsp;</label>
-                    <label class="filter-checkbox"><input type="checkbox" id="showRejected"> 🚫 Mostra scartati</label>
+                    <label class="filter-checkbox"><input type="checkbox" id="showRejected"> <svg class="icon-eye-off" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> Mostra scartati</label>
                 </div>
                 <div class="filter-group">
                     <label>&nbsp;</label>
@@ -831,7 +817,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 <option value="1:1">Titolo A→Z</option>
             </select>
             <span class="spacer"></span>
-            <button id="filtersBtn" title="Mostra/nascondi filtri">🔍</button>
         </div>
         <div id="cardsContainer" class="cards-container"></div>
         <table id="table">
@@ -1163,8 +1148,26 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (confirm('Segnare questo annuncio come venduto?')) postRowAction(button, 'sold');
         }
 
+        // First press arms the button (label changes), second press within 3s confirms.
+        function confirmTwice(button, onConfirm) {
+            if (button.dataset.armed === 'true') {
+                clearTimeout(Number(button.dataset.armTimer));
+                onConfirm();
+                return;
+            }
+            const originalHtml = button.innerHTML;
+            button.dataset.armed = 'true';
+            button.innerHTML = 'Sicuro?';
+            button.classList.add('delete-armed');
+            button.dataset.armTimer = setTimeout(() => {
+                delete button.dataset.armed;
+                button.innerHTML = originalHtml;
+                button.classList.remove('delete-armed');
+            }, 3000);
+        }
+
         function deleteRow(button) {
-            if (confirm('Cancellare definitivamente questo annuncio dalla lista? Azione irreversibile.')) postRowAction(button, 'delete');
+            confirmTwice(button, () => postRowAction(button, 'delete'));
         }
 
         async function saveSpecs() {
@@ -1293,18 +1296,17 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
 
         const priceMinInput = document.getElementById('priceMin');
         const priceMaxInput = document.getElementById('priceMax');
-        const priceMinVal = document.getElementById('priceMinVal');
-        const priceMaxVal = document.getElementById('priceMaxVal');
 
         async function updateTop10() {
             const params = new URLSearchParams({
-                price_min: priceMinInput.value,
-                price_max: priceMaxInput.value,
+                price_min: priceMinInput.value || undefined,
+                price_max: priceMaxInput.value || undefined,
                 dist_max: document.getElementById('distMax').value || undefined,
                 motor_brand: document.getElementById('motorFilter').value || undefined,
                 battery_min: document.getElementById('batteryMin').value || undefined,
                 frame_size: document.getElementById('frameFilter').value || undefined,
-                year: document.getElementById('yearFilter').value || undefined,
+                year_min: document.getElementById('yearMin').value || undefined,
+                year_max: document.getElementById('yearMax').value || undefined,
                 score_min: document.getElementById('scoreMin').value,
                 status: document.getElementById('statusFilter').value || undefined,
                 fav_only: document.getElementById('favOnly').checked,
@@ -1365,20 +1367,15 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             updateTop10();
         }
 
-        priceMinInput.addEventListener('input', () => {
-            priceMinVal.textContent = priceMinInput.value;
-            applyFilters();
-        });
-        priceMaxInput.addEventListener('input', () => {
-            priceMaxVal.textContent = priceMaxInput.value;
-            applyFilters();
-        });
+        priceMinInput.addEventListener('input', applyFilters);
+        priceMaxInput.addEventListener('input', applyFilters);
 
         document.getElementById('distMax').addEventListener('input', applyFilters);
         document.getElementById('motorFilter').addEventListener('change', applyFilters);
         document.getElementById('batteryMin').addEventListener('input', applyFilters);
         document.getElementById('frameFilter').addEventListener('change', applyFilters);
-        document.getElementById('yearFilter').addEventListener('change', applyFilters);
+        document.getElementById('yearMin').addEventListener('input', applyFilters);
+        document.getElementById('yearMax').addEventListener('input', applyFilters);
         document.getElementById('scoreMin').addEventListener('input', applyFilters);
         document.getElementById('favOnly').addEventListener('change', applyFilters);
         document.getElementById('aiOnly').addEventListener('change', applyFilters);
@@ -1400,7 +1397,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             const motorFilter = document.getElementById('motorFilter').value;
             const batteryMin = parseFloat(document.getElementById('batteryMin').value);
             const frameFilter = document.getElementById('frameFilter').value;
-            const yearFilter = document.getElementById('yearFilter').value;
+            const yearMin = parseInt(document.getElementById('yearMin').value, 10);
+            const yearMax = parseInt(document.getElementById('yearMax').value, 10);
             const scoreMin = parseFloat(document.getElementById('scoreMin').value);
             const favOnly = document.getElementById('favOnly').checked;
             const aiOnly = document.getElementById('aiOnly').checked;
@@ -1423,7 +1421,7 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 const motor = row.dataset.motor;
                 const battery = parseFloat(row.dataset.battery);
                 const frame = row.dataset.frame;
-                const year = row.dataset.year;
+                const year = parseInt(row.dataset.year, 10);
                 const score = parseFloat(row.dataset.score);
                 const favorite = row.dataset.favorite === '1';
                 const hasAi = row.dataset.hasAi === '1';
@@ -1437,7 +1435,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 if (motorFilter && !motor.includes(motorFilter)) show = false;
                 if (battery < batteryMin) show = false;
                 if (frameFilter && frame !== frameFilter) show = false;
-                if (yearFilter && year !== yearFilter) show = false;
+                if (!isNaN(yearMin) && !(year >= yearMin)) show = false;
+                if (!isNaN(yearMax) && !(year <= yearMax)) show = false;
                 if (score < scoreMin) show = false;
                 if (favOnly && !favorite) show = false;
                 if (aiOnly && !hasAi) show = false;
@@ -1482,15 +1481,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             // which silently hid every listing outside that range (looked
             // like most of the list had vanished). Use each input's own
             // min/max bounds so nothing is excluded.
-            priceMinInput.value = priceMinInput.min;
-            priceMaxInput.value = priceMaxInput.max;
-            priceMinVal.textContent = priceMinInput.value;
-            priceMaxVal.textContent = priceMaxInput.value;
+            priceMinInput.value = '';
+            priceMaxInput.value = '';
             document.getElementById('distMax').value = document.getElementById('distMax').max;
             document.getElementById('motorFilter').value = '';
             document.getElementById('batteryMin').value = 0;
             document.getElementById('frameFilter').value = '';
-            document.getElementById('yearFilter').value = '';
+            document.getElementById('yearMin').value = '';
+            document.getElementById('yearMax').value = '';
             document.getElementById('scoreMin').value = 0;
             document.getElementById('favOnly').checked = false;
             document.getElementById('aiOnly').checked = false;
@@ -1510,7 +1508,8 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
                 motorFilter: document.getElementById('motorFilter').value,
                 batteryMin: document.getElementById('batteryMin').value,
                 frameFilter: document.getElementById('frameFilter').value,
-                yearFilter: document.getElementById('yearFilter').value,
+                yearMin: document.getElementById('yearMin').value,
+                yearMax: document.getElementById('yearMax').value,
                 scoreMin: document.getElementById('scoreMin').value,
                 favOnly: document.getElementById('favOnly').checked,
                 aiOnly: document.getElementById('aiOnly').checked,
@@ -1530,15 +1529,14 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             if (!saved) { filterTable(); return; }
             try {
                 const filters = JSON.parse(saved);
-                priceMinInput.value = filters.priceMin;
-                priceMaxInput.value = filters.priceMax;
-                priceMinVal.textContent = filters.priceMin;
-                priceMaxVal.textContent = filters.priceMax;
+                priceMinInput.value = filters.priceMin === '0' ? '' : (filters.priceMin ?? '');
+                priceMaxInput.value = filters.priceMax ?? '';
                 document.getElementById('distMax').value = filters.distMax;
                 document.getElementById('motorFilter').value = filters.motorFilter;
                 document.getElementById('batteryMin').value = filters.batteryMin;
                 document.getElementById('frameFilter').value = filters.frameFilter;
-                document.getElementById('yearFilter').value = filters.yearFilter;
+                document.getElementById('yearMin').value = filters.yearMin || '';
+                document.getElementById('yearMax').value = filters.yearMax || '';
                 document.getElementById('scoreMin').value = filters.scoreMin;
                 document.getElementById('favOnly').checked = filters.favOnly;
                 document.getElementById('aiOnly').checked = filters.aiOnly;
@@ -1645,12 +1643,6 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
     const ICON_TRASH = '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg>';
     const ICON_SELL = '<svg viewBox="0 0 24 24"><path d="M20 12V7a1 1 0 0 0-1-1h-5L3 17l4 4L18 10"/><circle cx="16.5" cy="9.5" r="1.3"/></svg>';
 
-    const filtersBtn = document.getElementById('filtersBtn');
-    filtersBtn.addEventListener('click', () => {
-        const hidden = document.documentElement.classList.toggle('filters-hidden');
-        localStorage.setItem('ebike-filters-panel', hidden ? 'hidden' : 'shown');
-    });
-
     function switchToList() {
         document.documentElement.classList.remove('view-card');
         cardsContainer.classList.remove('active');
@@ -1751,7 +1743,11 @@ def render_dashboard_html(db_path: str, interactive: bool = False) -> str:
             });
             card.querySelectorAll('.card-action').forEach(btn => btn.addEventListener('click', e => {
                 e.stopPropagation();
-                row.querySelector(btn.dataset.act === 'delete' ? '.icon-delete' : '.icon-success')?.click();
+                if (btn.dataset.act === 'delete') {
+                    confirmTwice(btn, () => postRowAction(row.querySelector('.icon-delete'), 'delete'));
+                    return;
+                }
+                row.querySelector('.icon-success')?.click();
             }));
             card.addEventListener('click', () => row.querySelector('.icon-details')?.click());
 

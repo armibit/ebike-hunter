@@ -65,11 +65,30 @@ NO_BACKLOG_CAP = 100_000
 # on" rather than merely present — a one-line title-only blurb (or nothing)
 # tells Claude nothing about condition, seller trustworthiness or excluded flaws.
 MIN_DESCRIPTION_CHARS = 40
+# A listing missing any of these gets its live detail page fetched before
+# the AI reads it: the full seller text often states what the search
+# snippet (and so the regex parser) never saw.
+KEY_SPEC_FIELDS = ("motor_torque_nm", "battery_capacity_wh", "suspension_type",
+                   "travel_front_mm", "travel_rear_mm", "model_year")
+
+
+def needs_page_fetch(listing: Dict[str, Any]) -> bool:
+    description = (listing.get("description_raw") or "").strip()
+    if len(description) < MIN_DESCRIPTION_CHARS:
+        return True
+    if listing.get("frame_size") in (None, "", "unknown"):
+        return True
+    if listing.get("motor_verified") is not None and not listing.get("motor_verified"):
+        return True
+    return any(listing.get(field) is None for field in KEY_SPEC_FIELDS)
 
 
 def enrich_thin_descriptions(listings: List[Dict[str, Any]], db: Database, config: Dict[str, Any]) -> int:
-    """Before handing listings to Claude, backfill any description_raw that's
-    missing or too thin with a live fetch of the connector's detail page.
+    """Before handing listings to Claude, backfill description_raw with a
+    live fetch of the connector's detail page when it's missing/thin or when
+    key specs are missing (needs_page_fetch) — the AI then reads the full
+    page text and, if it states a missing spec, returns it in corrected_specs,
+    which analyze.py writes to the DB. Not found on the page = nothing changes.
 
     run.py only ever does this at scan time, for listings the connector's
     search actually returned that run — a listing that fell off the search
@@ -81,11 +100,11 @@ def enrich_thin_descriptions(listings: List[Dict[str, Any]], db: Database, confi
     enriched = 0
     for listing in listings:
         description = (listing.get("description_raw") or "").strip()
-        if len(description) >= MIN_DESCRIPTION_CHARS:
+        if not needs_page_fetch(listing) or not listing.get("url"):
             continue
         logger.debug(
-            "Descrizione corta per %s (%d caratteri) — provo a recuperarla dalla pagina dettaglio.",
-            listing["id"], len(description),
+            "Descrizione corta o specifiche mancanti per %s — verifico sulla pagina dell'annuncio.",
+            listing["id"],
         )
         connector_cls = CONNECTOR_CLASSES.get(listing.get("portal"))
         if connector_cls is None:
@@ -264,9 +283,9 @@ def main():
 
     enriched = enrich_thin_descriptions(listings, db, config)
     if enriched:
-        print(f"✓ Fetched a live detail page for {enriched} listing(s) with a missing/thin description.")
+        print(f"✓ Fetched a fuller description from the live listing page for {enriched} listing(s).")
 
-    analyzer = AIAnalyzer(config["buyer_profile"])
+    analyzer = AIAnalyzer(config["buyer_profile"], hardware_requirements=config.get("hardware_requirements"))
     batches = chunked(listings, MAX_BATCH_SIZE)
     print(f"Analyzing {len(listings)} listing(s) with Claude Haiku, in {len(batches)} batch(es)...")
 

@@ -388,6 +388,7 @@ class Database:
                l.price_chf, l.distance_km, l.status, l.rejection_reason, l.ai_analyzed_at,
                s.brand, s.model, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
                s.battery_capacity_wh, s.frame_size, s.suspension_type, s.travel_front_mm,
+               s.travel_rear_mm, s.model_year,
                s.brakes_tier, s.odometer_km, s.red_flag_details,
                sc.score_total
         FROM listings l
@@ -713,7 +714,7 @@ class Database:
 
     def get_filtered_top_deals(self, **filters) -> List[Dict[str, Any]]:
         """Get top deals with dynamic filtering. Filters: price_min, price_max, dist_max,
-        motor_brand, battery_min, frame_size, year, score_min, status, fav_only, ai_only."""
+        motor_brand, battery_min, frame_size, year_min, year_max, score_min, status, fav_only, ai_only."""
         cursor = self.conn.cursor()
 
         price_min = filters.get('price_min')
@@ -722,7 +723,8 @@ class Database:
         motor_brand = filters.get('motor_brand')
         battery_min = filters.get('battery_min')
         frame_size = filters.get('frame_size')
-        year = filters.get('year')
+        year_min = filters.get('year_min')
+        year_max = filters.get('year_max')
         score_min = filters.get('score_min', 60.0)
         status = filters.get('status')
         fav_only = filters.get('fav_only', False)
@@ -750,9 +752,12 @@ class Database:
         if frame_size:
             where_parts.append("s.frame_size = ?")
             params.append(frame_size)
-        if year:
-            where_parts.append("s.model_year = ?")
-            params.append(year)
+        if year_min is not None:
+            where_parts.append("s.model_year >= ?")
+            params.append(year_min)
+        if year_max is not None:
+            where_parts.append("s.model_year <= ?")
+            params.append(year_max)
         if status == 'active':
             where_parts.append("l.status IN ('ACTIVE', 'PRICE_DROP')")
         elif status == 'rejected':
