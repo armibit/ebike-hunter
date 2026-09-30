@@ -85,88 +85,123 @@ def index():
 
 @app.route("/api/listings/<listing_id>/reject", methods=["POST"])
 def reject(listing_id):
-    db = Database(DB_PATH)
-    db.set_manual_status(listing_id, "REJECTED")
-    db.close()
-    return jsonify({"ok": True})
+    try:
+        with Database(DB_PATH) as db:
+            db.set_manual_status(listing_id, "REJECTED")
+        return jsonify({"ok": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import logging
+        logging.error(f"Error rejecting listing {listing_id}: {e}")
+        return jsonify({"error": "Failed to reject listing"}), 500
 
 
 @app.route("/api/listings/<listing_id>/sold", methods=["POST"])
 def sold(listing_id):
-    db = Database(DB_PATH)
-    db.set_manual_status(listing_id, "SOLD")
-    db.close()
-    return jsonify({"ok": True})
+    try:
+        with Database(DB_PATH) as db:
+            db.set_manual_status(listing_id, "SOLD")
+        return jsonify({"ok": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import logging
+        logging.error(f"Error marking listing {listing_id} sold: {e}")
+        return jsonify({"error": "Failed to mark as sold"}), 500
 
 
 @app.route("/api/listings/<listing_id>/restore", methods=["POST"])
 def restore(listing_id):
-    db = Database(DB_PATH)
-    db.set_manual_status(listing_id, "ACTIVE")
-    db.close()
-    return jsonify({"ok": True})
+    try:
+        with Database(DB_PATH) as db:
+            db.set_manual_status(listing_id, "ACTIVE")
+        return jsonify({"ok": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import logging
+        logging.error(f"Error restoring listing {listing_id}: {e}")
+        return jsonify({"error": "Failed to restore listing"}), 500
 
 
 @app.route("/api/listings/<listing_id>/delete", methods=["POST"])
 def delete_listing(listing_id):
-    db = Database(DB_PATH)
-    db.delete_listing(listing_id)
-    db.close()
-    return jsonify({"ok": True})
+    try:
+        with Database(DB_PATH) as db:
+            db.delete_listing(listing_id)
+        return jsonify({"ok": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import logging
+        logging.error(f"Error deleting listing {listing_id}: {e}")
+        return jsonify({"error": "Failed to delete listing"}), 500
 
 
 @app.route("/api/listings/<listing_id>/favorite", methods=["POST"])
 def favorite(listing_id):
-    db = Database(DB_PATH)
     try:
-        new_value = db.toggle_favorite(listing_id)
+        with Database(DB_PATH) as db:
+            new_value = db.toggle_favorite(listing_id)
+        return jsonify({"ok": True, "is_favorite": new_value})
     except ValueError:
-        db.close()
         return jsonify({"error": "listing not found"}), 404
-    db.close()
-    return jsonify({"ok": True, "is_favorite": new_value})
+    except Exception as e:
+        import logging
+        logging.error(f"Error toggling favorite for listing {listing_id}: {e}")
+        return jsonify({"error": "Failed to toggle favorite"}), 500
 
 
 @app.route("/api/listings/<listing_id>/specs", methods=["POST"])
 def update_specs(listing_id):
-    data = request.get_json(force=True, silent=True) or {}
-    db = Database(DB_PATH)
-    score_result = apply_spec_correction(db, scorer, listing_id, data, config=config)
-    db.close()
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        with Database(DB_PATH) as db:
+            score_result = apply_spec_correction(db, scorer, listing_id, data, config=config)
 
-    if score_result is None:
-        return jsonify({"error": "listing not found or no editable fields given"}), 404
+        if score_result is None:
+            return jsonify({"error": "listing not found or no editable fields given"}), 404
 
-    return jsonify({"ok": True, "score_total": score_result["score_total"]})
+        return jsonify({"ok": True, "score_total": score_result["score_total"]})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        import logging
+        logging.error(f"Error updating specs for listing {listing_id}: {e}")
+        return jsonify({"error": "Failed to update specifications"}), 500
 
 
 @app.route("/api/top-deals", methods=["GET"])
 def get_top_deals_dynamic():
-    db = Database(DB_PATH)
+    try:
+        filters = {
+            'price_min': request.args.get('price_min', type=float),
+            'price_max': request.args.get('price_max', type=float),
+            'dist_max': request.args.get('dist_max', type=float),
+            'motor_brand': request.args.get('motor_brand'),
+            'battery_min': request.args.get('battery_min', type=float),
+            'frame_size': request.args.get('frame_size'),
+            'year_min': request.args.get('year_min', type=int),
+            'year_max': request.args.get('year_max', type=int),
+            'score_min': request.args.get('score_min', default=60.0, type=float),
+            'status': request.args.get('status'),
+            'fav_only': request.args.get('fav_only', default=False, type=lambda x: x.lower() == 'true'),
+            'ai_only': request.args.get('ai_only', default=False, type=lambda x: x.lower() == 'true'),
+            'show_rejected': request.args.get('show_rejected', default=False, type=lambda x: x.lower() == 'true'),
+            'limit': min(request.args.get('limit', default=10, type=int), 1000),  # Cap at 1000
+        }
 
-    filters = {
-        'price_min': request.args.get('price_min', type=float),
-        'price_max': request.args.get('price_max', type=float),
-        'dist_max': request.args.get('dist_max', type=float),
-        'motor_brand': request.args.get('motor_brand'),
-        'battery_min': request.args.get('battery_min', type=float),
-        'frame_size': request.args.get('frame_size'),
-        'year_min': request.args.get('year_min', type=int),
-        'year_max': request.args.get('year_max', type=int),
-        'score_min': request.args.get('score_min', default=60.0, type=float),
-        'status': request.args.get('status'),
-        'fav_only': request.args.get('fav_only', default=False, type=lambda x: x.lower() == 'true'),
-        'ai_only': request.args.get('ai_only', default=False, type=lambda x: x.lower() == 'true'),
-        'show_rejected': request.args.get('show_rejected', default=False, type=lambda x: x.lower() == 'true'),
-        'limit': request.args.get('limit', default=10, type=int),
-    }
+        filters = {k: (v if v != 'undefined' else None) for k, v in filters.items()}
 
-    filters = {k: (v if v != 'undefined' else None) for k, v in filters.items()}
+        with Database(DB_PATH) as db:
+            deals = db.get_filtered_top_deals(**filters)
 
-    deals = db.get_filtered_top_deals(**filters)
-    db.close()
-
-    return jsonify([dict(deal) for deal in deals])
+        return jsonify([dict(deal) for deal in deals])
+    except Exception as e:
+        import logging
+        logging.error(f"Error fetching deals with filters {filters}: {e}")
+        return jsonify({"error": "Failed to fetch deals"}), 500
 
 
 def _find_app_mode_browser() -> Optional[str]:

@@ -808,3 +808,12 @@ class Database:
 
     def close(self):
         self.conn.close()
+
+    def __enter__(self):
+        """Context manager entry — returns self for use in with statement."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit — always closes connection, even on exception."""
+        self.close()
+        return False  # Propagate exceptions
