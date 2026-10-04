@@ -757,22 +757,25 @@ def test_ai_scope_skips_rejections_no_correction_can_fix(db):
 def test_problematic_mode_targets_fixable_spec_gaps_even_if_analyzed(db):
     ok_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="1"))
     db.save_specifications(ok_id, {"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True,
-                                   "battery_capacity_wh": 625, "frame_size": "M"})
+                                   "battery_capacity_wh": 625, "frame_size": "M", "suspension_type": "full_suspension"})
     guessed_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
     db.save_specifications(guessed_id, {"motor_brand": "Unknown Motor", "motor_torque_nm": 60, "motor_verified": False,
-                                        "battery_capacity_wh": 625, "frame_size": "M"})
+                                        "battery_capacity_wh": 625, "frame_size": "M", "suspension_type": "full_suspension"})
     no_size_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="3"))
     db.save_specifications(no_size_id, {"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True,
-                                        "battery_capacity_wh": 625, "frame_size": "unknown"})
+                                        "battery_capacity_wh": 625, "frame_size": "unknown", "suspension_type": "full_suspension"})
     fixable_reject_id, _, _ = db.upsert_listing(_rescan_listing(
         portal_id="4", status="REJECTED", rejection_reason="No motor detected (likely not an e-bike)"))
     hopeless_id, _, _ = db.upsert_listing(_rescan_listing(
         portal_id="5", status="REJECTED", rejection_reason="Over budget (3500 > 3000 CHF)"))
+    no_susp_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="6"))
+    db.save_specifications(no_susp_id, {"motor_brand": "Bosch", "motor_torque_nm": 85, "motor_verified": True,
+                                        "battery_capacity_wh": 625, "frame_size": "M", "suspension_type": "unknown"})
     # Already analyzed: the problematic mode re-runs it anyway.
     db.save_ai_analysis(guessed_id, "Vecchia analisi", 50)
 
     picked = [row["id"] for row in db.get_listings_needing_ai_analysis(problematic_only=True)]
-    assert set(picked) == {guessed_id, no_size_id, fixable_reject_id}
+    assert set(picked) == {guessed_id, no_size_id, no_susp_id, fixable_reject_id}
     # Never-analyzed first, the already-analyzed one last (resumable with --limit).
     assert picked[-1] == guessed_id
     assert hopeless_id not in picked and ok_id not in picked

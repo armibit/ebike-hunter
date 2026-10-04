@@ -87,8 +87,10 @@ def test_wrong_size_reason_names_the_size_found():
 
 def test_spec_problems():
     complete = {"status": "ACTIVE", "motor_torque_nm": 85, "motor_verified": 1,
-                "battery_capacity_wh": 625, "frame_size": "M"}
+                "battery_capacity_wh": 625, "frame_size": "M", "suspension_type": "full_suspension"}
     assert spec_problems(complete) == []
+    assert spec_problems({**complete, "suspension_type": "unknown"}) == ["sospensione da verificare"]
+    assert spec_problems({**complete, "suspension_type": None}) == ["sospensione da verificare"]
     assert spec_problems({**complete, "motor_verified": 0}) == ["motore da verificare"]
     assert spec_problems({**complete, "motor_torque_nm": None, "battery_capacity_wh": None, "frame_size": "unknown"}) == [
         "motore mancante", "batteria mancante", "taglia mancante",

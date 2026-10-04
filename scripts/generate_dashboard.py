@@ -108,9 +108,9 @@ def _render_top_picks(picks: list) -> str:
             </div>"""
         for idx, b in enumerate(picks, 1)
     )
-    return f"""        <details class="section-collapsible" open>
+    return f"""        <details class="section-collapsible">
             <summary class="section-title">🎯 I consigliati</summary>
-            <div class="top-picks">{cards}</div>
+            <div class="top-10">{cards}</div>
         </details>
 """
 
@@ -498,8 +498,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .top-item a {{ font-weight: 600; color: var(--text); }}
         .top-portal {{ color: var(--text-muted); font-size: 12px; }}
         .top-analysis {{ font-size: 12px; color: var(--text-muted); margin: 8px 0; line-height: 1.5; max-height: 4.5em; overflow: hidden; }}
-        .top-picks {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }}
-        .pick-analysis {{ font-size: 13px; line-height: 1.5; margin: 8px 0; }}
+        .pick-analysis {{ font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 8px 0; }}
         .pick-analysis p {{ margin: 0 0 6px; }}
         .top-meta {{ font-size: 12px; color: var(--text); font-weight: 600; padding-top: 8px; border-top: 1px solid var(--border); }}
 
@@ -1810,9 +1809,31 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         if (!tbody) return;
 
         cardsContainer.innerHTML = '';
+        pendingRows = Array.from(tbody.querySelectorAll('tr')).filter(r => r.style.display !== 'none');
+        renderMoreCards();
+    }
 
-        tbody.querySelectorAll('tr').forEach(row => {
-            if (row.style.display === 'none') return;
+    // Infinite scroll: the grid renders CARD_PAGE cards up front, and the
+    // sentinel below it pulls in another page whenever it nears the viewport.
+    const CARD_PAGE = 30;
+    let pendingRows = [];
+    const cardsSentinel = document.createElement('div');
+    cardsContainer.after(cardsSentinel);
+
+    // Render pages until the sentinel is more than 600px below the viewport
+    // (loops, so a tall window never stalls with the sentinel still in view).
+    function renderMoreCards() {
+        do {
+            pendingRows.splice(0, CARD_PAGE).forEach(addCard);
+        } while (pendingRows.length && cardsSentinel.getBoundingClientRect().top < window.innerHeight + 600);
+    }
+
+    window.addEventListener('scroll', () => {
+        if (pendingRows.length && cardsSentinel.getBoundingClientRect().top < window.innerHeight + 600) renderMoreCards();
+    }, { passive: true });
+
+    function addCard(row) {
+        {
             const tds = row.querySelectorAll('td');
             if (tds.length < 9) return;
 
@@ -1891,7 +1912,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             card.addEventListener('click', () => row.querySelector('.icon-details')?.click());
 
             cardsContainer.appendChild(card);
-        });
+        }
     }
 
     // Filters/sorting mutate the table directly; rebuild the grid after any of

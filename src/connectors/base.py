@@ -289,6 +289,21 @@ class BaseConnector(ABC):
         """Search for listings. Must be implemented by subclasses."""
         pass
 
+    def get_gallery_images(self, url: str) -> List[str]:
+        """All photos of the live listing page (og:image + JSON-LD "image"),
+        for the AI's suspension check when the card photo wasn't enough.
+        Best effort: [] on any failure. Connectors with a structured feed
+        override this."""
+        try:
+            html = self.get(url).text
+        except Exception as e:
+            logger.debug("Gallery fetch failed for %s: %s", url, e)
+            return []
+        urls = [m.get("content") for m in BeautifulSoup(html, "lxml").find_all("meta", property="og:image")]
+        for blob in re.findall(r'"image"\s*:\s*(\[[^\]]*\]|"[^"]+")', html):
+            urls += re.findall(r'https?://[^"\s\\]+', blob.replace("\\/", "/"))
+        return list(dict.fromkeys(u for u in urls if u and u.startswith("http")))
+
     @abstractmethod
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
         """Fetch detailed listing info. Must be implemented by subclasses."""
