@@ -436,3 +436,19 @@ def test_prompt_gives_seller_type_and_price_history():
     assert "refurbished with warranty" in prompt
     assert "first seen at 2500 CHF (price dropped)" in prompt
     assert "tracked for" in prompt
+
+
+def test_analyze_batch_logs_wait_and_duration(caplog):
+    """Regression: a slow model call looked like a hang. The batch now logs
+    that it is waiting and how long the model took."""
+    import logging
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([_result("tutti_1")])
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+
+    with caplog.at_level(logging.INFO):
+        analyzer.analyze_batch([_listing("tutti_1")])
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("Waiting for ") and "1 listing(s)" in m for m in messages)
+    assert any(m.startswith("Model answered in ") for m in messages)
