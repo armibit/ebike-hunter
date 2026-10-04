@@ -452,3 +452,27 @@ def test_analyze_batch_logs_wait_and_duration(caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert any(m.startswith("Waiting for ") and "1 listing(s)" in m for m in messages)
     assert any(m.startswith("Model answered in ") for m in messages)
+
+
+def test_photos_are_sent_as_image_blocks_only_when_listing_has_image_urls():
+    client = MagicMock()
+    client.messages.create.return_value = _tool_use_response([_result("a"), _result("b")])
+    analyzer = AIAnalyzer(BUYER_PROFILE, client=client)
+
+    analyzer.analyze_batch([
+        {**_listing("a"), "image_urls": ["https://x/1.jpg", "https://x/2.jpg"]},
+        _listing("b"),
+    ])
+
+    content = client.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert isinstance(content, list)
+    images = [b for b in content if b["type"] == "image"]
+    assert [b["source"]["url"] for b in images] == ["https://x/1.jpg", "https://x/2.jpg"]
+    assert any("LISTING a" in b.get("text", "") and b["type"] == "text" for b in content[1:])
+    assert not any("LISTING b" in b.get("text", "") for b in content[1:])
+
+    client.messages.create.reset_mock()
+    client.messages.create.return_value = _tool_use_response([_result("b")])
+    analyzer.analyze_batch([_listing("b")])
+    assert isinstance(client.messages.create.call_args.kwargs["messages"][0]["content"], str)
+    print("✅ photos attached only when image_urls set")

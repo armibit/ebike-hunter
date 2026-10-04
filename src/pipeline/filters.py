@@ -53,6 +53,8 @@ def spec_problems(listing: Dict[str, Any]) -> List[str]:
         problems.append("batteria mancante")
     if listing.get("frame_size") in (None, "", "unknown"):
         problems.append("taglia mancante")
+    if listing.get("suspension_type") in (None, "", "unknown"):
+        problems.append("sospensione da verificare")
     return problems
 
 

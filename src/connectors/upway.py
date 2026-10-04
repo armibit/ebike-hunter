@@ -132,6 +132,15 @@ class UpwayConnector(BaseConnector):
         handle = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
         return self.shopify_availability(f"https://{self.shop_domain}/products/{handle}")
 
+    def get_gallery_images(self, url: str) -> List[str]:
+        handle = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+        try:
+            product = self.get(f"https://{self.shop_domain}/products/{handle}.json").json().get("product") or {}
+        except Exception as e:
+            logger.debug("Upway gallery fetch failed for %s: %s", handle, e)
+            return []
+        return [i["src"] for i in product.get("images") or [] if isinstance(i, dict) and i.get("src")]
+
     def get_listing_details(self, listing_id: str, url: str) -> Dict[str, Any]:
         """Fetch the product page for the structured spec table and the
         marketing blurb — both server-rendered HTML, no JS execution

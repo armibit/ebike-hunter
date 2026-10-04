@@ -216,6 +216,9 @@ def test_render_dashboard_order_and_badge_follow_ranking_score():
     # "I consigliati": only live, AI-analyzed listings (x_c rejected, x_a no AI).
     picks = html[html.index("🎯 I consigliati"):html.index("🏆 Top 10 Deals")]
     assert "Bike b" in picks and "Bike a" not in picks and "Bike c" not in picks
+    # Collapsed on load, and same card grid as the Top 10 section.
+    assert '<details class="section-collapsible">' in picks and " open" not in picks.split(">")[0]
+    assert '<div class="top-10">' in picks
     assert "if (specsChanged) location.reload()" in html
     # "Marca" checkbox filter: no brand parsed -> "Altro".
     assert 'class="brand-cb" value="Altro"> Altro (3)' in html
@@ -436,6 +439,18 @@ def test_dashboard_has_active_filters_bar():
     assert "Elimina i filtri" in html
     assert "renderActiveBar(visibleCount, brands)" in html
 
+
+def test_cards_render_in_pages_with_infinite_scroll():
+    """Cards grid renders 30 up front and appends more when the sentinel nears the viewport."""
+    tmp = new_test_url()
+    html = render_dashboard_html(tmp)
+    drop_test_url(tmp)
+    assert "const CARD_PAGE = 30;" in html
+    assert "pendingRows.splice(0, CARD_PAGE).forEach(addCard)" in html
+    assert "window.addEventListener('scroll', () => {\n        if (pendingRows.length" in html
+    # buildCards resets the queue instead of appending every visible row
+    body = html[html.index("function buildCards"):html.index("const CARD_PAGE")]
+    assert "pendingRows = " in body and "appendChild" not in body
 
 def test_filter_sections_start_collapsed():
     src = (Path(__file__).parent.parent / "scripts" / "generate_dashboard.py").read_text()

@@ -126,6 +126,39 @@ def enrich_thin_descriptions(listings: List[Dict[str, Any]], db: Database, confi
     return enriched
 
 
+def suspension_unknown(listing: Dict[str, Any]) -> bool:
+    return listing.get("suspension_type") in (None, "", "unknown")
+
+
+def attach_card_photos(listings: List[Dict[str, Any]]) -> int:
+    """Hand the AI the listing's card photo when no text told us the
+    suspension type, so it can judge full vs hardtail by eye."""
+    count = 0
+    for listing in listings:
+        if suspension_unknown(listing) and listing.get("image_url"):
+            listing["image_urls"] = [listing["image_url"]]
+            count += 1
+    return count
+
+
+def attach_gallery_photos(listings: List[Dict[str, Any]], config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """For listings the card photo couldn't settle, swap in the real gallery
+    from the live listing page. Returns only those that got MORE photos than
+    the single one already tried — re-asking with the same image is waste."""
+    connector_cache: Dict[str, Any] = {}
+    retry = []
+    for listing in listings:
+        connector_cls = CONNECTOR_CLASSES.get(listing.get("portal"))
+        if connector_cls is None or not listing.get("url"):
+            continue
+        connector = connector_cache.setdefault(listing["portal"], connector_cls(config))
+        gallery = connector.get_gallery_images(listing["url"])
+        if len(gallery) > len(listing.get("image_urls") or []):
+            listing["image_urls"] = gallery
+            retry.append(listing)
+    return retry
+
+
 def chunked(items: List[Any], size: int) -> List[List[Any]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
@@ -298,16 +331,9 @@ def main():
     analyzed = 0
     corrected = 0
     discarded: List[Dict[str, str]] = []
-    for i, batch in enumerate(batches, 1):
-        for listing in batch:
-            logger.info(
-                "[batch %d/%d] Controllo annuncio %s: \"%s\" (%s CHF)",
-                i, len(batches), listing["id"], (listing.get("title") or "")[:60], listing.get("price_chf"),
-            )
 
-        results = analyzer.analyze_batch(batch)
-        result_ids = {result["listing_id"] for result in results}
-
+    def save_results(results: List[Dict[str, Any]]) -> None:
+        nonlocal analyzed, corrected
         for result in results:
             db.save_ai_analysis(result["listing_id"], result["ai_analysis"], result["ai_score"])
             analyzed += 1
@@ -328,6 +354,24 @@ def main():
                         result["listing_id"], corrected_specs, score_result["score_total"],
                     )
 
+    with_photos = attach_card_photos(listings)
+    if with_photos:
+        print(f"✓ Sospensione sconosciuta: allego la foto a {with_photos} annuncio/i.")
+
+    undecided: List[Dict[str, Any]] = []
+    for i, batch in enumerate(batches, 1):
+        for listing in batch:
+            logger.info(
+                "[batch %d/%d] Controllo annuncio %s: \"%s\" (%s CHF)",
+                i, len(batches), listing["id"], (listing.get("title") or "")[:60], listing.get("price_chf"),
+            )
+
+        results = analyzer.analyze_batch(batch)
+        result_ids = {result["listing_id"] for result in results}
+        save_results(results)
+        decided = {r["listing_id"] for r in results if (r.get("corrected_specs") or {}).get("suspension_type")}
+        undecided += [l for l in batch if l.get("image_urls") and l["id"] in result_ids and l["id"] not in decided]
+
         # A listing sent in this batch but absent from result_ids never got a
         # valid verdict back — either the whole API call failed (analyzer logs
         # and returns [] for the batch) or the model skipped/malformed just
@@ -341,6 +385,13 @@ def main():
                 logger.warning("  -> %s SCARTATO — %s", listing["id"], reason)
 
         print(f"  batch {i}/{len(batches)}: {len(results)}/{len(batch)} analyzed")
+
+    # The card photo didn't settle full vs hardtail: look at the real gallery.
+    retry = attach_gallery_photos(undecided, config) if undecided else []
+    if retry:
+        print(f"✓ Foto della card insufficiente per {len(undecided)} annuncio/i: riprovo con la galleria di {len(retry)}.")
+        for batch in chunked(retry, MAX_BATCH_SIZE):
+            save_results(analyzer.analyze_batch(batch))
 
     db.close()
     print(f"Done — {analyzed}/{len(listings)} listing(s) analyzed"

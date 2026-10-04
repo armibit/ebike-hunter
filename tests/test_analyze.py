@@ -44,9 +44,9 @@ def test_force_and_problematic_are_exclusive():
 def test_dry_run_summary_counts_calls_and_reasons():
     listings = [
         {"status": "ACTIVE", "motor_torque_nm": 85, "motor_verified": 1, "battery_capacity_wh": 625,
-         "frame_size": "M", "ai_analyzed_at": "2026-01-01"},
+         "frame_size": "M", "suspension_type": "full_suspension", "ai_analyzed_at": "2026-01-01"},
         {"status": "ACTIVE", "motor_torque_nm": 60, "motor_verified": 0, "battery_capacity_wh": None,
-         "frame_size": "M"},
+         "frame_size": "M", "suspension_type": "full_suspension"},
         {"status": "REJECTED", "rejection_reason": "No motor detected (likely not an e-bike)"},
         {"status": "REJECTED", "rejection_reason": "Over budget (3500 > 3000 CHF)"},
     ] * 4  # 16 listings -> ceil(16 / MAX_BATCH_SIZE) API calls
@@ -122,3 +122,21 @@ def test_enrich_fetches_page_for_missing_specs_and_saves_description(monkeypatch
     assert calls == ["https://www.tutti.ch/x/1"]
     assert db.saved == {"tutti_1": page_text}
     assert missing["description_raw"] == page_text
+
+
+def test_gallery_pass_only_for_listings_with_more_photos():
+    class FakeConnector:
+        def __init__(self, config): pass
+        def get_gallery_images(self, url):
+            return {"u1": ["c1", "g2", "g3"], "u2": ["c2"]}[url]
+
+    analyze.CONNECTOR_CLASSES["fake"] = FakeConnector
+    try:
+        a = {"id": "a", "portal": "fake", "url": "u1", "image_urls": ["c1"]}
+        b = {"id": "b", "portal": "fake", "url": "u2", "image_urls": ["c2"]}
+        retry = analyze.attach_gallery_photos([a, b], {})
+    finally:
+        del analyze.CONNECTOR_CLASSES["fake"]
+    assert retry == [a] and a["image_urls"] == ["c1", "g2", "g3"]
+    listings = [{"suspension_type": "unknown", "image_url": "p"}, {"suspension_type": "hardtail", "image_url": "p"}]
+    assert analyze.attach_card_photos(listings) == 1 and "image_urls" not in listings[1]
