@@ -467,9 +467,25 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .filter-section[open] > summary::after {{ transform: rotate(-90deg); }}
         .filter-section-body {{ padding: 0 20px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
         .filter-section-body .full {{ grid-column: 1 / -1; }}
+        .filters-open, .filters-close, .filters-apply, .filters-backdrop {{ display: none; }}
         @media (max-width: 900px) {{
             .shop-layout {{ flex-direction: column; }}
-            .filters {{ width: 100%; position: static; max-height: none; }}
+            /* Off-canvas drawer from the left, like upway.it. */
+            .filters {{ position: fixed; top: 0; bottom: 0; left: 0; width: min(88vw, 380px); max-height: none; border-radius: 0; border-width: 0 1px 0 0; z-index: 1100; transform: translateX(-100%); visibility: hidden; transition: transform .25s ease, visibility 0s .25s; display: flex; flex-direction: column; }}
+            .filters.open {{ transform: none; visibility: visible; transition: transform .25s ease; }}
+            .filters-header {{ position: sticky; top: 0; background: var(--surface); z-index: 1; }}
+            .filters-close {{ display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: 0; background: none; font-size: 26px; line-height: 1; color: var(--text); cursor: pointer; }}
+            .filters-apply {{ display: block; position: sticky; bottom: 0; margin-top: auto; padding: 12px 20px; background: var(--surface); border-top: 1px solid var(--border); }}
+            .filters-apply button {{ width: 100%; height: 46px; border: 0; border-radius: var(--radius-sm); background: var(--primary); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }}
+            .filters-backdrop {{ display: block; position: fixed; inset: 0; z-index: 1090; background: rgba(15,23,42,.5); opacity: 0; pointer-events: none; transition: opacity .25s; }}
+            .filters-backdrop.open {{ opacity: 1; pointer-events: auto; }}
+            body.filters-locked {{ overflow: hidden; }}
+            .list-head-row {{ flex-wrap: wrap; margin-top: 20px; }}
+            .list-head-row .section-title {{ flex: 1 0 100%; }}
+            .view-toggle {{ flex: 1 0 100%; gap: 10px; }}
+            .view-toggle > * {{ flex: 1 1 0; min-width: 0; }}
+            .filters-open {{ display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; border: 0; border-radius: 12px; background: var(--primary); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }}
+            .view-toggle select {{ height: 44px; border-radius: 12px; border-color: var(--text); font-size: 14px; }}
         }}
         .filter-group {{ display: flex; flex-direction: column; gap: 6px; min-width: 0; }}
         .filter-group label {{ font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }}
@@ -726,15 +742,17 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         {'<div class="readonly-banner">📄 Questa è una copia statica, sola lettura (generata da <code>run.py</code>/<code>analyze.py</code>/<code>generate_dashboard.py</code>). Per scartare, segnare venduta/preferita o correggere le specifiche a mano, avvia <code>python3 server.py</code> invece di aprire questo file.</div>' if not interactive else ''}
 
         <div class="shop-layout">
-        <aside class="filters">
+        <div class="filters-backdrop" id="filtersBackdrop" onclick="closeFilters()"></div>
+        <aside class="filters" id="filters" aria-label="Filtri">
             <div class="filters-header">
                 <div class="filters-title">Filtra</div>
                 <button class="btn-reset" onclick="resetFilters()">Reset</button>
+                <button type="button" class="filters-close" onclick="closeFilters()" aria-label="Chiudi filtri">&times;</button>
             </div>
             <div class="filter-search">
                 <input type="text" id="textFilter" placeholder="Cerca titolo, marca, modello...">
             </div>
-            <details class="filter-section" open>
+            <details class="filter-section">
                 <summary>Prezzo e distanza</summary>
                 <div class="filter-section-body">
                     <div class="filter-group">
@@ -751,7 +769,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     </div>
                 </div>
             </details>
-            <details class="filter-section" open>
+            <details class="filter-section">
                 <summary>Motore e batteria</summary>
                 <div class="filter-section-body">
                     <div class="filter-group full">
@@ -770,7 +788,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     </div>
                 </div>
             </details>
-            <details class="filter-section" open>
+            <details class="filter-section">
                 <summary>Telaio e anno</summary>
                 <div class="filter-section-body">
                     <div class="filter-group full">
@@ -792,7 +810,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     </div>
                 </div>
             </details>
-            <details class="filter-section" open>
+            <details class="filter-section">
                 <summary>Valutazione e stato</summary>
                 <div class="filter-section-body">
                     <div class="filter-group full">
@@ -810,7 +828,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     </div>
                 </div>
             </details>
-            <details class="filter-section" open>
+            <details class="filter-section">
                 <summary>Mostra</summary>
                 <div class="filter-section-body">
                     <div class="filter-group full">
@@ -827,7 +845,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     </div>
                 </div>
             </details>
-            <details class="filter-section" open>
+            <details class="filter-section">
                 <summary>Marca</summary>
                 <div class="filter-section-body">
                     <div class="filter-group full brand-filter">
@@ -842,6 +860,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     </div>
                 </div>
             </details>
+            <div class="filters-apply"><button type="button" id="filtersApply" onclick="closeFilters()">Mostra risultati</button></div>
         </aside>
         <div class="shop-main">
 
@@ -909,6 +928,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         <div class="list-head-row">
             <h2 class="section-title">📋 Tutti gli annunci</h2>
             <div class="view-toggle">
+            <button type="button" class="filters-open" id="filtersOpen" onclick="openFilters()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg><span>Filtri<span id="filtersBadge"></span></span></button>
             <select id="sortSelect" title="Ordina">
                 <option value="0:-1">Punteggio ↓</option>
                 <option value="2:1">Prezzo ↑</option>
@@ -1647,6 +1667,8 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             const bar = document.getElementById('activeBar');
             const specs = activeFilterSpecs(brands);
             bar.innerHTML = `<span class="active-count">${count} annunci</span>`;
+            document.getElementById('filtersBadge').textContent = specs.length ? ` (${specs.length})` : '';
+            document.getElementById('filtersApply').textContent = `Mostra ${count} annunci`;
             specs.forEach(f => {
                 const chip = document.createElement('button');
                 chip.type = 'button';
@@ -1664,6 +1686,16 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                 bar.appendChild(clear);
             }
         }
+
+        function setFiltersOpen(open) {
+            document.getElementById('filters').classList.toggle('open', open);
+            document.getElementById('filtersBackdrop').classList.toggle('open', open);
+            document.body.classList.toggle('filters-locked', open);
+        }
+        function openFilters() { setFiltersOpen(true); }
+        function closeFilters() { setFiltersOpen(false); }
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeFilters(); });
+        window.matchMedia('(min-width: 901px)').addEventListener('change', closeFilters);
 
         function checkedBrands() {
             return [...document.querySelectorAll('.brand-cb:checked')].map(cb => cb.value);
