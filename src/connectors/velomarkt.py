@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector, card_image
+from .base import ListingGone, BaseConnector, card_image
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,8 @@ class VelomarktConnector(BaseConnector):
                 description = desc_tag.get_text(strip=True) if desc_tag else ""
 
             return {"description_raw": description}
+        except ListingGone:
+            return {}
         except Exception as e:
             logger.warning("Error fetching Velomarkt details %s: %s", listing_id, e)
             return {}

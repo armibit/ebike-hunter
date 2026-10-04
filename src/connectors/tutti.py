@@ -4,7 +4,7 @@ import logging
 import re
 import msgpack
 from typing import Dict, List, Any, Optional
-from .base import BaseConnector
+from .base import ListingGone, BaseConnector
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,8 @@ class TuttiConnector(BaseConnector):
                     if isinstance(listing, dict):
                         localization = listing.get("localization", {}) or {}
                         return {"description_raw": localization.get("body", "") or ""}
+            return {}
+        except ListingGone:
             return {}
         except Exception as e:
             logger.warning("Error fetching details for %s: %s", listing_id, e)
