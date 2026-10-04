@@ -504,13 +504,13 @@ class Database:
             # Re-runs: never-analyzed first, then the stalest analysis — so
             # repeated `--force --limit N` runs walk through the whole
             # backlog instead of redoing the same N listings every time.
-            order = " ORDER BY l.ai_analyzed_at IS NOT NULL, l.ai_analyzed_at ASC, sc.score_total DESC"
+            order = " ORDER BY l.ai_analyzed_at IS NOT NULL, l.ai_analyzed_at ASC, sc.score_total DESC NULLS LAST"
         else:
             scope_filter += (
                 " AND (l.ai_analysis IS NULL"
                 " OR (l.status = 'PRICE_DROP' AND (l.ai_analyzed_at IS NULL OR l.ai_analyzed_at < l.last_seen_at)))"
             )
-            order = " ORDER BY sc.score_total DESC"
+            order = " ORDER BY sc.score_total DESC NULLS LAST"
         cursor.execute(base_select + scope_filter + order, params)
         rows = [dict(row) for row in cursor.fetchall()]
 
