@@ -273,3 +273,18 @@ if __name__ == "__main__":
     test_scraped_title_and_url_are_escaped_in_dashboard()
     test_cross_portal_duplicate_is_flagged_in_dashboard()
     print("\n✅ All server tests passed!")
+
+
+def test_public_deploy_requires_password_and_allows_its_own_host(monkeypatch):
+    monkeypatch.setattr(server_module, "DASHBOARD_PASSWORD", "pw")
+    client = server_module.app.test_client()
+    url = "https://x.vercel.app/api/top-deals"
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers={"Authorization": "Basic dTpiYWQ="}).status_code == 401  # u:bad
+    ok = client.get(url, headers={"Authorization": "Basic dTpwdw=="})  # u:pw
+    assert ok.status_code != 401 and ok.status_code != 403
+    cross = client.post(
+        "https://x.vercel.app/api/listings/x_1/favorite",
+        headers={"Authorization": "Basic dTpwdw==", "Origin": "https://evil.com"},
+    )
+    assert cross.status_code == 403

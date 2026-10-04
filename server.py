@@ -15,6 +15,8 @@ Run: python3 server.py
 Stop: Ctrl+C in this terminal (closing the app window alone does not stop
 the server, since a plain browser window can't signal that back).
 """
+import hmac
+import os
 import shutil
 import subprocess
 import sys
@@ -28,7 +30,7 @@ from urllib.parse import urlsplit
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
-from flask import Flask, abort, jsonify, request
+from flask import Flask, Response, abort, jsonify, request
 
 from db.database import Database
 from pipeline.corrections import apply_spec_correction
@@ -51,6 +53,10 @@ app = Flask(__name__)
 # a DNS-rebinding attempt (a public name pointed at 127.0.0.1).
 _ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost"}
 
+# Set on a public deploy (Vercel): HTTP Basic auth guards everything, any
+# username. Unset locally = no login, localhost-only host check as before.
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD")
+
 
 def _hostname(value: str) -> str:
     """'localhost:5050' -> 'localhost', 'http://127.0.0.1:5050' -> '127.0.0.1'."""
@@ -66,14 +72,25 @@ def _block_cross_site_requests():
     no CORS preflight). Browsers always attach Origin to cross-origin POSTs,
     and Sec-Fetch-Site on modern ones; the dashboard's own fetch() calls are
     same-origin and pass."""
-    if _hostname(request.host or "") not in _ALLOWED_HOSTNAMES:
-        abort(403)
+    if DASHBOARD_PASSWORD:
+        auth = request.authorization
+        if not auth or not hmac.compare_digest(
+            (auth.password or "").encode(), DASHBOARD_PASSWORD.encode()
+        ):
+            return Response(
+                "Login required", 401, {"WWW-Authenticate": 'Basic realm="E-Bike Hunter"'}
+            )
+        allowed = {_hostname(request.host or "")}  # public host: auth replaces the localhost check
+    else:
+        allowed = _ALLOWED_HOSTNAMES
+        if _hostname(request.host or "") not in allowed:
+            abort(403)
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
     if request.headers.get("Sec-Fetch-Site") == "cross-site":
         abort(403)
     origin = request.headers.get("Origin")
-    if origin is not None and _hostname(origin) not in _ALLOWED_HOSTNAMES:
+    if origin is not None and _hostname(origin) not in allowed:
         abort(403)
     return None
 
