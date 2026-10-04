@@ -202,3 +202,24 @@ if __name__ == "__main__":
     test_search_uses_configured_path()
     test_default_search_path_is_lombardia()
     print("\n✅ All Subito connector tests passed!")
+
+
+def test_deleted_listing_logs_single_clear_message(caplog):
+    """Regression: a 410 used to log a second, confusing 'Error fetching details ...
+    HTTP Error 410' warning. Now one 'deleted by the seller' message, no details error."""
+    import logging
+    from unittest.mock import MagicMock
+    from curl_cffi.requests.exceptions import HTTPError
+
+    connector = _make_connector()
+    response = MagicMock(status_code=410, headers={})
+    response.raise_for_status.side_effect = HTTPError("HTTP Error 410", response=response)
+    connector.session.get = MagicMock(return_value=response)
+    connector._rate_limit = lambda: None
+
+    with caplog.at_level(logging.WARNING):
+        assert connector.get_listing_details("x", "https://www.subito.it/x.htm") == {}
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("deleted by the seller" in m for m in messages)
+    assert not any("Error fetching" in m for m in messages)

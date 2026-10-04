@@ -7,6 +7,7 @@ connector needing to know about the others. Real log lines (logger.info/
 error/...) clear the block first so they never get garbled by it.
 """
 import logging
+import shutil
 import sys
 import threading
 import time
@@ -14,6 +15,12 @@ import time
 _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _WIDTH = 118
 _SEPARATOR = "─" * _WIDTH
+
+
+def _width() -> int:
+    """Block width, capped to the terminal: a row wider than the window wraps
+    onto two, the cursor-up count is then off and separators pile up."""
+    return max(20, min(_WIDTH, shutil.get_terminal_size((_WIDTH + 1, 24)).columns - 1))
 
 
 class StatusLine:
@@ -60,14 +67,15 @@ class StatusLine:
         with self._lock:
             frame = _FRAMES[self._frame % len(_FRAMES)]
             self._frame += 1
+            width = _width()
             job_lines = [
-                f"{frame} {self._lines[k]}"[:_WIDTH].ljust(_WIDTH)
+                f"{frame} {self._lines[k]}"[:width].ljust(width)
                 for k in self._order if self._lines.get(k)
             ]
             # A leading separator row, redrawn as part of the block itself, keeps
             # the live status area visually distinct from scrolling log lines
             # above it — otherwise both look like plain text in scrollback.
-            lines = [_SEPARATOR] + job_lines if job_lines else []
+            lines = ["─" * width] + job_lines if job_lines else []
             old_n, new_n = self._rendered_count, len(lines)
 
             if old_n:
@@ -77,7 +85,7 @@ class StatusLine:
             if new_n < old_n:
                 extra = old_n - new_n
                 for _ in range(extra):
-                    sys.stdout.write("\r" + " " * _WIDTH + "\n")
+                    sys.stdout.write("\r" + " " * width + "\n")
                 self._move_up(extra)
 
             self._rendered_count = new_n
@@ -88,11 +96,12 @@ class StatusLine:
         if not self._enabled:
             return
         with self._lock:
+            width = _width()
             n = self._rendered_count
             if n:
                 self._move_up(n)
                 for _ in range(n):
-                    sys.stdout.write("\r" + " " * _WIDTH + "\n")
+                    sys.stdout.write("\r" + " " * width + "\n")
                 self._move_up(n)
                 self._rendered_count = 0
                 sys.stdout.flush()

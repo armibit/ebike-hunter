@@ -13,6 +13,12 @@ from utils.console import status
 
 logger = logging.getLogger(__name__)
 
+class ListingGone(requests.exceptions.HTTPError):
+    """The portal answered 404/410: the seller deleted the listing."""
+
+
+REQUEST_TIMEOUT = 30  # seconds; portals often answer slowly
+
 
 def card_image(tag, host: str) -> Optional[str]:
     """First card <img> served from the portal's image CDN (lazy data-src
@@ -165,26 +171,27 @@ class BaseConnector(ABC):
             request_headers.update(headers)
 
         try:
-            response = self.session.get(url, params=params, headers=request_headers, timeout=15)
+            response = self.session.get(url, params=params, headers=request_headers, timeout=REQUEST_TIMEOUT)
             if response.status_code == 429:
                 retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
                 logger.warning("Rate limited by %s — sleeping %ds", url, retry_after)
                 time.sleep(retry_after)
-                response = self.session.get(url, params=params, headers=request_headers, timeout=15)
+                response = self.session.get(url, params=params, headers=request_headers, timeout=REQUEST_TIMEOUT)
             elif response.status_code == 403:
                 # Some sites (e.g. Akamai-fronted) intermittently block the first
                 # request of a session but pass once cookies are set — one retry
                 # after a short delay clears this without a real browser engine.
                 logger.warning("403 from %s — retrying once after backoff", url)
                 time.sleep(random.uniform(3.0, 6.0))
-                response = self.session.get(url, params=params, headers=request_headers, timeout=15)
+                response = self.session.get(url, params=params, headers=request_headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
             status_code = getattr(getattr(e, "response", None), "status_code", None)
             if status_code in (404, 410):
                 # Listing removed by the seller: expected, not worth a traceback.
-                logger.warning("Listing gone (%s): %s", status_code, url)
+                logger.warning("Listing deleted by the seller (HTTP %s): %s", status_code, url)
+                raise ListingGone(str(e), response=e.response) from e
             elif status_code and status_code >= 500:
                 # Server error: transient issue, not a client problem.
                 logger.warning("Server error (%s) fetching %s", status_code, url)
@@ -193,6 +200,10 @@ class BaseConnector(ABC):
             raise
         except requests.exceptions.Timeout as e:
             logger.warning("Timeout fetching %s", url)
+            raise
+        except requests.exceptions.ConnectionError as e:
+            # DNS failure / network down: transient, no traceback needed.
+            logger.warning("Connection error fetching %s: %s", url, e)
             raise
         except requests.exceptions.RequestException as e:
             logger.exception("Request failed for %s: %s", url, e)
@@ -208,12 +219,12 @@ class BaseConnector(ABC):
             request_headers.update(headers)
 
         try:
-            response = self.session.post(url, data=data, headers=request_headers, timeout=15)
+            response = self.session.post(url, data=data, headers=request_headers, timeout=REQUEST_TIMEOUT)
             if response.status_code == 429:
                 retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
                 logger.warning("Rate limited by %s — sleeping %ds", url, retry_after)
                 time.sleep(retry_after)
-                response = self.session.post(url, data=data, headers=request_headers, timeout=15)
+                response = self.session.post(url, data=data, headers=request_headers, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             return response
         except requests.exceptions.HTTPError as e:
@@ -239,7 +250,7 @@ class BaseConnector(ABC):
         status.update(self.portal_name, f"[{self.portal_name}] check {url}")
         self._rate_limit()
         try:
-            return self.session.get(url, headers=self.session.headers.copy(), timeout=15, allow_redirects=True)
+            return self.session.get(url, headers=self.session.headers.copy(), timeout=REQUEST_TIMEOUT, allow_redirects=True)
         except requests.exceptions.RequestException as e:
             logger.debug("Availability check failed for %s: %s", url, e)
             return None

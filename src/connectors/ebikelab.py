@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import SHOP_SOLD_MARKERS, BaseConnector, card_image
+from .base import ListingGone, SHOP_SOLD_MARKERS, BaseConnector, card_image
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,8 @@ class EbikelabConnector(BaseConnector):
         try:
             response = self.get(url)
             return {"description_raw": self._extract_description(response.text)}
+        except ListingGone:
+            return {}
         except Exception as e:
             logger.warning("Error fetching Ebikelab details %s: %s", listing_id, e)
             return {}

@@ -103,3 +103,22 @@ if __name__ == "__main__":
     test_update_after_finish_reopens_under_same_key()
     test_job_line_width_is_padded_and_truncated()
     print("\n✅ All console/StatusLine tests passed!")
+
+
+def test_render_never_exceeds_terminal_width(monkeypatch):
+    """Regression: on a terminal narrower than the block, rows wrapped, the
+    cursor-up count was off and separator lines piled up in the output."""
+    import os
+    monkeypatch.setattr("shutil.get_terminal_size", lambda fallback=None: os.terminal_size((80, 24)))
+    status = _new_status()
+    status.update("tutti", "[tutti] GET https://tutti.ch/" + "x" * 200)
+
+    buf = io.StringIO()
+    real_stdout, sys.stdout = sys.stdout, buf
+    try:
+        status._render()
+    finally:
+        sys.stdout = real_stdout
+
+    rows = [r.lstrip("\r") for r in buf.getvalue().split("\n") if r.strip()]
+    assert rows and all(len(r) <= 79 for r in rows)

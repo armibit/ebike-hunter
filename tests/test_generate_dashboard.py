@@ -142,6 +142,13 @@ def test_build_detail_html_includes_metadata_history_and_ai_verdict():
     print("✅ Detail HTML assembly test passed")
 
 
+def test_build_detail_html_shows_hero_image_only_for_safe_url():
+    base = {"price_raw": 1000.0, "currency": "EUR", "score_total": 50.0}
+    assert 'class="detail-hero" src="https://x.ch/a.jpg"' in _build_detail_html({**base, "image_url": "https://x.ch/a.jpg"}, [])
+    assert "detail-hero" not in _build_detail_html({**base, "image_url": "javascript:alert(1)"}, [])
+    assert "detail-hero" not in _build_detail_html(base, [])
+
+
 def test_render_dashboard_html_no_literal_backslash_n_end_to_end():
     """Regression test for the reported bug: opening a listing's modal
     showed literal '\\n' text instead of line breaks. Renders a full page
@@ -214,7 +221,7 @@ def test_render_dashboard_order_and_badge_follow_ranking_score():
     assert 'class="brand-cb" value="Altro"> Altro (3)' in html
     assert 'data-brand="Altro"' in tbody
     # Brands sit in a collapsible list with select/deselect all.
-    assert '<details class="brand-dropdown">' in html
+    assert '<details class="brand-dropdown" open>' in html
     assert "setAllBrands(true)" in html and "setAllBrands(false)" in html
 
 
@@ -311,14 +318,44 @@ def test_dashboard_defaults_applied_actions_in_place_and_no_storage_key_clash():
     html = render_dashboard_html(tmp, interactive=True)
     drop_test_url(tmp)
 
-    # first visit (nothing saved) must still run the filters
-    assert "if (!saved) { filterTable(); return; }" in html
+    # startup never restores saved filters; it just runs the filters once
+    assert "restoreFilters" not in html
+    assert "window.addEventListener('DOMContentLoaded', filterTable);" in html
     # row actions update the DOM; only the spec-edit path may reload
     assert html.count("location.reload()") == 2  # closeAnalysis + saveSpecs
     assert "applyRowAction(" in html
     # the filter panel toggle is gone (34d7be0): no panel key to clash with saved filters
     assert "'ebike-filters-panel'" not in html
     assert "localStorage.setItem('ebike-filters', hidden" not in html
+
+
+def test_cards_only_and_filters_start_without_defaults():
+    tmp = new_test_url()
+    from db.database import Database
+    Database(tmp).close()
+    html = render_dashboard_html(tmp, interactive=True)
+    drop_test_url(tmp)
+
+    assert "viewListBtn" not in html and "switchToList" not in html
+    assert "#table {" in html and "html.view-card" not in html
+    for fid in ("priceMax", "distMax", "batteryMin", "scoreMin"):
+        assert f'id="{fid}"' in html
+        assert f'id="{fid}" value=' not in html
+    assert 'id="priceMax" min="0" step="50" value=' not in html
+    assert 'id="hideSold" checked' in html
+
+
+def test_filter_pass_skips_no_results_row():
+    # The "Nessun risultato" row lives in #tbody and has no a.title-link; the
+    # next filter pass used to throw on it, freezing the chips/count.
+    tmp = new_test_url()
+    from db.database import Database
+    Database(tmp).close()
+    html = render_dashboard_html(tmp, interactive=True)
+    drop_test_url(tmp)
+
+    assert "querySelectorAll('#tbody tr:not(.filter-info)')" in html
+    assert "querySelectorAll('#tbody tr');" not in html
 
 
 if __name__ == "__main__":
@@ -339,3 +376,62 @@ if __name__ == "__main__":
     test_hide_sold_filter_checked_by_default_and_wired()
     test_dashboard_defaults_applied_actions_in_place_and_no_storage_key_clash()
     print("\n✅ All generate_dashboard tests passed!")
+
+
+def test_status_label_distinguishes_manual_reject_auto_reject_sold_delisted():
+    """Regression: every non-active listing showed the same 'Non più
+    disponibile' / raw status, whether the user discarded it, a filter
+    auto-rejected it, or it was sold/delisted."""
+    import re
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from db.database import Database
+
+    tmp = new_test_url()
+    db = Database(tmp)
+    for pid in ("man", "auto", "sold", "gone"):
+        db.upsert_listing({
+            "portal": "x", "portal_id": pid, "url": f"https://example.com/{pid}", "title": f"Bike {pid}",
+            "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+            "distance_km": 10, "status": "ACTIVE",
+        })
+    db.set_manual_status("x_man", "REJECTED")
+    db.set_manual_status("x_auto", "REJECTED", reason="taglia fuori target")
+    db.set_manual_status("x_sold", "SOLD")
+    db.upsert_listing({
+        "portal": "x", "portal_id": "gone", "url": "https://example.com/gone", "title": "Bike gone",
+        "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+        "distance_km": 10, "status": "DELISTED",
+    })
+    db.close()
+
+    html = render_dashboard_html(tmp, interactive=True)
+    drop_test_url(tmp)
+
+    labels = dict(re.findall(r'data-id="(x_\w+)"[^>]*data-status-label="([^"]*)"', html))
+    assert labels == {"x_man": "Scartata da te", "x_auto": "Scartata (auto)",
+                      "x_sold": "Venduta", "x_gone": "Non più disponibile"}
+    assert 'data-status-title="taglia fuori target"' in html
+    assert "row.dataset.statusLabel" in html and "setRowStatus(" in html
+
+
+def test_update_top10_does_not_send_undefined_params():
+    """Regression: empty filters were sent as the string 'undefined'
+    (URLSearchParams stringifies undefined), breaking motor/frame/status filters."""
+    tmp = new_test_url()
+    html = render_dashboard_html(tmp, interactive=True)
+    drop_test_url(tmp)
+    body = html[html.index("async function updateTop10"):]
+    body = body[:body.index("renderTop10(deals)")]
+    assert "|| undefined" not in body
+    assert "params.delete(k)" in body
+
+
+def test_dashboard_has_active_filters_bar():
+    """Active-filters bar: product count, removable chips, clear-all."""
+    tmp = new_test_url()
+    html = render_dashboard_html(tmp, interactive=True)
+    drop_test_url(tmp)
+    assert 'id="activeBar"' in html
+    assert "function renderActiveBar" in html
+    assert "Elimina i filtri" in html
+    assert "renderActiveBar(visibleCount, brands)" in html

@@ -2,7 +2,7 @@ import logging
 import re
 from typing import Dict, List, Any, Optional
 from bs4 import BeautifulSoup
-from .base import BaseConnector, shopify_variants_available
+from .base import ListingGone, BaseConnector, shopify_variants_available
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,8 @@ class UpwayConnector(BaseConnector):
             ]
             description_raw = " ".join(p for p in parts if p)
             return {"description_raw": description_raw} if description_raw else {}
+        except ListingGone:
+            return {}
         except Exception as e:
             logger.warning("Error fetching Upway details %s: %s", listing_id, e)
             return {}

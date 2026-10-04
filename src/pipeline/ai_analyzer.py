@@ -22,6 +22,7 @@ blends the two (see RANKING_SCORE_SQL in db/database.py).
 """
 import logging
 import os
+import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 # loaded by analyze.py's main() *after* this module is imported, still
 # takes effect.
 DEFAULT_MODEL = "claude-haiku-4-5"
-MAX_BATCH_SIZE = 10  # keeps one call's prompt + output comfortably in-budget
+MAX_BATCH_SIZE = 5  # keeps one call's prompt + output comfortably in-budget
 # 10 Italian verdicts of 2–4 sentences plus JSON overhead can approach 4k
 # tokens on their own — a truncated tool call loses the whole batch.
 MAX_OUTPUT_TOKENS = 8192
@@ -269,9 +270,12 @@ class AIAnalyzer:
             raise ValueError(f"batch too large ({len(listings)} > {MAX_BATCH_SIZE}) — chunk before calling")
 
         prompt = self._build_prompt(listings)
+        model = _resolve_model()
+        logger.info("Waiting for %s to analyze %d listing(s)...", model, len(listings))
+        started = time.monotonic()
         try:
             response = self.client.messages.create(
-                model=_resolve_model(),
+                model=model,
                 max_tokens=MAX_OUTPUT_TOKENS,
                 tools=[_RESULT_TOOL],
                 # Forced: with "auto" the model may answer in plain text and
@@ -280,8 +284,9 @@ class AIAnalyzer:
                 messages=[{"role": "user", "content": prompt}],
             )
         except Exception as e:
-            logger.exception("AI batch analysis call failed: %s", e)
+            logger.exception("AI batch analysis call failed after %.0fs: %s", time.monotonic() - started, e)
             return []
+        logger.info("Model answered in %.0fs", time.monotonic() - started)
 
         if getattr(response, "stop_reason", None) == "max_tokens":
             logger.warning(

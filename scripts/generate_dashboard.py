@@ -11,7 +11,7 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from db.database import Database, RANKING_SCORE_SQL
+from db.database import Database, RANKING_SCORE_SQL, MANUAL_REJECT_REASON
 from pipeline.analysis_text import condition_label as _condition_label
 from pipeline.dedupe import collapse_identical_units, find_duplicates
 
@@ -264,12 +264,19 @@ def _build_detail_html(bike: dict, history: list) -> str:
     score sub-breakdown — reference detail you dig into, not headline info,
     so it shouldn't push the important stuff below the fold."""
     total = bike.get("score_total") or 0
+    img = _safe_url(bike.get("image_url"))
+    hero = (
+        f'<img class="detail-hero" src="{img}" alt="" referrerpolicy="no-referrer" '
+        "onerror=\"this.remove()\">"
+        if img != "#" else ""
+    )
     top_bar = (
-        '<div class="detail-section">'
+        '<div class="detail-section detail-head">'
+        f"{hero}"
         '<div class="detail-topbar">'
         f'<span class="detail-price">{_attr(_format_price(bike))}</span>'
         f'<span class="score {_score_class(total)}">{total:.0f}</span>'
-        f'<a href="{_safe_url(bike.get("url"))}" target="_blank" rel="noopener noreferrer">Apri annuncio originale ↗</a>'
+        f'<a class="detail-link" href="{_safe_url(bike.get("url"))}" target="_blank" rel="noopener noreferrer">Apri annuncio ↗</a>'
         "</div>"
         f'<p class="detail-sub">Visto la prima volta il {_format_date(bike.get("first_seen_at"))}</p>'
         "</div>"
@@ -326,7 +333,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         l.numeric_id,
         l.id, l.portal, l.title, l.price_raw, l.currency, l.price_chf, l.distance_km, l.url, l.image_url,
         l.latitude, l.longitude, l.location_normalized, l.region,
-        l.first_seen_at, l.last_seen_at, l.status, l.is_favorite,
+        l.first_seen_at, l.last_seen_at, l.status, l.rejection_reason, l.is_favorite,
         l.user_analysis, l.ai_analysis, l.ai_score,
         s.brand, s.motor_brand, s.motor_model, s.motor_torque_nm, s.motor_verified,
         s.battery_capacity_wh, s.frame_size, s.model_year, s.odometer_km,
@@ -425,14 +432,44 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 
         .section-title {{ font-size: 15px; font-weight: 700; margin: 36px 0 14px; color: var(--text); }}
         .section-collapsible {{ margin: 18px 0 0; }}
-        .section-collapsible > summary {{ cursor: pointer; user-select: none; padding: 0; }}
-        .section-collapsible > summary::marker {{ color: var(--primary); }}
-        .section-collapsible > summary::-webkit-details-marker {{ color: var(--primary); }}
+        .shop-main > .section-collapsible:first-child {{ margin-top: 0; }}
+        /* Title, sort and active-filter chips stay pinned while the grid scrolls. */
+        .list-head {{ position: sticky; top: 0; z-index: 20; background: var(--bg); padding-bottom: 4px; }}
+        .list-head-row {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 36px; }}
+        .list-head-row .section-title {{ margin: 0; }}
+        .section-collapsible > summary {{ list-style: none; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; margin: 0; padding: 14px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }}
+        .section-collapsible > summary::-webkit-details-marker {{ display: none; }}
+        .section-collapsible > summary::after {{ content: ""; width: 8px; height: 8px; border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted); transform: rotate(45deg); transition: transform .15s; margin-right: 4px; }}
+        .section-collapsible[open] > summary::after {{ transform: rotate(-135deg); }}
+        .section-collapsible > summary:hover {{ border-color: var(--primary); }}
+        .section-collapsible > summary:focus-visible, .filter-section > summary:focus-visible {{ outline: 2px solid var(--primary); outline-offset: 2px; }}
+        .section-collapsible[open] > summary {{ margin-bottom: 14px; }}
 
-        .filters {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin: 18px 0 10px; box-shadow: 0 1px 2px rgba(0,0,0,.04); overflow: hidden; }}
-        .filters-header {{ display: flex; align-items: center; justify-content: space-between; padding: 13px 20px; border-bottom: 1px solid var(--border); background: #fafbfc; }}
-        .filters-title {{ font-size: 12px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: .04em; }}
-        .filters-body {{ padding: 18px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 16px 20px; align-items: end; }}
+        .shop-layout {{ display: flex; gap: 24px; align-items: flex-start; margin-top: 18px; }}
+        .shop-main {{ flex: 1; min-width: 0; }}
+        .filters {{ width: 300px; flex-shrink: 0; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 1px 2px rgba(0,0,0,.04); }}
+        .filters-header {{ display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }}
+        .filters-title {{ font-size: 18px; font-weight: 700; color: var(--text); }}
+        .active-bar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 14px; }}
+        .active-count {{ font-size: 18px; font-weight: 500; color: var(--text); margin-right: 8px; }}
+        .filter-chip {{ display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 999px; background: #fff; font-size: 14px; color: var(--text); cursor: pointer; }}
+        .filter-chip:hover {{ background: #f5f5f7; }}
+        .active-clear {{ background: none; border: 0; color: #4a3aff; text-decoration: underline; cursor: pointer; font-size: 14px; }}
+        .filter-search {{ padding: 14px 20px 6px; }}
+        .filter-search input {{ width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }}
+        .filter-search input:focus {{ outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }}
+        .filter-section {{ border-bottom: 1px solid var(--border); }}
+        .filter-section:last-child {{ border-bottom: none; }}
+        .filter-section > summary {{ list-style: none; display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; cursor: pointer; user-select: none; font-size: 14px; font-weight: 700; color: var(--text); }}
+        .filter-section > summary::-webkit-details-marker {{ display: none; }}
+        .filter-section > summary::after {{ content: "›"; font-size: 20px; line-height: 1; color: var(--text-muted); transform: rotate(90deg); transition: transform .15s; }}
+        .filter-section[open] > summary::after {{ transform: rotate(-90deg); }}
+        .filter-section-body {{ padding: 0 20px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }}
+        .filter-section-body .full {{ grid-column: 1 / -1; }}
+        @media (max-width: 900px) {{
+            .shop-layout {{ flex-direction: column; }}
+            .filters {{ width: 100%; position: static; max-height: none; }}
+        }}
         .filter-group {{ display: flex; flex-direction: column; gap: 6px; min-width: 0; }}
         .filter-group label {{ font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }}
         .filter-group input, .filter-group select {{ width: 100%; height: 33px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface); color: var(--text); }}
@@ -440,17 +477,20 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .range-row {{ display: flex; align-items: center; gap: 8px; height: 33px; }}
         .range-row input[type="range"] {{ flex: 1; min-width: 0; width: auto; height: auto; padding: 0; border: none; }}
         .range-value {{ font-size: 12px; font-weight: 700; color: var(--primary); min-width: 32px; text-align: right; flex-shrink: 0; }}
-        .brand-filter {{ grid-column: 1 / -1; }}
         .brand-dropdown {{ border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }}
         .brand-dropdown summary {{ cursor: pointer; padding: 7px 10px; font-size: 13px; color: var(--text); }}
         .brand-actions {{ display: flex; gap: 8px; padding: 0 10px 6px; }}
         .brand-actions button {{ font-size: 12px; padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); cursor: pointer; }}
-        .brand-list {{ display: flex; flex-wrap: wrap; gap: 2px 14px; max-height: 180px; overflow-y: auto; padding: 0 10px 8px; }}
+        .brand-list {{ display: flex; flex-wrap: wrap; gap: 2px 14px; max-height: 220px; overflow-y: auto; padding: 0 10px 8px; flex-direction: column; flex-wrap: nowrap; gap: 0; }}
         .brand-list .filter-checkbox {{ height: 24px; text-transform: none; letter-spacing: normal; font-weight: 500; font-size: 12px; color: var(--text); }}
         .filter-checkbox {{ flex-direction: row; align-items: center; gap: 6px; font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--text); font-size: 13px; height: 33px; }}
         .filter-checkbox input {{ width: auto; height: auto; flex-shrink: 0; }}
-        .btn-reset {{ padding: 6px 14px; background: var(--surface); color: var(--danger); border: 1px solid var(--danger-bg); border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; flex-shrink: 0; }}
-        .btn-reset:hover {{ background: var(--danger-bg); }}
+        .btn-reset {{ height: 32px; padding: 0 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 600; flex-shrink: 0; transition: border-color .15s, color .15s, background .15s; }}
+        .btn-reset:hover {{ border-color: var(--danger); color: var(--danger); }}
+        .btn-reset:focus-visible {{ outline: 2px solid var(--primary); outline-offset: 2px; }}
+        /* One look for every native <select> (sort + sidebar): own chevron, no OS arrow. */
+        .filter-group select, .view-toggle select {{ -webkit-appearance: none; appearance: none; padding-right: 32px; background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5l5 5 5-5'/%3E%3C/svg%3E") no-repeat right 12px center; cursor: pointer; }}
+        .filter-group input::placeholder {{ color: #9ca3af; }}
 
         .top-10 {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }}
         .top-item {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }}
@@ -526,24 +566,30 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .modal-close {{ font-size: 24px; font-weight: bold; cursor: pointer; color: var(--text-muted); line-height: 1; margin-left: 4px; }}
         .modal-close:hover {{ color: var(--text); }}
         .modal h2 {{ margin: 0 0 18px; font-size: 18px; }}
-        .modal-body {{ font-size: 14px; line-height: 1.6; }}
+        .modal-body {{ font-size: 15px; line-height: 1.65; }}
+        .modal-body li {{ margin: 4px 0; }}
 
-        .detail-section {{ margin-bottom: 18px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }}
+        .detail-section {{ margin-bottom: 22px; padding-bottom: 22px; border-bottom: 1px solid var(--border); }}
         .detail-section:last-child {{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }}
         .detail-section h3 {{ font-size: 13px; margin-bottom: 10px; color: var(--primary); text-transform: uppercase; letter-spacing: .03em; }}
         .detail-section p {{ margin: 6px 0; }}
         .detail-section ul {{ margin: 6px 0 6px 20px; }}
+        .detail-head {{ display: flex; flex-direction: column; gap: 12px; }}
+        .detail-hero {{ width: 100%; max-height: 320px; object-fit: cover; border-radius: var(--radius-sm); background: #f3f4f6; display: block; }}
         .detail-topbar {{ display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }}
-        .detail-price {{ font-size: 20px; font-weight: 700; }}
+        .detail-link {{ margin-left: auto; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; }}
+        .detail-link:hover {{ background: var(--primary-light); border-color: var(--primary); }}
+        .detail-price {{ font-size: 26px; font-weight: 700; }}
         .detail-sub {{ font-size: 12px; color: var(--text-muted); margin-top: 4px; }}
         .detail-warning {{ background: var(--warning-bg); border-radius: var(--radius-sm); padding: 14px 16px; border-bottom: none; }}
         .detail-warning h3 {{ color: #92400e; }}
         .detail-ai {{ background: var(--primary-light); border-radius: var(--radius-sm); padding: 14px 16px; border-bottom: none; }}
 
-        .spec-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 20px; }}
+        .spec-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 20px; }}
+        @media (max-width: 560px) {{ .spec-grid {{ grid-template-columns: 1fr; }} .detail-link {{ margin-left: 0; }} }}
         .spec-item {{ min-width: 0; }}
         .spec-label {{ font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 2px; }}
-        .spec-value {{ font-size: 14px; font-weight: 600; }}
+        .spec-value {{ font-size: 15px; font-weight: 600; }}
 
         .price-history {{ display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }}
         .price-chip {{ background: var(--bg); border-radius: var(--radius-sm); padding: 6px 10px; font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; }}
@@ -566,16 +612,22 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .score-fill {{ background: var(--primary); height: 100%; }}
         .score-row-value {{ width: 28px; text-align: right; font-weight: 600; flex-shrink: 0; }}
 
-        .btn-reject {{ padding: 8px 14px; background: var(--danger); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-sold {{ padding: 8px 14px; background: #6b7280; color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-restore {{ padding: 8px 14px; background: var(--primary); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .btn-save {{ padding: 8px 14px; background: var(--success); color: white; border: none; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; font-weight: 600; }}
-        .modal-actions {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border); display: flex; gap: 8px; }}
-        .edit-specs {{ margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--border); }}
-        .edit-specs h3 {{ font-size: 13px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: .03em; color: var(--primary); }}
-        .edit-specs .edit-fields {{ display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }}
+        .btn-act {{ display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 16px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s, border-color .15s; }}
+        .btn-act:hover {{ background: var(--bg); }}
+        .btn-act:focus-visible {{ outline: 2px solid var(--primary); outline-offset: 2px; }}
+        .btn-act.danger {{ color: var(--danger); border-color: #fecaca; }}
+        .btn-act.danger:hover {{ background: var(--danger-bg); }}
+        .btn-act.primary {{ background: var(--primary); border-color: var(--primary); color: #fff; }}
+        .btn-act.primary:hover {{ background: var(--primary-dark); }}
+        .btn-act.success {{ background: var(--success); border-color: var(--success); color: #fff; }}
+        .modal-actions {{ position: sticky; bottom: -24px; margin: 8px -24px -24px; padding: 14px 24px; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }}
+        .edit-specs {{ margin-top: 4px; }}
+        .edit-specs > summary {{ font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--primary); cursor: pointer; padding: 6px 0; }}
+        .edit-specs .edit-fields {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 12px 0; }}
         .edit-specs label {{ display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; }}
-        .edit-specs input, .edit-specs select {{ padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }}
+        .edit-specs input, .edit-specs select {{ min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; color: var(--text); }}
+        .edit-specs input:focus, .edit-specs select:focus {{ outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }}
+        @media (max-width: 560px) {{ .edit-specs .edit-fields {{ grid-template-columns: 1fr; }} .modal-actions .btn-act {{ flex: 1; }} }}
 
         .editable-cell {{ cursor: pointer; }}
         .editable-cell:hover {{ background: var(--bg); outline: 1px dashed var(--border); }}
@@ -591,22 +643,16 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .back-to-top:hover {{ opacity: 0.85; }}
 
         /* CARD VIEW */
-        .view-toggle {{ display: flex; gap: 8px; align-items: center; margin: 14px 0; }}
-        .view-toggle button {{ width: 36px; height: 36px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 16px; transition: all .15s; }}
-        .view-toggle button.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
-        .view-toggle button:hover {{ border-color: var(--primary); }}
-        .view-toggle .spacer {{ flex: 1; }}
+        .view-toggle {{ display: flex; align-items: center; margin: 0; }}
         /* Card view hides the table, and with it the click-to-sort headers —
            this select is the only way to reorder there, so it drives the same
            sortTable() the headers do. */
-        .view-toggle select {{ height: 36px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; }}
+        .view-toggle select {{ height: 38px; padding: 0 32px 0 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: 13px; }}
         .view-toggle select:hover {{ border-color: var(--primary); }}
 
-        .cards-container {{ display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding: 10px 0; }}
-        .cards-container.active {{ display: grid; }}
-        /* Set by the inline script below from localStorage, before first paint,
-           so a reload in card view never flashes the table first. */
-        html.view-card #table {{ display: none; }}
+        .cards-container {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; padding: 10px 0; }}
+        /* The table is only the data source for the cards; never shown. */
+        #table {{ display: none; }}
 
         .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: transform .2s, box-shadow .2s, opacity .3s ease-out; position: relative; display: flex; flex-direction: column; cursor: pointer; }}
         .card:hover {{ transform: translateY(-4px); box-shadow: 0 8px 16px rgba(0,0,0,0.12); }}
@@ -668,7 +714,6 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         .card-action.danger:hover {{ background: #b91c1c; color: #fff; transform: scale(1.08); }}
     </style>
     <script>
-    if ((localStorage.getItem('ebike-view') || 'card') === 'card') document.documentElement.classList.add('view-card');
     document.documentElement.classList.add('pre-filter');
     </script>
 </head>
@@ -680,101 +725,125 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         <div class="meta">⚠️ Portali bloccati (controllo manuale): <a href="https://www.decathlon.ch/search?from=0&size=40" target="_blank">Decathlon.ch</a> (Cloudflare)</div>
         {'<div class="readonly-banner">📄 Questa è una copia statica, sola lettura (generata da <code>run.py</code>/<code>analyze.py</code>/<code>generate_dashboard.py</code>). Per scartare, segnare venduta/preferita o correggere le specifiche a mano, avvia <code>python3 server.py</code> invece di aprire questo file.</div>' if not interactive else ''}
 
-        <div class="filters">
+        <div class="shop-layout">
+        <aside class="filters">
             <div class="filters-header">
-                <div class="filters-title">🔍 Filtri di ricerca</div>
-                <button class="btn-reset" onclick="resetFilters()">↺ Reset</button>
+                <div class="filters-title">Filtra</div>
+                <button class="btn-reset" onclick="resetFilters()">Reset</button>
             </div>
-            <div class="filters-body">
-                <div class="filter-group">
-                    <label>Budget da (CHF)</label>
-                    <input type="number" id="priceMin" min="0" step="50" placeholder="min">
-                </div>
-                <div class="filter-group">
-                    <label>Budget a (CHF)</label>
-                    <input type="number" id="priceMax" min="0" step="50" value="3000" placeholder="max">
-                </div>
-                <div class="filter-group">
-                    <label>Distanza km</label>
-                    <input type="number" id="distMax" value="100" min="0" max="1000">
-                </div>
-                <div class="filter-group">
-                    <label>Motore</label>
-                    <select id="motorFilter">
-                        <option value="">Tutti</option>
-                        <option value="Bosch">Bosch</option>
-                        <option value="Shimano">Shimano</option>
-                        <option value="Yamaha">Yamaha</option>
-                        <option value="Brose">Brose</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>Batteria min (Wh)</label>
-                    <input type="number" id="batteryMin" value="400" min="0" max="1000">
-                </div>
-                <div class="filter-group">
-                    <label>Taglia</label>
-                    <select id="frameFilter">
-                        <option value="">Tutti</option>
-                        <option value="M">M</option>
-                        <option value="S2">S2</option>
-                        <option value="L">L</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>Anno da</label>
-                    <input type="number" id="yearMin" min="2000" max="2100" step="1" placeholder="es. 2020">
-                </div>
-                <div class="filter-group">
-                    <label>Anno a</label>
-                    <input type="number" id="yearMax" min="2000" max="2100" step="1" placeholder="es. 2024">
-                </div>
-                <div class="filter-group">
-                    <label>Score min</label>
-                    <input type="number" id="scoreMin" value="60" min="0" max="100">
-                </div>
-                <div class="filter-group">
-                    <label>Stato</label>
-                    <select id="statusFilter">
-                        <option value="">Tutti</option>
-                        <option value="active">Solo attivi</option>
-                        <option value="rejected">Scartati</option>
-                        <option value="sold">Venduti</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>&nbsp;</label>
-                    <label class="filter-checkbox"><input type="checkbox" id="favOnly"> ⭐ Solo preferiti</label>
-                </div>
-                <div class="filter-group">
-                    <label>&nbsp;</label>
-                    <label class="filter-checkbox"><input type="checkbox" id="aiOnly"> 🤖 Solo con analisi AI</label>
-                </div>
-                <div class="filter-group">
-                    <label>&nbsp;</label>
-                    <label class="filter-checkbox"><input type="checkbox" id="showRejected"> <svg class="icon-eye-off" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> Mostra scartati</label>
-                </div>
-                <div class="filter-group">
-                    <label>&nbsp;</label>
-                    <label class="filter-checkbox"><input type="checkbox" id="hideSold" checked> 🚫 Nascondi non disponibili</label>
-                </div>
-                <div class="filter-group brand-filter">
-                    <label>Marca</label>
-                    <details class="brand-dropdown">
-                        <summary id="brandSummary">Tutte le marche</summary>
-                        <div class="brand-actions">
-                            <button type="button" onclick="setAllBrands(true)">Seleziona tutto</button>
-                            <button type="button" onclick="setAllBrands(false)">Deseleziona tutto</button>
-                        </div>
-                        <div class="brand-list">{brand_checkboxes}</div>
-                    </details>
-                </div>
-                <div class="filter-group">
-                    <label>Ricerca testo libero</label>
-                    <input type="text" id="textFilter" placeholder="Titolo, marca, modello...">
-                </div>
+            <div class="filter-search">
+                <input type="text" id="textFilter" placeholder="Cerca titolo, marca, modello...">
             </div>
-        </div>
+            <details class="filter-section" open>
+                <summary>Prezzo e distanza</summary>
+                <div class="filter-section-body">
+                    <div class="filter-group">
+                        <label>Budget da (CHF)</label>
+                        <input type="number" id="priceMin" min="0" step="50" placeholder="Min">
+                    </div>
+                    <div class="filter-group">
+                        <label>Budget a (CHF)</label>
+                        <input type="number" id="priceMax" min="0" step="50" placeholder="Max">
+                    </div>
+                    <div class="filter-group full">
+                        <label>Distanza max (km)</label>
+                        <input type="number" id="distMax" min="0" placeholder="Qualsiasi" max="1000">
+                    </div>
+                </div>
+            </details>
+            <details class="filter-section" open>
+                <summary>Motore e batteria</summary>
+                <div class="filter-section-body">
+                    <div class="filter-group full">
+                        <label>Motore</label>
+                        <select id="motorFilter">
+                            <option value="">Tutti</option>
+                            <option value="Bosch">Bosch</option>
+                            <option value="Shimano">Shimano</option>
+                            <option value="Yamaha">Yamaha</option>
+                            <option value="Brose">Brose</option>
+                        </select>
+                    </div>
+                    <div class="filter-group full">
+                        <label>Batteria min (Wh)</label>
+                        <input type="number" id="batteryMin" min="0" placeholder="Qualsiasi" max="1000">
+                    </div>
+                </div>
+            </details>
+            <details class="filter-section" open>
+                <summary>Telaio e anno</summary>
+                <div class="filter-section-body">
+                    <div class="filter-group full">
+                        <label>Taglia</label>
+                        <select id="frameFilter">
+                            <option value="">Tutti</option>
+                            <option value="M">M</option>
+                            <option value="S2">S2</option>
+                            <option value="L">L</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>Anno da</label>
+                        <input type="number" id="yearMin" min="2000" max="2100" step="1" placeholder="es. 2020">
+                    </div>
+                    <div class="filter-group">
+                        <label>Anno a</label>
+                        <input type="number" id="yearMax" min="2000" max="2100" step="1" placeholder="es. 2024">
+                    </div>
+                </div>
+            </details>
+            <details class="filter-section" open>
+                <summary>Valutazione e stato</summary>
+                <div class="filter-section-body">
+                    <div class="filter-group full">
+                        <label>Score min</label>
+                        <input type="number" id="scoreMin" min="0" placeholder="Qualsiasi" max="100">
+                    </div>
+                    <div class="filter-group full">
+                        <label>Stato</label>
+                        <select id="statusFilter">
+                            <option value="">Tutti</option>
+                            <option value="active">Solo attivi</option>
+                            <option value="rejected">Scartati</option>
+                            <option value="sold">Venduti</option>
+                        </select>
+                    </div>
+                </div>
+            </details>
+            <details class="filter-section" open>
+                <summary>Mostra</summary>
+                <div class="filter-section-body">
+                    <div class="filter-group full">
+                        <label class="filter-checkbox"><input type="checkbox" id="favOnly"> ⭐ Solo preferiti</label>
+                    </div>
+                    <div class="filter-group full">
+                        <label class="filter-checkbox"><input type="checkbox" id="aiOnly"> 🤖 Solo con analisi AI</label>
+                    </div>
+                    <div class="filter-group full">
+                        <label class="filter-checkbox"><input type="checkbox" id="showRejected"> <svg class="icon-eye-off" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> Mostra scartati</label>
+                    </div>
+                    <div class="filter-group full">
+                        <label class="filter-checkbox"><input type="checkbox" id="hideSold" checked> 🚫 Nascondi non disponibili</label>
+                    </div>
+                </div>
+            </details>
+            <details class="filter-section" open>
+                <summary>Marca</summary>
+                <div class="filter-section-body">
+                    <div class="filter-group full brand-filter">
+                        <details class="brand-dropdown" open>
+                            <summary id="brandSummary">Tutte le marche</summary>
+                            <div class="brand-actions">
+                                <button type="button" onclick="setAllBrands(true)">Seleziona tutto</button>
+                                <button type="button" onclick="setAllBrands(false)">Deseleziona tutto</button>
+                            </div>
+                            <div class="brand-list">{brand_checkboxes}</div>
+                        </details>
+                    </div>
+                </div>
+            </details>
+        </aside>
+        <div class="shop-main">
 
 {_render_top_picks(top_picks)}
         <details class="section-collapsible">
@@ -809,8 +878,8 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 """
 
     if interactive:
-        html += """                <div class="edit-specs">
-                    <h3>✏️ Correggi specifiche (es. hai riconosciuto il motore da una foto)</h3>
+        html += """                <details class="edit-specs">
+                    <summary>✏️ Correggi specifiche</summary>
                     <div class="edit-fields">
                         <label>Marca motore <input type="text" id="editMotorBrand" placeholder="es. Bosch"></label>
                         <label>Modello motore <input type="text" id="editMotorModel" placeholder="es. Performance CX Gen4"></label>
@@ -824,22 +893,22 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                         </select></label>
                         <label>Taglia <input type="text" id="editFrame"></label>
                     </div>
-                    <button class="btn-save" onclick="saveSpecs()">💾 Salva correzioni</button>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn-reject" onclick="rejectListing()">✕ Scarta</button>
-                    <button class="btn-sold" onclick="markSold()">✅ Segna venduta</button>
-                    <button class="btn-restore" onclick="restoreListing()">↩️ Ripristina attiva</button>
+                    <button class="btn-act success" onclick="saveSpecs()">💾 Salva correzioni</button>
+                </details>
+                <div class="modal-actions" id="modalActions">
+                    <button class="btn-act danger" onclick="rejectListing()">✕ Scarta</button>
+                    <button class="btn-act" onclick="markSold()">✅ Segna venduta</button>
+                    <button class="btn-act primary" onclick="restoreListing()">↩️ Ripristina attiva</button>
                 </div>
 """
 
     html += """            </div>
         </div>
 
-        <h2 class="section-title">📋 Tutti gli annunci</h2>
-        <div class="view-toggle">
-            <button id="viewListBtn" title="Vista Lista">☰</button>
-            <button id="viewCardBtn" title="Vista Card">⊞</button>
+        <div class="list-head">
+        <div class="list-head-row">
+            <h2 class="section-title">📋 Tutti gli annunci</h2>
+            <div class="view-toggle">
             <select id="sortSelect" title="Ordina">
                 <option value="0:-1">Punteggio ↓</option>
                 <option value="2:1">Prezzo ↑</option>
@@ -851,7 +920,9 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                 <option value="7:-1">Anno ↓</option>
                 <option value="1:1">Titolo A→Z</option>
             </select>
-            <span class="spacer"></span>
+            </div>
+        </div>
+        <div id="activeBar" class="active-bar"></div>
         </div>
         <div id="cardsContainer" class="cards-container"></div>
         <table id="table">
@@ -900,6 +971,19 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             "sold" if status in ("SOLD", "DELISTED") else
             "active"
         )
+        # Human label + tooltip: who/why a listing left the active set, so a
+        # manual "Scarta", an automatic rejection, a sale and a delisting
+        # don't all read the same.
+        reason = bike.get("rejection_reason") or ""
+        if status == "REJECTED":
+            status_label = "Scartata da te" if reason == MANUAL_REJECT_REASON else "Scartata (auto)"
+        elif status == "SOLD":
+            status_label = "Venduta"
+        elif status == "DELISTED":
+            status_label = "Non più disponibile"
+        else:
+            status_label = ""
+        status_title = reason if status == "REJECTED" else ""
 
         # motor_text/frame_text are HTML-escaped here once: they go into both
         # cell content and data-* attributes, and can come from AI-read or
@@ -973,7 +1057,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             actions_cell = '<button class="btn-details" onclick="showAnalysis(this)">📋 Dettagli</button>'
             motor_cell_attrs = battery_cell_attrs = suspension_cell_attrs = frame_cell_attrs = ''
 
-        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-brand="{_attr(bike['brand'] or 'Altro')}" data-score="{score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-location="{_attr(location_text)}" data-condition="{_attr(condition_text)}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
+        html += f"""                <tr class="{row_class}" data-id="{_attr(bike['id'])}" data-numeric-id="{bike['numeric_id']}" data-favorite="{1 if is_favorite else 0}" data-status-group="{status_group}" data-status-label="{_attr(status_label)}" data-status-title="{_attr(status_title)}" data-brand="{_attr(bike['brand'] or 'Altro')}" data-score="{score_val}" data-price="{bike['price_chf']}" data-price-previous="{_attr(previous_price or '')}" data-distance="{bike['distance_km']}" data-motor="{motor_text}" data-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-battery="{bike['battery_capacity_wh'] or 0}" data-suspension="{_attr(bike.get('suspension_type'))}" data-frame="{frame_text}" data-year="{_attr(bike.get('model_year'))}" data-first-seen="{_attr(bike.get('first_seen_at'))}" data-location="{_attr(location_text)}" data-condition="{_attr(condition_text)}" data-has-ai="{1 if bike.get('ai_analysis') else 0}" data-edit-motor-brand="{_attr(bike.get('motor_brand'))}" data-edit-motor-model="{_attr(bike.get('motor_model'))}" data-edit-motor-torque="{_attr(bike.get('motor_torque_nm'))}" data-edit-battery="{_attr(bike.get('battery_capacity_wh'))}" data-edit-suspension="{_attr(bike.get('suspension_type'))}" data-edit-frame="{_attr(bike.get('frame_size'))}">
                     <td><span class="score {score_class}" title="{score_title}">{score_val:.1f}</span></td>
                     <td>
                         {thumb}<a class="title-link" href="{_safe_url(bike['url'])}" target="_blank" rel="noopener noreferrer">{fav_prefix}{_attr(bike['title'][:70])}</a>
@@ -981,7 +1065,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                         {f'<div class="ai-summary">{_attr(bike.get("ai_analysis", "")[:120])}{("..." if len(bike.get("ai_analysis", "")) > 120 else "")}</div>' if bike.get('ai_analysis') else ''}
                     </td>
                     <td>{price_text}</td>
-                    <td><span class="status {status_class}">{status}</span></td>
+                    <td><span class="status {status_class}" title="{_attr(status_title)}">{_attr(status_label) or status}</span></td>
                     <td{motor_cell_attrs}><span class="motor">{motor_text}</span></td>
                     <td{battery_cell_attrs}>{battery_text}</td>
                     <td{suspension_cell_attrs}>{suspension_text}</td>
@@ -996,6 +1080,8 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 
     html += """            </tbody>
         </table>
+        </div>
+        </div>
     </div>
 
     <div id="detailTemplates" style="display: none;">""" + "".join(row_templates) + """</div>
@@ -1109,6 +1195,19 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             }
         }
 
+        function setRowStatus(row, group, label, title) {
+            row.dataset.statusGroup = group;
+            row.dataset.statusLabel = group === 'active' ? '' : label;
+            row.dataset.statusTitle = title;
+            const badge = row.querySelector('.status');
+            if (badge) {
+                badge.textContent = label;
+                badge.title = title;
+                badge.className = 'status ' + (group === 'rejected' ? 'rejected' : group === 'sold' ? 'sold' : '');
+            }
+            row.classList.toggle('sold', group !== 'active');
+        }
+
         // Reflect a server-side action in the DOM instead of reloading, which
         // would drop scroll position and view state. Filters run again so a
         // row that no longer matches (discarded, sold) disappears.
@@ -1127,9 +1226,9 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                 }, 300);
                 return;
             }
-            else if (path === 'reject') row.dataset.statusGroup = 'rejected';
-            else if (path === 'sold') row.dataset.statusGroup = 'sold';
-            else if (path === 'restore') row.dataset.statusGroup = 'active';
+            else if (path === 'reject') setRowStatus(row, 'rejected', 'Scartata da te', "Scartata manualmente dall'utente");
+            else if (path === 'sold') setRowStatus(row, 'sold', 'Venduta', '');
+            else if (path === 'restore') setRowStatus(row, 'active', 'ACTIVE', '');
             else if (path === 'favorite') {
                 const fav = !!(data && data.is_favorite);
                 row.dataset.favorite = fav ? '1' : '0';
@@ -1346,21 +1445,22 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 
         async function updateTop10() {
             const params = new URLSearchParams({
-                price_min: priceMinInput.value || undefined,
-                price_max: priceMaxInput.value || undefined,
-                dist_max: document.getElementById('distMax').value || undefined,
-                motor_brand: document.getElementById('motorFilter').value || undefined,
-                battery_min: document.getElementById('batteryMin').value || undefined,
-                frame_size: document.getElementById('frameFilter').value || undefined,
-                year_min: document.getElementById('yearMin').value || undefined,
-                year_max: document.getElementById('yearMax').value || undefined,
+                price_min: priceMinInput.value || '',
+                price_max: priceMaxInput.value || '',
+                dist_max: document.getElementById('distMax').value || '',
+                motor_brand: document.getElementById('motorFilter').value || '',
+                battery_min: document.getElementById('batteryMin').value || '',
+                frame_size: document.getElementById('frameFilter').value || '',
+                year_min: document.getElementById('yearMin').value || '',
+                year_max: document.getElementById('yearMax').value || '',
                 score_min: document.getElementById('scoreMin').value,
-                status: document.getElementById('statusFilter').value || undefined,
+                status: document.getElementById('statusFilter').value || '',
                 fav_only: document.getElementById('favOnly').checked,
                 ai_only: document.getElementById('aiOnly').checked,
                 show_rejected: document.getElementById('showRejected').checked,
                 limit: 10
             });
+            for (const [k, v] of [...params]) if (v === '') params.delete(k);
 
             try {
                 const response = await fetch(`/api/top-deals?${params}`);
@@ -1459,7 +1559,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                 !brands.length || brands.length === brandTotal ? 'Tutte le marche'
                 : brands.length <= 3 ? brands.join(', ') : brands.length + ' marche selezionate';
 
-            const rows = document.querySelectorAll('#tbody tr');
+            const rows = document.querySelectorAll('#tbody tr:not(.filter-info)');
             let visibleCount = 0;
 
             rows.forEach(row => {
@@ -1497,7 +1597,6 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
 
                 row.style.display = show ? '' : 'none';
                 if (show) visibleCount++;
-                saveFilters();
             });
 
             const tbody = document.getElementById('tbody');
@@ -1511,9 +1610,59 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                 tbody.appendChild(noResult);
             }
 
+            renderActiveBar(visibleCount, brands);
+
             // First real pass: hand visibility fully to the inline styles just
             // set above, so the anti-FOUC CSS rule stops matching by attribute.
             document.documentElement.classList.remove('pre-filter');
+        }
+
+        // [label, is-active, clear] per filter; drives the chips above the list.
+        function activeFilterSpecs(brands) {
+            const el = id => document.getElementById(id);
+            const val = id => el(id).value.trim();
+            const sel = id => el(id).selectedOptions[0]?.textContent.trim();
+            const num = (id, label, suffix = '') => ({ label: `${label} ${val(id)}${suffix}`, on: val(id) !== '', clear: () => { el(id).value = ''; } });
+            return [
+                { label: `"${val('textFilter')}"`, on: val('textFilter') !== '', clear: () => { el('textFilter').value = ''; } },
+                num('priceMin', 'Prezzo min'), num('priceMax', 'Prezzo max'),
+                num('distMax', 'Distanza max', ' km'),
+                { label: sel('motorFilter'), on: val('motorFilter') !== '', clear: () => { el('motorFilter').value = ''; } },
+                num('batteryMin', 'Batteria min', ' Wh'),
+                { label: `Telaio ${sel('frameFilter')}`, on: val('frameFilter') !== '', clear: () => { el('frameFilter').value = ''; } },
+                num('yearMin', 'Anno da'), num('yearMax', 'Anno a'),
+                num('scoreMin', 'Score min'),
+                { label: sel('statusFilter'), on: val('statusFilter') !== '', clear: () => { el('statusFilter').value = ''; } },
+                { label: '⭐ Preferiti', on: el('favOnly').checked, clear: () => { el('favOnly').checked = false; } },
+                { label: '🤖 Con analisi AI', on: el('aiOnly').checked, clear: () => { el('aiOnly').checked = false; } },
+                { label: 'Scartati visibili', on: el('showRejected').checked, clear: () => { el('showRejected').checked = false; } },
+                { label: 'Venduti visibili', on: !el('hideSold').checked, clear: () => { el('hideSold').checked = true; } },
+                ...(brands.length && brands.length < document.querySelectorAll('.brand-cb').length
+                    ? brands.map(b => ({ label: b, on: true, clear: () => { document.querySelector(`.brand-cb[value="${CSS.escape(b)}"]`).checked = false; } }))
+                    : []),
+            ].filter(f => f.on);
+        }
+
+        function renderActiveBar(count, brands) {
+            const bar = document.getElementById('activeBar');
+            const specs = activeFilterSpecs(brands);
+            bar.innerHTML = `<span class="active-count">${count} annunci</span>`;
+            specs.forEach(f => {
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.className = 'filter-chip';
+                chip.textContent = f.label + ' ✕';
+                chip.onclick = () => { f.clear(); applyFilters(); };
+                bar.appendChild(chip);
+            });
+            if (specs.length) {
+                const clear = document.createElement('button');
+                clear.type = 'button';
+                clear.className = 'active-clear';
+                clear.textContent = 'Elimina i filtri';
+                clear.onclick = resetFilters;
+                bar.appendChild(clear);
+            }
         }
 
         function checkedBrands() {
@@ -1534,79 +1683,24 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
             // min/max bounds so nothing is excluded.
             priceMinInput.value = '';
             priceMaxInput.value = '';
-            document.getElementById('distMax').value = document.getElementById('distMax').max;
+            document.getElementById('distMax').value = '';
             document.getElementById('motorFilter').value = '';
-            document.getElementById('batteryMin').value = 0;
+            document.getElementById('batteryMin').value = '';
             document.getElementById('frameFilter').value = '';
             document.getElementById('yearMin').value = '';
             document.getElementById('yearMax').value = '';
-            document.getElementById('scoreMin').value = 0;
+            document.getElementById('scoreMin').value = '';
             document.getElementById('favOnly').checked = false;
             document.getElementById('aiOnly').checked = false;
             document.getElementById('statusFilter').value = '';
             document.getElementById('hideSold').checked = true;
             document.getElementById('textFilter').value = '';
             document.querySelectorAll('.brand-cb').forEach(cb => cb.checked = false);
-            saveFilters();
             applyFilters();
         }
 
-        function saveFilters() {
-            const filters = {
-                priceMin: priceMinInput.value,
-                priceMax: priceMaxInput.value,
-                distMax: document.getElementById('distMax').value,
-                motorFilter: document.getElementById('motorFilter').value,
-                batteryMin: document.getElementById('batteryMin').value,
-                frameFilter: document.getElementById('frameFilter').value,
-                yearMin: document.getElementById('yearMin').value,
-                yearMax: document.getElementById('yearMax').value,
-                scoreMin: document.getElementById('scoreMin').value,
-                favOnly: document.getElementById('favOnly').checked,
-                aiOnly: document.getElementById('aiOnly').checked,
-                showRejected: document.getElementById('showRejected').checked,
-                hideSold: document.getElementById('hideSold').checked,
-                statusFilter: document.getElementById('statusFilter').value,
-                textFilter: document.getElementById('textFilter').value,
-                brands: checkedBrands()
-            };
-            localStorage.setItem('ebike-filters', JSON.stringify(filters));
-        }
-
-        function restoreFilters() {
-            const saved = localStorage.getItem('ebike-filters');
-            // First visit: nothing to restore, but the defaults (hide sold)
-            // still have to be applied to the rows.
-            if (!saved) { filterTable(); return; }
-            try {
-                const filters = JSON.parse(saved);
-                priceMinInput.value = filters.priceMin === '0' ? '' : (filters.priceMin ?? '');
-                priceMaxInput.value = filters.priceMax ?? '';
-                document.getElementById('distMax').value = filters.distMax;
-                document.getElementById('motorFilter').value = filters.motorFilter;
-                document.getElementById('batteryMin').value = filters.batteryMin;
-                document.getElementById('frameFilter').value = filters.frameFilter;
-                document.getElementById('yearMin').value = filters.yearMin || '';
-                document.getElementById('yearMax').value = filters.yearMax || '';
-                document.getElementById('scoreMin').value = filters.scoreMin;
-                document.getElementById('favOnly').checked = filters.favOnly;
-                document.getElementById('aiOnly').checked = filters.aiOnly;
-                document.getElementById('showRejected').checked = !!filters.showRejected;
-                document.getElementById('hideSold').checked = filters.hideSold !== false;
-                document.getElementById('statusFilter').value = filters.statusFilter;
-                document.getElementById('textFilter').value = filters.textFilter || '';
-                const brands = filters.brands || [];
-                document.querySelectorAll('.brand-cb').forEach(cb => cb.checked = brands.includes(cb.value));
-                filterTable();
-            } catch (e) {
-                console.error('Errore ripristino filtri:', e);
-                filterTable();
-            }
-        }
-
-        // Ripristina filtri al caricamento pagina
-        window.addEventListener('DOMContentLoaded', restoreFilters);
-
+        // Startup is always clean: only "Nascondi non disponibili" is on.
+        window.addEventListener('DOMContentLoaded', filterTable);
         // Click-to-sort columns. One accessor per <th>, in the same order
         // as the header row — null marks a non-sortable column (Azioni).
         // Missing values (no year, never scored, etc.) always sort to the
@@ -1683,13 +1777,9 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         });
     </script>
     <script>
-    // VIEW TOGGLE: List vs Card
-    const viewListBtn = document.getElementById('viewListBtn');
-    const viewCardBtn = document.getElementById('viewCardBtn');
+    // CARDS
     const table = document.getElementById('table');
     const cardsContainer = document.getElementById('cardsContainer');
-
-    const savedView = localStorage.getItem('ebike-view') || 'card';
 
     const ICON_LINK = '<svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>';
     // Empty / N/A / unknown values are flagged so a missing spec stands out.
@@ -1700,26 +1790,6 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
     }
     const ICON_TRASH = '<svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/><path d="M10 11v6M14 11v6"/></svg>';
     const ICON_SELL = '<svg viewBox="0 0 24 24"><path d="M20 12V7a1 1 0 0 0-1-1h-5L3 17l4 4L18 10"/><circle cx="16.5" cy="9.5" r="1.3"/></svg>';
-
-    function switchToList() {
-        document.documentElement.classList.remove('view-card');
-        cardsContainer.classList.remove('active');
-        viewListBtn.classList.add('active');
-        viewCardBtn.classList.remove('active');
-        localStorage.setItem('ebike-view', 'list');
-    }
-
-    function switchToCard() {
-        document.documentElement.classList.add('view-card');
-        cardsContainer.classList.add('active');
-        viewListBtn.classList.remove('active');
-        viewCardBtn.classList.add('active');
-        localStorage.setItem('ebike-view', 'card');
-        buildCards();
-    }
-
-    viewListBtn.addEventListener('click', switchToList);
-    viewCardBtn.addEventListener('click', switchToCard);
 
     // Price cell is "1200 EUR" or "1200 EUR<br><small>era: 1400 EUR</small>".
     // Render it velocorner-style: struck-through old price + green delta above
@@ -1777,7 +1847,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
                     '<div class="card-cond ' + cond.toLowerCase() + '">' + cond + '</div>' +
                     '<div class="card-heart' + (isFav ? ' fav' : '') + '" title="Preferito">' + (isFav ? '♥' : '♡') + '</div>' +
                     '<div class="card-score ' + scoreClass + '">' + scoreVal.toFixed(0) + '</div>' +
-                    '<div class="card-sold">✓ Non più disponibile</div>' +
+                    '<div class="card-sold" title="' + escapeHtml(row.dataset.statusTitle || '') + '">' + escapeHtml(row.dataset.statusLabel || 'Non più disponibile') + '</div>' +
                 '</div>' +
                 '<div class="card-body">' +
                     '<div class="card-title">' + title + '</div>' +
@@ -1830,7 +1900,7 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
     function rebuildIfCards() {
         if (cardsContainer.classList.contains('active')) setTimeout(buildCards, 0);
     }
-    // The initial filter pass (restoreFilters, on DOMContentLoaded) runs after
+    // The initial filter pass (filterTable, on DOMContentLoaded) runs after
     // the grid was first built from the unfiltered rows.
     window.addEventListener('DOMContentLoaded', rebuildIfCards);
     document.querySelector('.filters')?.addEventListener('input', rebuildIfCards);
@@ -1854,7 +1924,8 @@ def render_dashboard_html(database_url: str, interactive: bool = False) -> str:
         sortTable(col, dir);
     }
 
-    if (savedView === 'card') { switchToCard(); } else { switchToList(); }
+    cardsContainer.classList.add('active');
+    buildCards();
     </script>
 </body>
 </html>
