@@ -152,7 +152,7 @@ def dry_run_summary(listings: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def print_dry_run(listings: List[Dict[str, Any]], args) -> None:
     summary = dry_run_summary(listings)
-    mode = "--force" if args.force else "--problematic" if args.problematic else "normale"
+    mode = "--force-active" if args.force_active else "--force" if args.force else "--problematic" if args.problematic else "normale"
     print(f"[DRY RUN — modalità {mode}] {summary['listings']} annunci verrebbero analizzati "
           f"in {summary['api_calls']} chiamate API ({MAX_BATCH_SIZE} per chiamata); "
           f"{summary['already_analyzed']} già analizzati in passato.")
@@ -171,6 +171,12 @@ def parse_args():
              "automaticamente, di qualunque motivo), anche quelli già analizzati — es. "
              "dopo aver cambiato il prompt AI. Prima quelli mai analizzati, poi i più "
              "vecchi: con --limit puoi procedere a blocchi, run dopo run.",
+    )
+    mode_group.add_argument(
+        "--force-active", action="store_true", dest="force_active",
+        help="Like --force, but only for live listings (attivi, price-drop, nuovi): "
+             "skips every rejected one, so no API calls are spent on listings that "
+             "stay rejected anyway.",
     )
     mode_group.add_argument(
         "--problematic", action="store_true",
@@ -251,7 +257,7 @@ def main():
         id_range = (args.id_range[0], args.id_range[1])
 
     listings = db.get_listings_needing_ai_analysis(
-        limit=args.limit if args.limit else NO_BACKLOG_CAP, force=args.force,
+        limit=args.limit if args.limit else NO_BACKLOG_CAP, force=args.force or args.force_active, active_only=args.force_active,
         listing_id=listing_id, listing_ids=listing_ids, id_range=id_range,
         problematic_only=args.problematic,
     )
@@ -268,7 +274,7 @@ def main():
     # that it was already analyzed (skipped on purpose unless you pass
     # --force). Print it explicitly instead of leaving "why wasn't this
     # processed" to be reverse-engineered from silence.
-    if listing_id is None and listing_ids is None and id_range is None and not (args.force or args.problematic):
+    if listing_id is None and listing_ids is None and id_range is None and not (args.force or args.force_active or args.problematic):
         exclusions = db.get_high_score_ai_exclusions(min_score=70.0)
         if exclusions:
             print(f"\n⚠️  {len(exclusions)} annunci con punteggio >= 70 NON verranno analizzati ora:")

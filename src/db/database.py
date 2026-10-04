@@ -420,7 +420,7 @@ class Database:
     def get_listings_needing_ai_analysis(
         self, limit: int = 200, force: bool = False, listing_id: Optional[str] = None,
         listing_ids: Optional[List[str]] = None, id_range: Optional[Tuple[int, int]] = None,
-        problematic_only: bool = False,
+        problematic_only: bool = False, active_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """Listings due for an AI read: never analyzed yet, or analyzed
         before their most recent price drop.
@@ -430,7 +430,9 @@ class Database:
                                spec correction could overturn;
           problematic_only   — listings with spec gaps the AI could fix
                                (filters.spec_problems), analyzed or not;
-          force              — every in-scope listing, rejections included.
+          force              — every in-scope listing, rejections included;
+          force + active_only — like force, but only live listings
+                               (ACTIVE / PRICE_DROP / NEW), no rejections.
         The re-run modes return never-analyzed listings first, then the
         stalest, so a `limit` works as a resumable batch size.
 
@@ -496,6 +498,8 @@ class Database:
             " AND l.status_locked = 0"
         )
         params: List[Any] = [MANUAL_REJECT_REASON]
+        if force and active_only:
+            scope_filter += " AND l.status IN ('ACTIVE', 'PRICE_DROP', 'NEW')"
         if force or problematic_only:
             # Re-runs: never-analyzed first, then the stalest analysis — so
             # repeated `--force --limit N` runs walk through the whole

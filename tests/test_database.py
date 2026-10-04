@@ -744,6 +744,8 @@ def test_ai_scope_skips_rejections_no_correction_can_fix(db):
     assert {row["id"] for row in db.get_listings_needing_ai_analysis(force=True)} == {
         fixable_id, over_budget_id, too_far_id, active_id,
     }
+    # --force-active: live listings only, never the rejected ones.
+    assert {row["id"] for row in db.get_listings_needing_ai_analysis(force=True, active_only=True)} == {active_id}
     # An explicit --id still analyzes whatever you point it at.
     assert [row["id"] for row in db.get_listings_needing_ai_analysis(listing_id=too_far_id)] == [too_far_id]
     # limit still applies after the filtering.

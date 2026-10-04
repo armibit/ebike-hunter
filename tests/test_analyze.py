@@ -23,6 +23,15 @@ def test_cli_accepts_the_new_modes():
     print("✅ analyze.py: --problematic --limit --dry-run")
 
 
+def test_force_active_is_exclusive_with_force():
+    assert _parse("--force-active").force_active
+    try:
+        _parse("--force", "--force-active")
+        assert False, "argparse should refuse --force together with --force-active"
+    except SystemExit:
+        pass
+
+
 def test_force_and_problematic_are_exclusive():
     try:
         _parse("--force", "--problematic")
@@ -40,12 +49,12 @@ def test_dry_run_summary_counts_calls_and_reasons():
          "frame_size": "M"},
         {"status": "REJECTED", "rejection_reason": "No motor detected (likely not an e-bike)"},
         {"status": "REJECTED", "rejection_reason": "Over budget (3500 > 3000 CHF)"},
-    ] * 4  # 16 listings -> 2 API calls of 15
+    ] * 4  # 16 listings -> ceil(16 / MAX_BATCH_SIZE) API calls
 
     summary = analyze.dry_run_summary(listings)
 
     assert summary["listings"] == 16
-    assert summary["api_calls"] == 2
+    assert summary["api_calls"] == -(-16 // analyze.MAX_BATCH_SIZE)
     assert summary["already_analyzed"] == 4
     assert summary["reasons"] == {
         "specifiche complete": 4,
