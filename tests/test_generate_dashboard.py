@@ -435,3 +435,15 @@ def test_dashboard_has_active_filters_bar():
     assert "function renderActiveBar" in html
     assert "Elimina i filtri" in html
     assert "renderActiveBar(visibleCount, brands)" in html
+
+
+def test_filter_sections_start_collapsed():
+    src = (Path(__file__).parent.parent / "scripts" / "generate_dashboard.py").read_text()
+    assert '<details class="filter-section">' in src
+    assert 'class="filter-section" open' not in src
+
+
+def test_filters_are_mobile_drawer():
+    src = (Path(__file__).parent.parent / "scripts" / "generate_dashboard.py").read_text()
+    for needle in ('id="filtersOpen"', 'id="filtersBackdrop"', "function openFilters", "function closeFilters", "translateX(-100%)"):
+        assert needle in src
