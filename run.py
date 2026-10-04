@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any
 
+import psycopg2
+
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR / "src"))
 
@@ -381,7 +383,12 @@ def main():
                 rejected = 0
 
                 for listing in listings:
-                    is_accepted = process_listing(listing, parser, normalizer, scorer, db, config)
+                    try:
+                        is_accepted = process_listing(listing, parser, normalizer, scorer, db, config)
+                    except psycopg2.Error as e:
+                        # Dropped DB connection: skip this listing, Database reconnects on next use.
+                        logger.warning("DB error on %s/%s, skipped: %s", listing.get("portal"), listing.get("portal_id"), e)
+                        is_accepted = False
                     if is_accepted:
                         accepted += 1
                         total_accepted += 1

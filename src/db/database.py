@@ -61,16 +61,34 @@ class Database:
         SQLite file."""
         self.database_url = database_url
         self.schema = schema
-        self.conn = psycopg2.connect(database_url, cursor_factory=psycopg2.extras.RealDictCursor)
-        self.conn.autocommit = True
-        if schema:
-            if not _VALID_SCHEMA_NAME.match(schema):
-                raise ValueError(f"Invalid schema name: {schema!r}")
-            cursor = self.conn.cursor()
-            cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-            cursor.execute(f'SET search_path TO "{schema}"')
-            self.conn.commit()
+        self._conn = None
+        self._connect()
         self._init_schema()
+
+    def _connect(self):
+        # TCP keepalives: the pooler/NAT drops idle sockets, and a scan sits
+        # idle on the DB for minutes while portals time out.
+        self._conn = psycopg2.connect(
+            self.database_url, cursor_factory=psycopg2.extras.RealDictCursor,
+            keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+        )
+        self._conn.autocommit = True
+        if self.schema:
+            if not _VALID_SCHEMA_NAME.match(self.schema):
+                raise ValueError(f"Invalid schema name: {self.schema!r}")
+            cursor = self._conn.cursor()
+            cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{self.schema}"')
+            cursor.execute(f'SET search_path TO "{self.schema}"')
+            self._conn.commit()
+
+    @property
+    def conn(self):
+        # A failed query on a dead socket marks the connection closed; the
+        # next access reconnects instead of failing for the rest of the run.
+        if self._conn.closed:
+            logger.warning("DB connection lost, reconnecting")
+            self._connect()
+        return self._conn
 
     def _init_schema(self):
         cursor = self.conn.cursor()

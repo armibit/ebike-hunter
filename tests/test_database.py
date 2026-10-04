@@ -906,3 +906,17 @@ def test_delete_listing_is_atomic(db):
     with pytest.raises(Exception):
         db.delete_listing("x_1")
     assert db.get_listing_with_specs("x_1") is not None  # first DELETE rolled back
+
+
+def test_database_reconnects_after_connection_lost(db):
+    """Regression: a dropped DB socket mid-scan (SSL SYSCALL error) killed run.py;
+    the next access must reconnect, keeping the schema's search_path."""
+    db.upsert_listing({
+        "portal": "x", "portal_id": "1", "url": "https://example.com/1", "title": "Bike",
+        "price_raw": 2000, "currency": "CHF", "price_chf": 2000, "price_eur": 1900,
+        "distance_km": 10, "status": "ACTIVE",
+    })
+    db._conn.close()  # simulate dead connection
+    cursor = db.conn.cursor()
+    cursor.execute("SELECT COUNT(*) AS n FROM listings")
+    assert cursor.fetchone()["n"] == 1
