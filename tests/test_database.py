@@ -925,3 +925,22 @@ def test_database_reconnects_after_connection_lost(db):
     cursor = db.conn.cursor()
     cursor.execute("SELECT COUNT(*) AS n FROM listings")
     assert cursor.fetchone()["n"] == 1
+
+
+def test_unscored_listings_sort_after_scored_in_ai_queue(db):
+    # Regression: Postgres puts NULLs first on DESC, so unscored (auto-rejected)
+    # listings jumped ahead of scored ones in the never-analyzed queue.
+    unscored_id, _, _ = db.upsert_listing(_rescan_listing(
+        portal_id="1", status="REJECTED", rejection_reason="No motor detected (likely not an e-bike)"))
+    low_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="2"))
+    high_id, _, _ = db.upsert_listing(_rescan_listing(portal_id="3"))
+    for listing_id, total in ((low_id, 40.0), (high_id, 90.0)):
+        db.save_score(listing_id, {
+            "score_total": total, "score_price_value": 0, "score_component_quality": 0,
+            "score_condition_mileage": 0, "score_location_proximity": 0, "score_fit_geometry": 0,
+            "is_deal_target": False, "breakdown": {},
+        })
+
+    for kwargs in ({}, {"force": True}):
+        order = [row["id"] for row in db.get_listings_needing_ai_analysis(**kwargs)]
+        assert order == [high_id, low_id, unscored_id], kwargs
